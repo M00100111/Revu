@@ -13,7 +13,7 @@ export default function EditorArea({ file, dark, editorRef }: {
     options={{
       automaticLayout: true,
       fontFamily: "'Cascadia Code', Consolas, 'Courier New', monospace",
-      fontSize: 14, lineHeight: 24, padding: { top: 24, bottom: 24 },
+      fontSize: 14, lineHeight: 24, padding: { top: 0, bottom: 24 },
       minimap: { enabled: false }, scrollBeyondLastLine: false, smoothScrolling: true,
       renderLineHighlight: 'line', overviewRulerLanes: 0, hideCursorInOverviewRuler: true,
       lineNumbersMinChars: 4, glyphMargin: false, folding: true, tabSize: 2,

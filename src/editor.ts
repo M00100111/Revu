@@ -37,7 +37,14 @@ monaco.editor.defineTheme('revu-dark', {
   },
 });
 export { monaco };
+export interface Project {
+  id: string;
+  name: string;
+  handle: FileSystemDirectoryHandle;
+}
 export interface OpenFile {
+  id: string;
+  project: Project;
   path: string;
   handle: FileSystemFileHandle;
   model: monaco.editor.ITextModel;

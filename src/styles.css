@@ -72,3 +72,19 @@ kbd { font: inherit; border: 1px solid var(--border); border-radius: 3px; paddin
 .error-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--hover); font-size: 12px; }
 .error-banner span { overflow-wrap: anywhere; }
 @media (max-width: 760px) { .explorer { width: 190px; } .save-button { padding: 0 12px; } .save-button span { display: none; } }
+.project-bar { display: flex; height: 39px; flex-shrink: 0; background: var(--panel); border-bottom: 1px solid var(--border); }
+.project-tabs { display: flex; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
+.project-tab { display: flex; align-items: center; gap: 8px; flex-shrink: 0; max-width: 240px; padding: 0 17px; border-right: 1px solid var(--border); color: var(--muted); font-size: 12px; }
+.project-tab > span:not(.dirty-dot) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-tab .dirty-dot { flex-shrink: 0; }
+.project-tab.active { color: var(--text); background: var(--active); }
+.project-tab:hover, .mode-button:hover { background: var(--hover); color: var(--text); }
+.mode-button { padding: 0 18px; flex-shrink: 0; border-left: 1px solid var(--border); color: var(--text); font-size: 11px; }
+.tab-project { color: var(--muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-tree { margin-bottom: 8px; }
+.project-tree > summary { display: flex; align-items: center; gap: 6px; padding: 12px 7px; cursor: pointer; list-style: none; }
+.project-tree > summary::-webkit-details-marker { display: none; }
+.project-tree[open] > summary > svg:first-child { transform: rotate(90deg); }
+.project-tree > summary > svg { flex-shrink: 0; }
+.project-tree > summary > span { overflow: hidden; text-overflow: ellipsis; }
+.empty-project-hint { color: var(--muted); font-size: 13px; }
