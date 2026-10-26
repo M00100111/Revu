@@ -1,0 +1,74 @@
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+  color: #242424; background: #fff; font-synthesis: none;
+  --bg: #fff; --panel: #fafafa; --rail: #f4f4f4; --text: #242424;
+  --muted: #929292; --border: #e9e9e9; --hover: #eeeeee; --active: #e7e7e7;
+  --button: #242424; --button-text: #fff;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark; --bg: #191919; --panel: #161616; --rail: #111; --text: #dedede;
+  --muted: #777; --border: #2b2b2b; --hover: #272727; --active: #303030;
+  --button: #e5e5e5; --button-text: #191919;
+}
+* { box-sizing: border-box; }
+body { margin: 0; color: var(--text); background: var(--bg); }
+button { font: inherit; color: inherit; cursor: pointer; border: 0; background: none; }
+button:disabled { cursor: default; opacity: .45; }
+button:focus-visible { outline: 2px solid var(--text); outline-offset: -3px; }
+button svg { flex-shrink: 0; }
+.app { display: flex; height: 100dvh; min-width: 580px; overflow: hidden; }
+.activity-bar { width: 52px; flex-shrink: 0; display: flex; flex-direction: column; align-items: center; background: var(--rail); border-right: 1px solid var(--border); }
+.brand { height: 64px; display: grid; place-items: center; font-family: Georgia, serif; font-size: 29px; font-weight: bold; letter-spacing: -3px; padding-right: 4px; user-select: none; }
+.activity-button { display: grid; place-items: center; width: 52px; height: 48px; color: var(--muted); position: relative; }
+.activity-button:hover, .activity-button.selected { color: var(--text); }
+.activity-button.selected::before { content: ''; position: absolute; left: 0; top: 12px; bottom: 12px; width: 2px; background: var(--text); }
+.theme-button { margin-top: auto; margin-bottom: 12px; }
+.explorer { width: 236px; flex-shrink: 0; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
+.explorer-header { height: 54px; padding: 0 17px 0 21px; display: flex; align-items: center; justify-content: space-between; font-size: 12px; font-weight: 600; letter-spacing: 2px; }
+.icon-button { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 4px; color: var(--muted); }
+.icon-button:hover { color: var(--text); background: var(--hover); }
+.workspace-name { padding: 12px 21px; font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-scroll { flex: 1; overflow: auto; padding: 2px 8px 16px; }
+.file-tree { padding: 0; margin: 0; list-style: none; }
+.tree-row { display: flex; align-items: center; gap: 7px; width: 100%; height: 31px; text-align: left; font-size: 12px; padding-right: 8px; border-radius: 4px; }
+.tree-row span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tree-row svg { color: var(--muted); }
+.tree-row:hover { background: var(--hover); }
+.tree-row.active { background: var(--active); }
+.directory-row { gap: 5px; }
+.tree-note { color: var(--muted); font-size: 11px; padding: 8px 20px; }
+.explorer-empty { padding: 24px 21px; color: var(--muted); font-size: 12px; }
+.explorer-footer { margin-top: auto; display: flex; justify-content: space-between; padding: 16px 20px; color: var(--muted); font-size: 9px; letter-spacing: 2px; }
+.explorer-footer span { letter-spacing: 1px; font-size: 10px; }
+.main { display: flex; flex: 1; min-width: 0; flex-direction: column; background: var(--bg); }
+.empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24px; padding-bottom: 30px; }
+.open-folder-button { display: flex; align-items: center; gap: 12px; padding: 13px 23px; border-radius: 6px; background: var(--button); color: var(--button-text); font-size: 13px; }
+.open-folder-button:hover { opacity: .85; }
+.shortcut-hint { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 10px; }
+.shortcut-hint span { margin-left: 4px; }
+.shortcut-hint i { width: 12px; }
+kbd { font: inherit; border: 1px solid var(--border); border-radius: 3px; padding: 2px 4px; }
+.tab-bar { height: 45px; display: flex; flex-shrink: 0; border-bottom: 1px solid var(--border); background: var(--panel); }
+.tabs { display: flex; overflow-x: auto; flex: 1; scrollbar-width: thin; }
+.tab { display: flex; flex-shrink: 0; max-width: 240px; border-right: 1px solid var(--border); position: relative; color: var(--muted); }
+.tab.active { background: var(--bg); color: var(--text); }
+.tab.active::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: var(--text); }
+.tab-select { display: flex; align-items: center; gap: 8px; padding: 0 9px 0 18px; min-width: 0; font-size: 12px; }
+.tab-select span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab-close { display: grid; place-items: center; flex-shrink: 0; width: 22px; height: 22px; margin: auto 10px auto 0; border-radius: 4px; }
+.tab-close:hover { background: var(--hover); }
+.dirty-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.tab-close.dirty svg { display: none; }
+.tab-close.dirty:hover svg { display: block; }
+.tab-close.dirty:hover .dirty-dot { display: none; }
+.save-button { display: flex; align-items: center; gap: 7px; padding: 0 18px; border-left: 1px solid var(--border); font-size: 11px; }
+.save-button:hover { background: var(--hover); }
+.breadcrumb { height: 36px; display: flex; align-items: center; gap: 10px; padding: 0 23px; color: var(--muted); font-size: 11px; flex-shrink: 0; overflow: hidden; white-space: nowrap; }
+.breadcrumb span:last-child { color: var(--text); overflow: hidden; text-overflow: ellipsis; }
+.editor-container { flex: 1; min-height: 0; }
+.editor-loading { color: var(--muted); font-size: 12px; }
+.status-bar { height: 26px; padding: 0 19px; display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--border); font-size: 10px; color: var(--muted); flex-shrink: 0; }
+.status-divider { margin-left: 20px; }
+.error-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--hover); font-size: 12px; }
+.error-banner span { overflow-wrap: anywhere; }
+@media (max-width: 760px) { .explorer { width: 190px; } .save-button { padding: 0 12px; } .save-button span { display: none; } }
