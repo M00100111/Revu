@@ -52,6 +52,10 @@ export class Workspace {
     const value = (await git(repo, ['rev-parse', '--verify', 'HEAD'], [0, 128])).toString().trim();
     return value || null;
   }
+  async branch(repo:string,head:string|null) {
+    const value=(await git(repo,['symbolic-ref','--quiet','--short','HEAD'],[0,1])).toString().trim();
+    return value||(head?head.slice(0,8):null);
+  }
   async add(path: string) {
     const root = await realpath(path);
     if (!(await stat(root)).isDirectory()) throw new HttpError(400, 'Select a folder');
@@ -76,6 +80,11 @@ export class Workspace {
     return this.public(project);
   }
   public(p: Registered): Project { return { id: p.id, name: p.name, root: p.root, git: p.git, base: p.base }; }
+  remove(id:string) {
+    const project=this.get(id);
+    project.watcher?.close();project.gitWatcher?.close();
+    this.projects.delete(id);this.locks.delete(id);
+  }
   async list(p: Registered, path: string) {
     const entries = await readdir(await this.path(p, path), { withFileTypes: true });
     return entries.filter(e => e.name !== '.git' && (e.isFile() || e.isDirectory()))
@@ -100,8 +109,9 @@ export class Workspace {
     return decode(await git(p.repo, ['cat-file', 'blob', match[2]]));
   }
   async status(p: Registered): Promise<ProjectStatus> {
-    if (!p.repo) return { files: [], head: null, base: null, changedHead: false };
+    if (!p.repo) return { files: [], head: null, base: null, changedHead: false, branch:null };
     const head = await this.head(p.repo);
+    const branch=await this.branch(p.repo,head);
     const files = new Map<string, ChangeFile>();
     const add = (repoPath: string, status: string, reason?: string) => {
       const abs = resolve(p.repo!, repoPath);
@@ -133,7 +143,7 @@ export class Workspace {
       file.reason = !snapshot.exists ? 'File deleted. Status only.' : snapshot.reason ?? base.reason;
       if (!file.reason && snapshot.text === base.text && snapshot.bom !== base.bom) file.reason = 'BOM metadata change only';
     }
-    return { files: [...files.values()].sort((a,b) => a.path.localeCompare(b.path)), head, base: p.base, changedHead: head !== p.base };
+    return { files: [...files.values()].sort((a,b) => a.path.localeCompare(b.path)), head, base: p.base, changedHead: head !== p.base, branch };
   }
   async save(p: Registered, path: string, expected: string, text: string, bom: boolean) {
     const previous = this.locks.get(p.id) ?? Promise.resolve();

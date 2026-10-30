@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, type MenuItemConstructorOptions } from 'electron';
 import { join } from 'node:path';
 import { diff, merge } from '../server/git';
 import { HttpError, Workspace } from '../server/workspace';
@@ -13,6 +13,7 @@ async function invoke(body:Record<string,any>){
     const result=await dialog.showOpenDialog(mainWindow,{title:'Open Folder',properties:['openDirectory','createDirectory']});
     return result.canceled?null:workspace.add(result.filePaths[0]);
   }
+  if(body.action==='removeProject'){workspace.remove(body.projectId);return null;}
   const project=workspace.get(body.projectId);
   switch(body.action){
     case 'list':return workspace.list(project,body.path??'');
@@ -42,13 +43,41 @@ ipcMain.handle('revu:invoke',async(_event,body)=>{
     error:error instanceof Error?error.message:String(error)};}
 });
 
+ipcMain.handle('revu:context-menu',async(event,kind:'project'|'tab')=>{
+  const window=BrowserWindow.fromWebContents(event.sender);
+  if(!window)return null;
+  return new Promise<string|null>(resolve=>{
+    let selected:string|null=null;
+    const item=(label:string,id:string):MenuItemConstructorOptions=>({label,click:()=>{selected=id;}});
+    const template=kind==='project'
+      ? [item('Close Folder','close')]
+      : [item('Close','close'),item('Close Others','closeOthers'),item('Close All','closeAll')];
+    Menu.buildFromTemplate(template).popup({window,callback:()=>resolve(selected)});
+  });
+});
+
+ipcMain.handle('revu:window-control',(event,action:'minimize'|'maximize'|'close'|'isMaximized')=>{
+  const window=BrowserWindow.fromWebContents(event.sender);
+  if(!window)return false;
+  if(action==='minimize')window.minimize();
+  if(action==='maximize')window.isMaximized()?window.unmaximize():window.maximize();
+  if(action==='close')window.close();
+  return window.isMaximized();
+});
+
 function createWindow(){
   mainWindow=new BrowserWindow({
     width:1280,height:800,minWidth:720,minHeight:500,show:false,backgroundColor:'#ffffff',
+    frame:false,
     webPreferences:{preload:join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false},
   });
   mainWindow.once('ready-to-show',()=>mainWindow?.show());
   mainWindow.webContents.setWindowOpenHandler(()=>({action:'deny'}));
+  mainWindow.webContents.on('before-input-event',(event,input)=>{
+    if(input.type==='keyDown'&&input.key==='F12'){event.preventDefault();mainWindow?.webContents.toggleDevTools();}
+  });
+  const maximized=()=>mainWindow?.webContents.send('revu:maximized',mainWindow.isMaximized());
+  mainWindow.on('maximize',maximized);mainWindow.on('unmaximize',maximized);
   mainWindow.on('closed',()=>{mainWindow=null;});
   const devUrl=process.env.REVU_DEV_URL;
   if(devUrl)void mainWindow.loadURL(devUrl);

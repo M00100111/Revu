@@ -19,9 +19,12 @@ export interface ProjectStatus {
   head: string | null;
   base: string | null;
   changedHead: boolean;
+  branch: string | null;
 }
+export type ChunkKind = 'add' | 'modify' | 'delete';
 export interface Chunk {
   id: string;
+  kind: ChunkKind;
   oldStart: number;
   oldEnd: number;
   start: number;
@@ -36,3 +39,4 @@ export interface ReviewRecord extends Chunk {
 }
 export interface DiffResult { version: number; chunks: Chunk[]; changes: Chunk[] }
 export type ReviewAction = 'accept' | 'reject' | 'undo';
+export type ReviewBulkAction = 'accept' | 'reject' | 'undo';

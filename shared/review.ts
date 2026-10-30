@@ -1,4 +1,8 @@
-import type { Chunk, ReviewRecord } from './types';
+import type { Chunk, ChunkKind, ReviewRecord } from './types';
+
+export function chunkKind(oldText: string, newText: string): ChunkKind {
+  return oldText ? (newText ? 'modify' : 'delete') : 'add';
+}
 
 // Git hunk coordinates are one-based except an empty side denotes an insertion boundary.
 // Take exact text from the snapshots rather than reconstructing it from patch lines.
@@ -15,8 +19,9 @@ export function parsePatch(patch: string, before: string, after: string): Chunk[
     const line = Number(match[3]) - (count ? 1 : 0);
     const oldStart = a[oldLine] ?? before.length, oldEnd = a[oldLine + oldCount] ?? before.length;
     const start = b[line] ?? after.length, end = b[line + count] ?? after.length;
-    return { id: String(index), oldStart, oldEnd, start, end,
-      oldText: before.slice(oldStart, oldEnd), newText: after.slice(start, end), line: line + 1 };
+    const oldText = before.slice(oldStart, oldEnd), newText = after.slice(start, end);
+    return { id: String(index), kind:chunkKind(oldText,newText), oldStart, oldEnd, start, end,
+      oldText, newText, line: line + 1 };
   });
 }
 

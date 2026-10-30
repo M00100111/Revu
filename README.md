@@ -42,4 +42,4 @@ Saving checks the disk hash first. External sync resets text undo history while 
 - UTF-8 text with BOM, LF, or CRLF is supported.
 - Deleted, renamed, binary, mixed-line-ending, and unresolved Git-conflict files show status only.
 - Drafts and review records last for the current app session only. Theme and sidebar preferences are stored locally.
-- AI suggestions, agents, and batch review are outside this version.
+- AI suggestions and agents are outside this version.

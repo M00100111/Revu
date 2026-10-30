@@ -39,7 +39,7 @@ export default function EditorArea({file,dark,editorRef,tick,onAction,revealLine
           const position=file.model.getPositionAt(item.start);
           const line=Math.max(1,Math.min(file.model.getLineCount(),position.lineNumber));
           const record='decision' in item?item:null;
-          const node=document.createElement('div');node.className='inline-review';
+          const node=document.createElement('div');node.className='inline-review '+(record?'reviewed':item.kind);
           const toolbar=document.createElement('div');node.append(toolbar);
           nextToolbars.push({node:toolbar,item});
           const old=document.createElement('pre');
@@ -85,6 +85,13 @@ export default function EditorArea({file,dark,editorRef,tick,onAction,revealLine
       wordWrap:file.model.getLanguageId()==='markdown'?'on':'off',
     }}/>
     {toolbars.map(({node,item})=>createPortal(
-      <ReviewActions file={file} item={item} onAction={(...args)=>actionRef.current(...args)}/>,node,item.id))}
+      <ReviewActions file={file} item={item} onAction={(...args)=>actionRef.current(...args)}
+        navigationDisabled={toolbars.length<=1} onNavigate={direction=>{
+          if(!editor)return;const items=reviewItems(file);const index=items.findIndex(entry=>entry.id===item.id);
+          const target=items[(index+direction+items.length)%items.length];if(!target)return;
+          const position=file.model.getPositionAt(target.start);editor.revealLineInCenter(position.lineNumber);
+          editor.setPosition({lineNumber:position.lineNumber,column:1});editor.focus();
+          for(const toolbar of toolbars)toolbar.node.parentElement?.classList.toggle('active',toolbar.item.id===target.id);
+        }}/>,node,item.id))}
   </>;
 }

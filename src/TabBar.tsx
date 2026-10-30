@@ -1,14 +1,15 @@
-import type { ReactNode } from 'react';
 import type { OpenFile } from './editor';
 import Icon from './Icon';
-export default function TabBar({ files, activeId, onSelect, onClose, onSave, saving, mixed, modeButton }: {
+export type TabContextAction='close'|'closeOthers'|'closeAll';
+export default function TabBar({ files, activeId, onSelect, onClose, onContextAction, onSave, saving, mixed }: {
   files: OpenFile[]; activeId: string | null; onSelect: (file: OpenFile) => void;
-  onClose: (file: OpenFile) => void; onSave: () => void; saving: boolean;
-  mixed: boolean; modeButton?: ReactNode;
+  onClose: (file: OpenFile) => void;onContextAction:(file:OpenFile,action:TabContextAction)=>void;
+  onSave: () => void; saving: boolean;mixed: boolean;
 }) {
   return <div className="tab-bar">
     <div className="tabs" aria-label="Open files">
-      {files.map(file => <div key={file.id} className={'tab ' + (file.id === activeId ? 'active' : '')}>
+      {files.map(file => <div key={file.id} className={'tab ' + (file.id === activeId ? 'active' : '')}
+        onContextMenu={async event=>{event.preventDefault();const action=await window.revu.contextMenu('tab');if(action)onContextAction(file,action);}}>
         <button className="tab-select" title={file.project.name + '/' + file.path}
           aria-pressed={file.id === activeId} onClick={() => onSelect(file)}>
           <Icon name="file" size={14} /><span>{file.name}</span>
@@ -25,6 +26,5 @@ export default function TabBar({ files, activeId, onSelect, onClose, onSave, sav
       disabled={saving || !activeId} onClick={onSave}>
       <Icon name="save" size={16} /><span>{saving ? 'Saving' : 'Save'}</span>
     </button>
-    {modeButton}
   </div>;
 }

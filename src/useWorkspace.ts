@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { monaco, type OpenFile, type Project } from './editor';
 import { api, ApiError, errorMessage } from './files';
-import type { Chunk, DiffResult, ProjectStatus, ReviewAction, ReviewRecord, Snapshot } from '../shared/types';
+import type { Chunk, DiffResult, ProjectStatus, ReviewAction, ReviewBulkAction, ReviewRecord, Snapshot } from '../shared/types';
 import { mapRange, reconcile, replaceExact } from '../shared/review';
+import { planBulkReview } from '../shared/bulkReview';
 
 export function useWorkspace(onError: (message: string) => void) {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -183,6 +184,38 @@ export function useWorkspace(onError: (message: string) => void) {
     } catch(error) { onError(errorMessage(error)); }
   }
 
+  function bulk(projectIds:string[],action:ReviewBulkAction) {
+    const ids=new Set(projectIds);
+    const files=[...docs.current.values()].filter(file=>ids.has(file.project.id)&&
+      (action==='undo'?file.records.length:file.chunks.length));
+    const count=files.reduce((sum,file)=>sum+(action==='undo'?file.records.length:file.chunks.length),0);
+    if(!count)return;
+    const label=action[0].toUpperCase()+action.slice(1);
+    const state=action==='undo'?'reviewed':'pending';
+    if(!window.confirm(`${label} ${count} ${state} change${count===1?'':'s'} across ${files.length} file${files.length===1?'':'s'}?`))return;
+    try{
+      const plans=files.map(file=>{
+        if(file.computing||file.syncing||file.saving||file.conflict||file.syncError||file.diffError||file.reason)
+          throw new Error(`${file.path} is not ready for review actions.`);
+        if(action==='undo'&&file.records.some(record=>record.stale))
+          throw new Error(`${file.path} contains a stale review record.`);
+        return {file,plan:planBulkReview({text:file.model.getValue(),chunks:file.chunks,records:file.records},
+          action,()=>crypto.randomUUID())};
+      });
+      for(const {file,plan} of plans){
+        file.records=plan.records;file.chunks=plan.chunks;
+        if(plan.edits.length){
+          file.reviewText=plan.text;
+          const edits=plan.edits.map(edit=>({range:new monaco.Range(
+            file.model.getPositionAt(edit.start).lineNumber,file.model.getPositionAt(edit.start).column,
+            file.model.getPositionAt(edit.end).lineNumber,file.model.getPositionAt(edit.end).column),text:edit.text}));
+          file.model.pushStackElement();file.model.pushEditOperations([],edits,()=>null);file.model.pushStackElement();
+        }else if(action==='undo')schedule(file);
+      }
+      emit();
+    }catch(error){onError(errorMessage(error));}
+  }
+
   function editReview(file: OpenFile, item: Chunk, expected: string, replacement: string, added?: ReviewRecord) {
     const current = file.model.getValue();
     const text = replaceExact(current,item.start,item.end,expected,replacement);
@@ -242,6 +275,19 @@ export function useWorkspace(onError: (message: string) => void) {
     return project;
   }
 
+  async function removeProject(project:Project) {
+    await api('removeProject',{projectId:project.id});
+    for(const [id,file] of docs.current){
+      if(file.project.id!==project.id)continue;
+      clearTimeout(timers.current.get(id));timers.current.delete(id);
+      file.subscription.dispose();file.model.dispose();docs.current.delete(id);
+    }
+    projectRef.current=projectRef.current.filter(item=>item.id!==project.id);
+    setProjects(projectRef.current);
+    setStatuses(current=>{const next={...current};delete next[project.id];return next;});
+    emit();
+  }
+
   async function refreshBase(project: Project) {
     if(!window.confirm('Refreshing the base clears this project’s review decisions and keeps the current drafts. Continue?')) return;
     const affected = [...docs.current.values()].filter(file=>file.project.id===project.id);
@@ -277,5 +323,5 @@ export function useWorkspace(onError: (message: string) => void) {
     return ()=>{live=false;unsubscribe();window.removeEventListener('focus',refreshAll);};
   },[onError]);
 
-  return { projects, documents, statuses, tick, load, addProject, save, act, finishMerge, refreshBase, refresh };
+  return { projects, documents, statuses, tick, load, addProject, removeProject, save, act, bulk, finishMerge, refreshBase, refresh };
 }

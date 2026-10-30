@@ -6,11 +6,12 @@ import EditorArea from './EditorArea';
 import FileTree from './FileTree';
 import Icon from './Icon';
 import Sidebar, { type Panel } from './Sidebar';
-import TabBar from './TabBar';
+import TabBar, { type TabContextAction } from './TabBar';
 import ReviewDashboard from './ReviewDashboard';
 import ConflictPanel from './ConflictPanel';
 import ResizeHandle from './ResizeHandle';
 import SettingsPage, { SettingsSidebar } from './SettingsPage';
+import WindowControls from './WindowControls';
 
 const savedWidth=(key:string,fallback:number)=>{
   const value=Number(localStorage.getItem(key));
@@ -30,7 +31,7 @@ export default function App(){
   const [tabs,setTabs]=useState<string[]>([]);
   const [activeId,setActiveId]=useState<string|null>(null);
   const [projectId,setProjectId]=useState<string|null>(null);
-  const [mixed,setMixed]=useState(false);
+  const [mixed,setMixed]=useState(()=>localStorage.getItem('revu-editor-tab-mode')==='mixed');
   const [error,setError]=useState('');
   const [picking,setPicking]=useState(false);
   const [reveal,setReveal]=useState<{id:string;line:number}|null>(null);
@@ -53,6 +54,7 @@ export default function App(){
     localStorage.setItem('revu-review-sidebar-width',String(widths.review));
     localStorage.setItem('revu-settings-sidebar-width',String(widths.settings));
   },[syncWidths,widths]);
+  useEffect(()=>localStorage.setItem('revu-editor-tab-mode',mixed?'mixed':'isolated'),[mixed]);
   useEffect(()=>{
     const beforeUnload=(event:BeforeUnloadEvent)=>{if(documentsRef.current.some(file=>file.dirty))event.preventDefault();};
     window.addEventListener('beforeunload',beforeUnload);
@@ -91,30 +93,43 @@ export default function App(){
       selectFile(file);if(line)setReveal({id:file.id,line});setError('');
     }catch(error){setError(errorMessage(error));}
   }
-  function closeFile(file:OpenFile){
-    if(file.saving||file.syncing)return;
-    if(file.dirty&&!window.confirm(file.project.name+'/'+file.path+' has unsaved changes. Discard the draft and close?'))return;
-    if(file.dirty){
-      file.records=file.records.map(record=>({...record,stale:true}));
-      file.model.setValue(file.synced.text);file.dirty=false;
-    }
-    const remaining=openFiles.filter(item=>item!==file);
-    if(lastFile.current.get(file.project.id)===file.id){
+  function closeFiles(targets:OpenFile[]){
+    if(!targets.length||targets.some(file=>file.saving||file.syncing))return;
+    const dirty=targets.filter(file=>file.dirty);
+    if(dirty.length&&!window.confirm(`${dirty.length} tab${dirty.length===1?' has':'s have'} unsaved changes. Discard the draft${dirty.length===1?'':'s'} and close?`))return;
+    const closing=new Set(targets.map(file=>file.id));
+    for(const file of dirty){file.records=file.records.map(record=>({...record,stale:true}));file.model.setValue(file.synced.text);file.dirty=false;}
+    const remaining=openFiles.filter(file=>!closing.has(file.id));
+    for(const file of targets){
+      if(lastFile.current.get(file.project.id)!==file.id)continue;
       const sibling=remaining.find(item=>item.project.id===file.project.id);
       if(sibling)lastFile.current.set(file.project.id,sibling.id);else lastFile.current.delete(file.project.id);
     }
-    if(activeId===file.id){
-      const candidates=visibleFiles.filter(item=>item!==file);
-      const next=candidates[Math.min(visibleFiles.indexOf(file),candidates.length-1)];
+    if(activeId&&closing.has(activeId)){
+      const candidates=visibleFiles.filter(file=>!closing.has(file.id));
+      const index=Math.max(0,visibleFiles.findIndex(file=>file.id===activeId));
+      const next=candidates[Math.min(index,candidates.length-1)];
       if(next)selectFile(next);else setActiveId(null);
     }
-    // Session documents retain review records when a visual tab closes.
-    setTabs(current=>current.filter(id=>id!==file.id));
+    setTabs(current=>current.filter(id=>!closing.has(id)));
   }
-  const modeButton=<button className="mode-button" onClick={()=>{
-    if(!mixed&&!activeFile&&openFiles.length)selectFile(openFiles[0]);setMixed(!mixed);
-  }} aria-label={mixed?'Use isolated tabs':'Use mixed tabs'} title={mixed?'Isolate tabs by project':'Show all file tabs together'}>
-    {mixed?'Mixed':'Isolated'}</button>;
+  const closeFile=(file:OpenFile)=>closeFiles([file]);
+  const tabContext=(file:OpenFile,action:TabContextAction)=>closeFiles(action==='close'?[file]:action==='closeOthers'
+    ?openFiles.filter(item=>item!==file):openFiles);
+  async function closeProject(project:Project){
+    const affected=documents.filter(file=>file.project.id===project.id);
+    if(affected.some(file=>file.saving||file.syncing)){setError('Wait for active file operations before closing the folder.');return;}
+    const dirty=affected.filter(file=>file.dirty);
+    if(dirty.length&&!window.confirm(`${project.name} has ${dirty.length} unsaved file${dirty.length===1?'':'s'}. Discard the drafts and close the folder?`))return;
+    const remaining=openFiles.filter(file=>file.project.id!==project.id);
+    try{
+      await workspace.removeProject(project);
+      setTabs(current=>current.filter(id=>!affected.some(file=>file.id===id)));lastFile.current.delete(project.id);
+      if(activeFile?.project.id===project.id){const next=remaining[0];if(next)selectFile(next);else setActiveId(null);}
+      if(projectId===project.id)setProjectId(remaining[0]?.project.id??projects.find(item=>item.id!==project.id)?.id??null);
+      setError('');
+    }catch(error){setError(errorMessage(error));}
+  }
   const sidebarWidth=panel?(syncWidths?widths.shared:widths[panel]):0;
   const resizeSidebar=(width:number)=>{
     if(!panel)return;
@@ -127,12 +142,15 @@ export default function App(){
     setSyncWidths(value);
   };
   return <div className="app">
+    <WindowControls/>
     <Sidebar panel={panel} setPanel={setPanel} dark={dark} toggleTheme={()=>setDark(!dark)}/>
     {panel==='files'&&<aside className="explorer" style={{width:sidebarWidth}}>
       <header className="explorer-header"><span>File</span><button className="icon-button" onClick={addFolder}
         disabled={picking} title="Open folder" aria-label="Open folder"><Icon name="folder" size={17}/></button></header>
       {projects.length?<div className="tree-scroll">{projects.map(project=><details className="project-tree" key={project.id} open>
-        <summary className="workspace-name" title={project.root}><Icon name="chevron" size={12}/><Icon name="folder" size={15}/><span>{project.name}</span></summary>
+        <summary className="workspace-name" title={project.root} onContextMenu={async event=>{
+          event.preventDefault();if(await window.revu.contextMenu('project')==='close')void closeProject(project);
+        }}><Icon name="chevron" size={12}/><Icon name="folder" size={15}/><span>{project.name}</span></summary>
         <FileTree projectId={project.id} activePath={activeFile?.project.id===project.id?activeFile.path:null}
           onOpen={path=>void openFile(project,path)} onError={setError}/>
       </details>)}</div>:<p className="sidebar-empty">No folders open</p>}
@@ -140,9 +158,10 @@ export default function App(){
     </aside>}
     {panel==='review'&&<ReviewDashboard projects={projects} documents={documents} statuses={statuses}
       width={sidebarWidth} onResize={resizeSidebar} onOpen={openFile} onAction={workspace.act}
-      onRefreshBase={workspace.refreshBase} onRefresh={workspace.refresh}/>}
+      onBulk={workspace.bulk} onRefreshBase={workspace.refreshBase}/>}
     {panel==='settings'&&<SettingsSidebar width={sidebarWidth} onResize={resizeSidebar}/>}
-    {panel==='settings'?<SettingsPage syncWidths={syncWidths} onChange={changeWidthSync}/>:<>
+    {panel==='settings'?<SettingsPage syncWidths={syncWidths} onChange={changeWidthSync}
+      mixed={mixed} onModeChange={setMixed}/>:<>
     <main className="main">
       {error&&<div className="error-banner" role="alert"><span>{error}</span><button className="icon-button"
         aria-label="Dismiss error" onClick={()=>setError('')}><Icon name="close" size={14}/></button></div>}
@@ -152,11 +171,12 @@ export default function App(){
             aria-pressed={project.id===projectId} onClick={()=>selectProject(project.id)}>
             <Icon name="folder" size={14}/><span>{project.name}</span>
             {documents.some(file=>file.project.id===project.id&&file.dirty)&&<span className="dirty-dot"/>}
-          </button>)}</div>{modeButton}</div>}
+          </button>)}</div></div>}
         <TabBar files={visibleFiles} activeId={activeId} onSelect={selectFile} onClose={closeFile}
+          onContextAction={tabContext}
           onSave={()=>{if(activeFile)void workspace.save(activeFile);}}
           saving={!!(activeFile?.saving||activeFile?.syncing||activeFile?.conflict||activeFile?.reason)}
-          mixed={mixed} modeButton={mixed?modeButton:undefined}/>
+          mixed={mixed}/>
       </>}
       {activeFile?<>
         <div className="breadcrumb"><span>{activeFile.project.name}</span><span>/</span><span>{activeFile.path}</span></div>
