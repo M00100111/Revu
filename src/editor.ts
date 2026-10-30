@@ -37,18 +37,28 @@ monaco.editor.defineTheme('revu-dark', {
   },
 });
 export { monaco };
-export interface Project {
-  id: string;
-  name: string;
-  handle: FileSystemDirectoryHandle;
-}
+export type { Project } from '../shared/types';
+import type { Project, Snapshot, Chunk, ReviewRecord } from '../shared/types';
 export interface OpenFile {
   id: string;
   project: Project;
   path: string;
-  handle: FileSystemFileHandle;
+  name: string;
   model: monaco.editor.ITextModel;
-  savedVersion: number;
-  dirty: boolean;
   subscription: monaco.IDisposable;
+  synced: Snapshot;
+  baseline: string;
+  dirty: boolean;
+  version: number;
+  reviewText: string;
+  chunks: Chunk[];
+  records: ReviewRecord[];
+  computing: boolean;
+  syncing: boolean;
+  saving: boolean;
+  diffError: string;
+  syncError?: string;
+  reason?: string;
+  conflict?: Snapshot;
+  notice: string;
 }

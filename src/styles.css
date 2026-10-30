@@ -22,9 +22,11 @@ button svg { flex-shrink: 0; }
 .activity-button { display: grid; place-items: center; width: 52px; height: 48px; color: var(--muted); position: relative; }
 .activity-button:hover, .activity-button.selected { color: var(--text); }
 .activity-button.selected::before { content: ''; position: absolute; left: 0; top: 12px; bottom: 12px; width: 2px; background: var(--text); }
-.theme-button { margin-top: auto; margin-bottom: 12px; }
-.explorer { width: 236px; flex-shrink: 0; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
-.explorer-header { height: 54px; padding: 0 17px 0 21px; display: flex; align-items: center; justify-content: space-between; font-size: 12px; font-weight: 600; letter-spacing: 2px; }
+.activity-footer { margin-top: auto; padding-bottom: 12px; }
+.explorer { position: relative; width: 236px; flex-shrink: 0; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
+.resize-handle { position: absolute; z-index: 20; top: 0; right: -3px; width: 6px; height: 100%; cursor: col-resize; touch-action: none; }
+.resize-handle:hover { background: var(--text); opacity: .18; }
+.explorer-header { height: 54px; padding: 0 17px 0 21px; display: flex; align-items: center; justify-content: space-between; font-size: 13px; font-weight: 600; }
 .icon-button { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 4px; color: var(--muted); }
 .icon-button:hover { color: var(--text); background: var(--hover); }
 .workspace-name { padding: 12px 21px; font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -37,9 +39,7 @@ button svg { flex-shrink: 0; }
 .tree-row.active { background: var(--active); }
 .directory-row { gap: 5px; }
 .tree-note { color: var(--muted); font-size: 11px; padding: 8px 20px; }
-.explorer-empty { padding: 24px 21px; color: var(--muted); font-size: 12px; }
-.explorer-footer { margin-top: auto; display: flex; justify-content: space-between; padding: 16px 20px; color: var(--muted); font-size: 9px; letter-spacing: 2px; }
-.explorer-footer span { letter-spacing: 1px; font-size: 10px; }
+.sidebar-empty { margin: 0; padding: 20px 21px; color: var(--muted); font-size: 12px; }
 .main { display: flex; flex: 1; min-width: 0; flex-direction: column; background: var(--bg); }
 .empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24px; padding-bottom: 30px; }
 .open-folder-button { display: flex; align-items: center; gap: 12px; padding: 13px 23px; border-radius: 6px; background: var(--button); color: var(--button-text); font-size: 13px; }
@@ -88,3 +88,60 @@ kbd { font: inherit; border: 1px solid var(--border); border-radius: 3px; paddin
 .project-tree > summary > svg { flex-shrink: 0; }
 .project-tree > summary > span { overflow: hidden; text-overflow: ellipsis; }
 .empty-project-hint { color: var(--muted); font-size: 13px; }
+.review-dashboard { width: 236px; }
+.project-dropdown { position: relative; min-width: 0; }
+.project-dropdown-trigger { display: flex; align-items: center; gap: 5px; max-width: 160px; padding: 5px 3px 5px 8px; border-radius: 4px; font-size: 13px; font-weight: 400; }
+.project-dropdown-trigger:hover, .project-dropdown-trigger[aria-expanded="true"] { background: var(--hover); }
+.project-dropdown-trigger span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-dropdown-trigger svg { transform: rotate(90deg); }
+.project-dropdown-menu { position: absolute; z-index: 40; top: calc(100% + 6px); right: 0; min-width: 170px; max-width: 260px; padding: 5px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg); box-shadow: 0 8px 24px #0002; }
+.project-dropdown-menu button { display: block; width: 100%; padding: 7px 10px; border-radius: 4px; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.project-dropdown-menu button:hover, .project-dropdown-menu button.selected { background: var(--hover); }
+.review-scroll { flex: 1; overflow: auto; padding: 0 10px 14px; }
+.review-project { margin-bottom: 18px; }
+.review-project-heading { display: flex; justify-content: space-between; align-items: center; font-size: 12px; padding: 8px 4px; }
+.review-project-heading button, .review-warning button { font-size: 11px; text-decoration: underline; }
+.review-base { color: var(--muted); font-size: 10px; padding: 0 4px 8px; }
+.review-file { border-top: 1px solid var(--border); padding: 8px 0; }
+.review-file-name { text-align: left; font-size: 12px; padding: 4px; width: 100%; overflow-wrap: anywhere; }
+.dashboard-chunk { border: 1px solid var(--border); border-radius: 4px; margin-top: 7px; overflow: hidden; }
+.review-actions { height: 30px; display: flex; align-items: center; gap: 8px; padding: 0 10px; background: var(--panel); font-family: "Segoe UI", "Microsoft YaHei", sans-serif; font-size: 11px; color: var(--text); }
+.review-actions button { padding: 3px 7px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg); }
+.review-actions button:hover:enabled { background: var(--hover); }
+.review-state { flex-shrink: 0; }
+.review-line { margin-right: auto; color: var(--muted); }
+.review-state.accepted { color: #287b46; }
+.review-state.rejected { color: #b54b4b; }
+.review-state.stale { color: var(--muted); }
+.chunk-preview { display: block; padding: 6px 10px; width: 100%; text-align: left; font: 11px/18px Consolas, monospace; }
+.chunk-preview span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.removed { color: #b54b4b; }
+.added { color: #287b46; }
+.inline-review { z-index: 5; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); background: var(--panel); }
+.inline-review pre { margin: 0; padding: 0 12px; font: 13px/20px Consolas, monospace; white-space: pre; }
+.inline-deleted { background: #fbeeee; color: #a52f38; }
+.inline-proposed { background: #edf6ee; color: #286d3c; }
+.review-added-line { background: #edf6ee; }
+.review-accepted-line { background: #f4f7f4; }
+.review-gutter { border-left: 3px solid #70a77b; margin-left: 5px; }
+.review-warning, .sync-notice { padding: 8px 12px; font-size: 11px; line-height: 1.6; background: var(--hover); color: var(--text); overflow-wrap: anywhere; }
+.conflict-panel { max-height: 34vh; flex-shrink: 0; overflow: auto; border-bottom: 1px solid var(--border); background: var(--panel); padding: 12px 20px; font-size: 12px; }
+.conflict-panel header { display: flex; align-items: center; justify-content: space-between; }
+.conflict-panel button { background: var(--button); color: var(--button-text); padding: 6px 12px; border-radius: 4px; }
+.conflict-panel pre { font: 12px/20px Consolas, monospace; white-space: pre-wrap; user-select: text; }
+:root[data-theme="dark"] .inline-deleted { background: #352023; color: #efa1a6; }
+:root[data-theme="dark"] .inline-proposed, :root[data-theme="dark"] .review-added-line { background: #203025; color: #9dcea8; }
+:root[data-theme="dark"] .review-accepted-line { background: #202820; }
+:root[data-theme="dark"] .added, :root[data-theme="dark"] .review-state.accepted { color: #9dcea8; }
+:root[data-theme="dark"] .removed, :root[data-theme="dark"] .review-state.rejected { color: #efa1a6; }
+.settings-categories { padding: 2px 8px; }
+.settings-categories button { width: 100%; padding: 9px 12px; border-radius: 4px; text-align: left; font-size: 13px; }
+.settings-categories button:hover, .settings-categories button.active { background: var(--active); }
+.settings-main { overflow: auto; }
+.settings-content { width: min(720px,100%); padding: 42px 48px; }
+.settings-content h1 { margin: 0 0 30px; font-size: 24px; font-weight: 500; }
+.setting-row { display: flex; align-items: center; justify-content: space-between; gap: 30px; padding: 18px 0; border-bottom: 1px solid var(--border); }
+.setting-row span { display: grid; gap: 7px; }
+.setting-row strong { font-size: 13px; font-weight: 500; }
+.setting-row small { color: var(--muted); font-size: 12px; }
+.setting-row input { width: 16px; height: 16px; accent-color: var(--text); }

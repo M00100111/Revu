@@ -1,14 +1,10 @@
-export async function readDirectory(handle: FileSystemDirectoryHandle) {
-  const entries: FileSystemHandle[] = [];
-  for await (const entry of handle.values()) entries.push(entry);
-  return entries.sort((a, b) =>
-    a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === 'directory' ? -1 : 1,
-  );
+export class ApiError extends Error {
+  constructor(public status: number, message: string) { super(message); }
 }
-export async function writeFile(handle: FileSystemFileHandle, text: string) {
-  const writable = await handle.createWritable();
-  await writable.write(text);
-  await writable.close();
+export async function api<T>(action: string, data: object = {}): Promise<T> {
+  const result=await window.revu.invoke<T>({action,...data});
+  if(!result.ok)throw new ApiError(result.status??500,result.error??'Unknown error');
+  return result.value as T;
 }
 export function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);

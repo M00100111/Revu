@@ -1,29 +1,45 @@
 # Revu
 
-React + TypeScript + Monaco 构建的轻量源码编辑器。
+A lightweight desktop editor built with Electron, React, TypeScript, and Monaco. It supports multiple projects and Git chunk review.
 
-## 运行
+## Start
 
-需要 Node.js 22.12+，使用桌面 Chrome 或 Edge：
+Requirements: Windows, Node.js 22.12+, and Git on `PATH`.
 
-~~~sh
+~~~powershell
 npm install
 npm run dev
 ~~~
 
-打开终端显示的 localhost 地址。生产检查和构建：npm run build，预览：npm run preview。
+The development command opens the Revu desktop window. Vite is used only for renderer hot reload.
 
-## 使用
+- Build: `npm run build`
+- Run the production build: `npm start`
+- Build a portable Windows exe: `npm run dist`
+- Tests: `npm test`
 
-- 点击「打开文件夹」，授权本地目录访问；文件夹按展开时读取。
-- 文件管理器右上角「添加文件夹」可同时打开多个项目，重复选择同一目录会定位已有项目。
-- 默认隔离模式：上方项目标签，下方当前项目文件标签。右上角「隔离 / 混合」按钮切换展示方式。
-- 混合模式显示所有文件标签并标注项目名。切换模式保留未保存内容、撤销记录和编辑位置。
-- 点击文件打开标签；支持语法高亮、搜索、撤销和多文件切换。
-- 点击保存或按 Ctrl+S，将当前内容写回原文件。
-- 左侧文件按钮切换文件管理器，底部按钮切换黑白主题。
-- 关闭未保存文件或离开页面时提示；添加项目不会关闭已有文件。刷新后需重新打开目录，只有主题偏好会被保存。
+Use **Open Folder** to select a project with Electron's native Windows dialog. File access, Git, file watching, and diff operations run in the Electron main process through a restricted preload API.
 
-本项目使用 File System Access API，只支持桌面 Chrome / Edge 的 localhost 或 HTTPS 环境。Monaco 与 Worker 均本地打包，无 CDN 依赖。
+## Editing and review
 
-这是 UTF-8 文本/代码编辑 MVP，不适用于二进制文件或其他文本编码。暂不提供 Markdown 预览、文件增删改名、外部文件变更同步、Git、Agent 或后端。
+- Mixed and isolated modes affect editor tabs only.
+- File, Review, and Settings sidebars are resizable. Their widths are synchronized by default and can be separated under Settings → Interaction.
+- Review can show all projects or one selected project.
+- The review base is the HEAD captured when a project opens. Staged and unstaged changes appear together.
+- Accept keeps the draft and records the decision. Reject restores the chunk to its base content.
+- Processed chunks remain visible and can be reversed with Undo.
+- Save and Accept do not modify the Git index.
+- If HEAD changes, Revu keeps the original base until the user refreshes it.
+
+## External changes
+
+Revu watches open projects and performs a three-way merge using the last synced content, the current draft, and the latest disk content. Non-conflicting edits merge automatically. A conflict preserves the draft and pauses save and review operations until the user completes the merge.
+
+Saving checks the disk hash first. External sync resets text undo history while preserving valid review records.
+
+## MVP limits
+
+- UTF-8 text with BOM, LF, or CRLF is supported.
+- Deleted, renamed, binary, mixed-line-ending, and unresolved Git-conflict files show status only.
+- Drafts and review records last for the current app session only. Theme and sidebar preferences are stored locally.
+- AI suggestions, agents, and batch review are outside this version.
