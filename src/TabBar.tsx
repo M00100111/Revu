@@ -1,10 +1,10 @@
 import type { OpenFile } from './editor';
 import Icon from './Icon';
 export type TabContextAction='close'|'closeOthers'|'closeAll';
-export default function TabBar({ files, activeId, onSelect, onClose, onContextAction, onSave, saving, mixed }: {
+export default function TabBar({ files, activeId, onSelect, onClose, onContextAction, mixed }: {
   files: OpenFile[]; activeId: string | null; onSelect: (file: OpenFile) => void;
   onClose: (file: OpenFile) => void;onContextAction:(file:OpenFile,action:TabContextAction)=>void;
-  onSave: () => void; saving: boolean;mixed: boolean;
+  mixed: boolean;
 }) {
   return <div className="tab-bar">
     <div className="tabs" aria-label="Open files">
@@ -22,9 +22,5 @@ export default function TabBar({ files, activeId, onSelect, onClose, onContextAc
         </button>
       </div>)}
     </div>
-    <button className="save-button" aria-label="Save file" title="Save file · Ctrl+S"
-      disabled={saving || !activeId} onClick={onSave}>
-      <Icon name="save" size={16} /><span>{saving ? 'Saving' : 'Save'}</span>
-    </button>
   </div>;
 }

@@ -47,6 +47,7 @@ export interface OpenFile {
   model: monaco.editor.ITextModel;
   subscription: monaco.IDisposable;
   synced: Snapshot;
+  draftExists: boolean;
   baseline: string;
   dirty: boolean;
   version: number;
@@ -59,6 +60,5 @@ export interface OpenFile {
   diffError: string;
   syncError?: string;
   reason?: string;
-  conflict?: Snapshot;
   notice: string;
 }

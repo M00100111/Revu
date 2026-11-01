@@ -5,9 +5,10 @@ import Icon from './Icon';
 type Props = {
   projectId: string; activePath: string | null;
   onOpen: (path: string) => void; onError: (message: string) => void;
+  expandedDirectories: ReadonlySet<string>; onDirectoryToggle: (key: string) => void;
   path?: string; depth?: number;
 };
-export default function FileTree({ projectId, activePath, onOpen, onError, path = '', depth = 0 }: Props) {
+export default function FileTree({ projectId, activePath, onOpen, onError, expandedDirectories, onDirectoryToggle, path = '', depth = 0 }: Props) {
   const [entries,setEntries]=useState<Entry[]>([]);
   const [status,setStatus]=useState('Loading…');
   useEffect(()=>{
@@ -26,7 +27,8 @@ export default function FileTree({ projectId, activePath, onOpen, onError, path 
       const entryPath=path?path+'/'+entry.name:entry.name;
       return entry.kind==='directory'
         ? <Directory key={entry.name} projectId={projectId} name={entry.name} path={entryPath}
-            depth={depth} activePath={activePath} onOpen={onOpen} onError={onError}/>
+            depth={depth} activePath={activePath} onOpen={onOpen} onError={onError}
+            expandedDirectories={expandedDirectories} onDirectoryToggle={onDirectoryToggle}/>
         : <li key={entry.name}><button className={'tree-row '+(activePath===entryPath?'active':'')}
             style={{paddingLeft:16+depth*14}} title={entryPath} onClick={()=>onOpen(entryPath)}>
             <Icon name="file" size={15}/><span>{entry.name}</span>
@@ -35,9 +37,10 @@ export default function FileTree({ projectId, activePath, onOpen, onError, path 
   </ul>;
 }
 function Directory(props:Props & {name:string;path:string;depth:number}){
-  const [expanded,setExpanded]=useState(false);
+  const key=props.projectId+'/'+props.path;
+  const expanded=props.expandedDirectories.has(key);
   return <li><button className="tree-row directory-row" style={{paddingLeft:8+props.depth*14}}
-    aria-expanded={expanded} onClick={()=>setExpanded(!expanded)}>
+    aria-expanded={expanded} onClick={()=>props.onDirectoryToggle(key)}>
     <Icon name="chevron" size={12} style={{transform:expanded?'rotate(90deg)':undefined}}/>
     <Icon name="folder" size={15}/><span>{props.name}</span>
   </button>{expanded&&<FileTree {...props} depth={props.depth+1}/>}</li>;

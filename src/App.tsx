@@ -8,14 +8,18 @@ import Icon from './Icon';
 import Sidebar, { type Panel } from './Sidebar';
 import TabBar, { type TabContextAction } from './TabBar';
 import ReviewDashboard from './ReviewDashboard';
-import ConflictPanel from './ConflictPanel';
 import ResizeHandle from './ResizeHandle';
-import SettingsPage, { SettingsSidebar } from './SettingsPage';
+import SettingsPage, { SettingsSidebar, type SettingsCategory } from './SettingsPage';
 import WindowControls from './WindowControls';
 
 const savedWidth=(key:string,fallback:number)=>{
   const value=Number(localStorage.getItem(key));
   return value>=180&&value<=520?value:fallback;
+};
+const DEFAULT_EDITOR_FONT="'Cascadia Code', Consolas, 'Courier New', monospace";
+const savedFontSize=()=>{
+  const value=Number(localStorage.getItem('revu-editor-font-size'));
+  return Number.isFinite(value)&&value>=10&&value<=24?value:14;
 };
 
 export default function App(){
@@ -32,9 +36,16 @@ export default function App(){
   const [activeId,setActiveId]=useState<string|null>(null);
   const [projectId,setProjectId]=useState<string|null>(null);
   const [mixed,setMixed]=useState(()=>localStorage.getItem('revu-editor-tab-mode')==='mixed');
+  const [settingsCategory,setSettingsCategory]=useState<SettingsCategory>('interaction');
+  const [fontFamily,setFontFamily]=useState(()=>localStorage.getItem('revu-editor-font-family')||DEFAULT_EDITOR_FONT);
+  const [fontSize,setFontSize]=useState(savedFontSize);
   const [error,setError]=useState('');
   const [picking,setPicking]=useState(false);
   const [reveal,setReveal]=useState<{id:string;line:number}|null>(null);
+  const [reviewFilter,setReviewFilter]=useState('all');
+  const [reviewSelected,setReviewSelected]=useState('');
+  const [collapsedProjects,setCollapsedProjects]=useState<Set<string>>(()=>new Set());
+  const [expandedDirectories,setExpandedDirectories]=useState<Set<string>>(()=>new Set());
   const workspace=useWorkspace(setError);
   const {projects,documents,statuses,tick}=workspace;
   const editorRef=useRef<monaco.editor.IStandaloneCodeEditor|null>(null);
@@ -43,6 +54,21 @@ export default function App(){
   const openFiles=tabs.map(id=>documents.find(file=>file.id===id)).filter((f):f is OpenFile=>!!f);
   const activeFile=openFiles.find(file=>file.id===activeId);
   const visibleFiles=mixed?openFiles:openFiles.filter(file=>file.project.id===projectId);
+  useEffect(()=>{
+    if(!projectId&&projects.length)setProjectId(projects[0].id);
+  },[projects,projectId]);
+  useEffect(()=>{
+    const documentIds=new Set(documents.map(file=>file.id));
+    if(tabs.every(id=>documentIds.has(id)))return;
+    const activeIndex=activeId?tabs.indexOf(activeId):-1;
+    const remaining=tabs.filter(id=>documentIds.has(id));
+    setTabs(remaining);
+    if(activeId&&!documentIds.has(activeId)){
+      const nextId=remaining[Math.min(Math.max(activeIndex,0),remaining.length-1)]??null;
+      const next=documents.find(file=>file.id===nextId);
+      setActiveId(nextId);setProjectId(next?.project.id??null);setReveal(null);
+    }
+  },[documents,tabs,activeId]);
   useEffect(()=>{
     document.documentElement.dataset.theme=dark?'dark':'light';
     localStorage.setItem('revu-theme',dark?'dark':'light');
@@ -55,6 +81,16 @@ export default function App(){
     localStorage.setItem('revu-settings-sidebar-width',String(widths.settings));
   },[syncWidths,widths]);
   useEffect(()=>localStorage.setItem('revu-editor-tab-mode',mixed?'mixed':'isolated'),[mixed]);
+  useEffect(()=>{
+    const family=fontFamily.trim()||DEFAULT_EDITOR_FONT;
+    const size=Math.max(10,Math.min(24,fontSize));
+    const lineHeight=Math.round(size*12/7);
+    localStorage.setItem('revu-editor-font-family',fontFamily);
+    localStorage.setItem('revu-editor-font-size',String(size));
+    document.documentElement.style.setProperty('--editor-font-family',family);
+    document.documentElement.style.setProperty('--editor-font-size',size+'px');
+    document.documentElement.style.setProperty('--editor-line-height',lineHeight+'px');
+  },[fontFamily,fontSize]);
   useEffect(()=>{
     const beforeUnload=(event:BeforeUnloadEvent)=>{if(documentsRef.current.some(file=>file.dirty))event.preventDefault();};
     window.addEventListener('beforeunload',beforeUnload);
@@ -78,6 +114,13 @@ export default function App(){
     const file=openFiles.find(file=>file.id===remembered)??openFiles.find(file=>file.project.id===id);
     setActiveId(file?.id??null);setReveal(null);
   }
+  function toggleDirectory(key:string){
+    setExpandedDirectories(current=>{
+      const next=new Set(current);
+      if(next.has(key))next.delete(key);else next.add(key);
+      return next;
+    });
+  }
   async function addFolder(){
     if(picking)return;setPicking(true);
     try{
@@ -98,7 +141,10 @@ export default function App(){
     const dirty=targets.filter(file=>file.dirty);
     if(dirty.length&&!window.confirm(`${dirty.length} tab${dirty.length===1?' has':'s have'} unsaved changes. Discard the draft${dirty.length===1?'':'s'} and close?`))return;
     const closing=new Set(targets.map(file=>file.id));
-    for(const file of dirty){file.records=file.records.map(record=>({...record,stale:true}));file.model.setValue(file.synced.text);file.dirty=false;}
+    for(const file of dirty){
+      file.records=file.records.map(record=>({...record,stale:true}));file.draftExists=file.synced.exists;
+      file.model.setValue(file.synced.text);file.dirty=false;
+    }
     const remaining=openFiles.filter(file=>!closing.has(file.id));
     for(const file of targets){
       if(lastFile.current.get(file.project.id)!==file.id)continue;
@@ -125,6 +171,8 @@ export default function App(){
     try{
       await workspace.removeProject(project);
       setTabs(current=>current.filter(id=>!affected.some(file=>file.id===id)));lastFile.current.delete(project.id);
+      setCollapsedProjects(current=>{const next=new Set(current);next.delete(project.id);return next;});
+      setExpandedDirectories(current=>new Set([...current].filter(key=>!key.startsWith(project.id+'/'))));
       if(activeFile?.project.id===project.id){const next=remaining[0];if(next)selectFile(next);else setActiveId(null);}
       if(projectId===project.id)setProjectId(remaining[0]?.project.id??projects.find(item=>item.id!==project.id)?.id??null);
       setError('');
@@ -142,26 +190,40 @@ export default function App(){
     setSyncWidths(value);
   };
   return <div className="app">
-    <WindowControls/>
+    <WindowControls onSave={()=>{if(activeFile)void workspace.save(activeFile);}}
+      saveDisabled={!activeFile||!activeFile.dirty||!!(activeFile.saving||activeFile.syncing||activeFile.reason)}
+      saving={!!activeFile?.saving}/>
     <Sidebar panel={panel} setPanel={setPanel} dark={dark} toggleTheme={()=>setDark(!dark)}/>
     {panel==='files'&&<aside className="explorer" style={{width:sidebarWidth}}>
       <header className="explorer-header"><span>File</span><button className="icon-button" onClick={addFolder}
         disabled={picking} title="Open folder" aria-label="Open folder"><Icon name="folder" size={17}/></button></header>
-      {projects.length?<div className="tree-scroll">{projects.map(project=><details className="project-tree" key={project.id} open>
+      {projects.length?<div className="tree-scroll">{projects.map(project=><details className="project-tree" key={project.id}
+        open={!collapsedProjects.has(project.id)} onToggle={event=>{
+          const open=event.currentTarget.open;
+          setCollapsedProjects(current=>{
+            if(open===!current.has(project.id))return current;
+            const next=new Set(current);if(open)next.delete(project.id);else next.add(project.id);return next;
+          });
+        }}>
         <summary className="workspace-name" title={project.root} onContextMenu={async event=>{
           event.preventDefault();if(await window.revu.contextMenu('project')==='close')void closeProject(project);
         }}><Icon name="chevron" size={12}/><Icon name="folder" size={15}/><span>{project.name}</span></summary>
         <FileTree projectId={project.id} activePath={activeFile?.project.id===project.id?activeFile.path:null}
-          onOpen={path=>void openFile(project,path)} onError={setError}/>
+          onOpen={path=>void openFile(project,path)} onError={setError}
+          expandedDirectories={expandedDirectories} onDirectoryToggle={toggleDirectory}/>
       </details>)}</div>:<p className="sidebar-empty">No folders open</p>}
       <ResizeHandle width={sidebarWidth} onResize={resizeSidebar}/>
     </aside>}
     {panel==='review'&&<ReviewDashboard projects={projects} documents={documents} statuses={statuses}
+      filter={reviewFilter} selected={reviewSelected} onFilterChange={setReviewFilter} onSelectedChange={setReviewSelected}
       width={sidebarWidth} onResize={resizeSidebar} onOpen={openFile} onAction={workspace.act}
       onBulk={workspace.bulk} onRefreshBase={workspace.refreshBase}/>}
-    {panel==='settings'&&<SettingsSidebar width={sidebarWidth} onResize={resizeSidebar}/>}
-    {panel==='settings'?<SettingsPage syncWidths={syncWidths} onChange={changeWidthSync}
-      mixed={mixed} onModeChange={setMixed}/>:<>
+    {panel==='settings'&&<SettingsSidebar width={sidebarWidth} onResize={resizeSidebar}
+      category={settingsCategory} onCategoryChange={setSettingsCategory}/>}
+    {panel==='settings'?<SettingsPage category={settingsCategory} syncWidths={syncWidths} onChange={changeWidthSync}
+      mixed={mixed} onModeChange={setMixed} fontFamily={fontFamily} fontSize={fontSize}
+      onFontFamilyChange={setFontFamily} onFontSizeChange={value=>setFontSize(Math.max(10,Math.min(24,value)))}
+      onResetEditor={()=>{setFontFamily(DEFAULT_EDITOR_FONT);setFontSize(14);}}/>:<>
     <main className="main">
       {error&&<div className="error-banner" role="alert"><span>{error}</span><button className="icon-button"
         aria-label="Dismiss error" onClick={()=>setError('')}><Icon name="close" size={14}/></button></div>}
@@ -174,18 +236,16 @@ export default function App(){
           </button>)}</div></div>}
         <TabBar files={visibleFiles} activeId={activeId} onSelect={selectFile} onClose={closeFile}
           onContextAction={tabContext}
-          onSave={()=>{if(activeFile)void workspace.save(activeFile);}}
-          saving={!!(activeFile?.saving||activeFile?.syncing||activeFile?.conflict||activeFile?.reason)}
           mixed={mixed}/>
       </>}
       {activeFile?<>
         <div className="breadcrumb"><span>{activeFile.project.name}</span><span>/</span><span>{activeFile.path}</span></div>
         {activeFile.notice&&<div className="sync-notice">{activeFile.notice}</div>}
         {(activeFile.reason||activeFile.diffError)&&<div className="review-warning">{activeFile.reason||activeFile.diffError}</div>}
-        <ConflictPanel file={activeFile} onFinish={()=>void workspace.finishMerge(activeFile)}/>
         <div className="editor-container"><EditorArea file={activeFile} dark={dark} editorRef={editorRef}
-          tick={tick} onAction={workspace.act} revealLine={reveal?.id===activeFile.id?reveal.line:undefined}/></div>
-        <footer className="status-bar"><span>{activeFile.conflict?'External conflict':activeFile.dirty?'Unsaved':'Saved'}
+          tick={tick} onAction={workspace.act} revealLine={reveal?.id===activeFile.id?reveal.line:undefined}
+          fontFamily={fontFamily.trim()||DEFAULT_EDITOR_FONT} fontSize={fontSize}/></div>
+        <footer className="status-bar"><span>{activeFile.dirty?'Unsaved':'Saved'}
           {activeFile.computing?' · Updating diff…':''}</span>
           <span>{activeFile.model.getLanguageId()}<span className="status-divider">UTF-8{activeFile.synced.bom?' BOM':''}</span></span></footer>
       </>:<div className="empty-state">

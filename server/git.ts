@@ -26,23 +26,3 @@ export async function diff(before: string, after: string) {
     return parsePatch(patch.toString('utf8'), before, after);
   } finally { await rm(dir, { recursive: true, force: true }); }
 }
-export async function merge(base: string, draft: string, external: string) {
-  if (draft === base || draft === external) return { text: external, conflict: false };
-  if (external === base) return { text: draft, conflict: false };
-  const dir = await mkdtemp(join(tmpdir(), 'revu-merge-'));
-  try {
-    await Promise.all([writeFile(join(dir, 'base'), base), writeFile(join(dir, 'draft'), draft),
-      writeFile(join(dir, 'external'), external)]);
-    // Exit 1..127 denotes textual conflicts; no markers are ever written into the live draft.
-    const result = await new Promise<{ text: string; conflict: boolean }>((resolve, reject) => {
-      const child = spawn('git', ['merge-file', '-p', '--diff3', 'draft', 'base', 'external'], { cwd: dir, windowsHide: true });
-      const out: Buffer[] = [], err: Buffer[] = [];
-      child.stdout.on('data', b => out.push(b)); child.stderr.on('data', b => err.push(b));
-      child.on('error', reject);
-      child.on('close', code => code !== null && code >= 0 && code < 128
-        ? resolve({ text: Buffer.concat(out).toString('utf8'), conflict: code !== 0 })
-        : reject(new Error(Buffer.concat(err).toString('utf8') || 'Merge failed')));
-    });
-    return result;
-  } finally { await rm(dir, { recursive: true, force: true }); }
-}

@@ -1,10 +1,23 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { diff, merge } from '../server/git';
+import { diff } from '../server/git';
 import { reconcile, replaceExact, mapRange } from '../shared/review';
 import { chunkKind } from '../shared/review';
 import { planBulkReview } from '../shared/bulkReview';
 import type { ReviewRecord } from '../shared/types';
+import { changedRanges, inlineDiff } from '../shared/inlineDiff';
+
+test('inline diff preserves text and marks changed characters and complete added lines',()=>{
+  const before='class TTLCache {\n  keep();\n';
+  const after='class LRUCache {\n  keep();\n  added();\n';
+  const result=inlineDiff(before,after);
+  assert.equal(result.before.map(part=>part.text).join(''),before);
+  assert.equal(result.after.map(part=>part.text).join(''),after);
+  assert.ok(result.before.some(part=>part.changed&&part.text.includes('T')));
+  assert.ok(result.after.some(part=>part.changed&&part.text.includes('R')));
+  const ranges=changedRanges(result.after);
+  assert.ok(ranges.some(range=>after.slice(range.start,range.end).includes('added')));
+});
 
 test('exact replacement preserves CRLF, EOF and repeated text',async()=>{
   for(const [base,draft] of [
@@ -50,12 +63,6 @@ test('ambiguous zero length boundary is not moved or replaced',async()=>{
   const changes=await diff('x\ny\n','x\nz\ny\n');
   assert.equal(mapRange(2,2,changes),null);
   assert.throws(()=>replaceExact('wrong',0,5,'right','new'));
-});
-test('three-way merge preserves disjoint drafts and reports conflicts',async()=>{
-  const base='a\nb\nc\nd\ne\nf\n';
-  const clean=await merge(base,'A\nb\nc\nd\ne\nf\n','a\nb\nc\nd\ne\nF\n');
-  assert.equal(clean.conflict,false);assert.equal(clean.text,'A\nb\nc\nd\ne\nF\n');
-  assert.equal((await merge(base,'A\nb\nc\nd\ne\nf\n','OTHER\nb\nc\nd\ne\nf\n')).conflict,true);
 });
 test('classifies chunks and plans project review actions without partial text edits',async()=>{
   assert.equal(chunkKind('','new'),'add');assert.equal(chunkKind('old',''),'delete');

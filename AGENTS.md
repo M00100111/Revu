@@ -71,12 +71,11 @@
 - Inline deleted text must preserve source indentation while matching Monaco’s font, line height, content origin, and `tabSize: 2`.
 - Deleted, renamed, binary, mixed-line-ending, and unresolved-conflict files are status-only and have no chunk actions.
 
-## Validation and packaging
+## Validation
 
 - Add tests only for important state/version logic or regressions. Do not mirror implementation details.
 - Before handoff run:
   - `npm test`
   - `npm run build`
   - `git diff --check`
-- Build the portable Windows executable with `npm run dist`.
-- The portable artifact is `release/Revu-<version>-x64.exe`.
+- Do not package after routine code changes. The user runs `npm run dist` manually when a portable executable is needed.

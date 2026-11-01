@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { readFile, readdir, realpath, stat, open } from 'node:fs/promises';
+import { readFile, readdir, realpath, stat, open, unlink } from 'node:fs/promises';
 import { watch, type FSWatcher } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import type { Project, Snapshot, ProjectStatus, ChangeFile } from '../shared/types';
@@ -125,7 +125,7 @@ export class Workspace {
         const status = parts[i++], oldPath = parts[i++];
         if (status.startsWith('R') || status.startsWith('C')) {
           const newPath = parts[i++]; add(newPath, status, 'Rename or copy. Status only.');
-        } else add(oldPath, status, status === 'D' ? 'File deleted. Status only.' : undefined);
+        } else add(oldPath, status);
       }
     } else {
       for (const path of (await git(p.repo, ['ls-files', '-z'])).toString().split('\0').filter(Boolean)) add(path, 'A');
@@ -140,23 +140,42 @@ export class Workspace {
       if (file.reason) continue;
       const snapshot = await this.read(p, file.path);
       const base = await this.baseline(p, file.path);
-      file.reason = !snapshot.exists ? 'File deleted. Status only.' : snapshot.reason ?? base.reason;
+      file.reason = !snapshot.exists ? (file.status.startsWith('D') ? undefined : 'File deleted. Status only.')
+        : snapshot.reason ?? base.reason;
       if (!file.reason && snapshot.text === base.text && snapshot.bom !== base.bom) file.reason = 'BOM metadata change only';
     }
     return { files: [...files.values()].sort((a,b) => a.path.localeCompare(b.path)), head, base: p.base, changedHead: head !== p.base, branch };
   }
-  async save(p: Registered, path: string, expected: string, text: string, bom: boolean) {
+  async save(p: Registered, path: string, expected: string, text: string, bom: boolean, exists = true) {
     const previous = this.locks.get(p.id) ?? Promise.resolve();
     const task = previous.catch(() => {}).then(async () => {
       const current = await this.read(p, path);
-      if (!current.exists || current.hash !== expected) throw new HttpError(409, 'Disk content changed. Sync first.');
+      if (current.exists ? current.hash !== expected : expected !== 'missing') {
+        throw new HttpError(409, 'Disk content changed. Sync first.');
+      }
       if (current.reason) throw new HttpError(409, current.reason);
-      const target = await this.path(p, path);
+      const target = await this.path(p, path, !current.exists);
+      if(!exists){
+        if(!current.exists)return current;
+        if(hash(await readFile(target))!==expected)throw new HttpError(409, 'Disk content changed. Sync first.');
+        await unlink(target);
+        const result=await this.read(p,path);
+        if(result.exists)throw new HttpError(409, 'The file changed during save. Sync first.');
+        this.notify(p.id);return result;
+      }
       const bytes = Buffer.from((bom ? '\uFEFF' : '') + text, 'utf8');
-      const handle = await open(target, 'r+');
+      let handle:Awaited<ReturnType<typeof open>>;
+      try { handle = await open(target, current.exists ? 'r+' : 'wx'); }
+      catch(error) {
+        if(['EEXIST','ENOENT'].includes((error as NodeJS.ErrnoException).code??''))
+          throw new HttpError(409, 'Disk content changed. Sync first.');
+        throw error;
+      }
       try {
-        const actual = await handle.readFile();
-        if (hash(actual) !== expected) throw new HttpError(409, 'Disk content changed. Sync first.');
+        if(current.exists){
+          const actual = await handle.readFile();
+          if (hash(actual) !== expected) throw new HttpError(409, 'Disk content changed. Sync first.');
+        }
         let offset = 0;
         while (offset < bytes.length) {
           const { bytesWritten } = await handle.write(bytes, offset, bytes.length - offset, offset);

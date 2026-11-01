@@ -1,17 +1,21 @@
 import Editor from '@monaco-editor/react';
 import { createPortal } from 'react-dom';
-import { useEffect, useRef, useState, type MutableRefObject } from 'react';
+import { Fragment, useEffect, useRef, useState, type MutableRefObject } from 'react';
 import type { Chunk, ReviewRecord } from '../shared/types';
+import { changedRanges, inlineDiff } from '../shared/inlineDiff';
 import { monaco, type OpenFile } from './editor';
 import { reviewItems, ReviewActions, type ActionHandler } from './ReviewActions';
+import DiffPreview from './DiffPreview';
 
-export default function EditorArea({file,dark,editorRef,tick,onAction,revealLine}:{
+export default function EditorArea({file,dark,editorRef,tick,onAction,revealLine,fontFamily,fontSize}:{
   file:OpenFile;dark:boolean;editorRef:MutableRefObject<monaco.editor.IStandaloneCodeEditor|null>;
-  tick:number;onAction:ActionHandler;revealLine?:number;
+  tick:number;onAction:ActionHandler;revealLine?:number;fontFamily:string;fontSize:number;
 }){
   const [editor,setEditor]=useState<monaco.editor.IStandaloneCodeEditor|null>(null);
-  const [toolbars,setToolbars]=useState<{node:HTMLElement;item:Chunk|ReviewRecord}[]>([]);
+  const [portals,setPortals]=useState<{toolbarNode:HTMLElement;previewNode?:HTMLElement;item:Chunk|ReviewRecord}[]>([]);
+  const [expandedRecords,setExpandedRecords]=useState<Set<string>>(()=>new Set());
   const actionRef=useRef(onAction); actionRef.current=onAction;
+  const editorLineHeight=Math.round(fontSize*12/7);
   useEffect(()=>()=>{editorRef.current=null;},[editorRef]);
   useEffect(()=>{
     if(!editor)return;
@@ -27,9 +31,18 @@ export default function EditorArea({file,dark,editorRef,tick,onAction,revealLine
   useEffect(()=>{
     if(!editor)return;
     let zones:string[]=[];
+    let toolbarNodes:HTMLElement[]=[];
     const decorations=editor.createDecorationsCollection();
+    const layoutToolbars=()=>{
+      const width=editor.getLayoutInfo().contentWidth;
+      const offset=editor.getScrollLeft();
+      for(const toolbar of toolbarNodes){
+        toolbar.style.width=width+'px';
+        toolbar.style.transform=`translateX(${offset}px)`;
+      }
+    };
     const render=()=>{
-      const nextToolbars:{node:HTMLElement;item:Chunk|ReviewRecord}[]=[];
+      const nextPortals:{toolbarNode:HTMLElement;previewNode?:HTMLElement;item:Chunk|ReviewRecord}[]=[];
       editor.changeViewZones(accessor=>{
         zones.forEach(id=>accessor.removeZone(id));zones=[];
         if(editor.getModel()!==file.model){decorations.clear();return;}
@@ -40,58 +53,94 @@ export default function EditorArea({file,dark,editorRef,tick,onAction,revealLine
           const line=Math.max(1,Math.min(file.model.getLineCount(),position.lineNumber));
           const record='decision' in item?item:null;
           const node=document.createElement('div');node.className='inline-review '+(record?'reviewed':item.kind);
-          const toolbar=document.createElement('div');node.append(toolbar);
-          nextToolbars.push({node:toolbar,item});
-          const old=document.createElement('pre');
-          old.className='inline-deleted';old.textContent=item.oldText.replace(/\r?\n$/,'');
-          if(item.oldText)node.append(old);
-          if(record&&item.newText){
-            const next=document.createElement('pre');next.className='inline-proposed';
-            next.textContent=item.newText.replace(/\r?\n$/,'');node.append(next);
+          const toolbar=document.createElement('div');toolbar.className='inline-review-toolbar';node.append(toolbar);
+          const expanded=!!record&&expandedRecords.has(record.id);
+          const showPreview=record?expanded:!!item.oldText;
+          let preview:HTMLElement|undefined;
+          let previewHeight=0;
+          if(showPreview){
+            preview=document.createElement('div');preview.className='inline-review-preview';
+            const previewRows=rows(item.oldText)+(record?rows(item.newText):0);
+            previewHeight=previewRows*editorLineHeight;
+            preview.style.height=previewHeight+'px';node.append(preview);
           }
-          node.style.overflow='auto';
-          const height=32+(rows(item.oldText)+(record?rows(item.newText):0))*20;
+          nextPortals.push({toolbarNode:toolbar,previewNode:preview,item});
+          node.style.overflow='hidden';
+          const height=32+previewHeight;
           const atEOF=item.start===file.model.getValueLength()&&position.column>1;
           zones.push(accessor.addZone({afterLineNumber:atEOF?line:line-1,
-            heightInPx:Math.min(240,height),domNode:node,suppressMouseDown:false}));
-          if(!record||record.decision==='accepted'){
+            heightInPx:height,domNode:node,suppressMouseDown:false}));
+          if(record){
+            if(item.end>item.start){
+              const end=file.model.getPositionAt(item.end);
+              const endLine=end.column===1?end.lineNumber-1:end.lineNumber;
+              marks.push({range:new monaco.Range(line,1,Math.max(line,endLine),1),options:{
+                isWholeLine:true,className:'review-reviewed-line',linesDecorationsClassName:'review-reviewed-gutter',
+              }});
+            }
+          }else if(item.newText){
             const end=file.model.getPositionAt(item.end);
             const endLine=item.end>item.start&&end.column===1?end.lineNumber-1:end.lineNumber;
-            if(item.newText)marks.push({range:new monaco.Range(line,1,Math.max(line,endLine),1),options:{
-              isWholeLine:true,className:record?'review-accepted-line':'review-added-line',linesDecorationsClassName:'review-gutter',
+            marks.push({range:new monaco.Range(line,1,Math.max(line,endLine),1),options:{
+              isWholeLine:true,className:'review-added-line',linesDecorationsClassName:'review-gutter',
             }});
+            if(item.kind==='modify'){
+              const parts=inlineDiff(item.oldText,item.newText);
+              for(const range of changedRanges(parts.after)){
+                const start=file.model.getPositionAt(item.start+range.start);
+                const finish=file.model.getPositionAt(item.start+range.end);
+                marks.push({range:new monaco.Range(start.lineNumber,start.column,finish.lineNumber,finish.column),
+                  options:{inlineClassName:'review-inline-added'}});
+              }
+            }
           }
         }
         decorations.set(marks);
       });
-      setToolbars(nextToolbars);
+      toolbarNodes=nextPortals.map(portal=>portal.toolbarNode);
+      layoutToolbars();
+      setPortals(nextPortals);
     };
     render();
     const subscription=editor.onDidChangeModel(render);
+    const scrollSubscription=editor.onDidScrollChange(event=>{if(event.scrollLeftChanged)layoutToolbars();});
+    const layoutSubscription=editor.onDidLayoutChange(layoutToolbars);
     return ()=>{
-      subscription.dispose();decorations.clear();
+      subscription.dispose();scrollSubscription.dispose();layoutSubscription.dispose();decorations.clear();
       editor.changeViewZones(accessor=>zones.forEach(id=>accessor.removeZone(id)));
     };
-  },[editor,file.id,tick]);  return <><Editor path={file.model.uri.toString()} theme={dark?'revu-dark':'revu-light'}
+  },[editor,file.id,tick,expandedRecords,editorLineHeight]);  return <><Editor path={file.model.uri.toString()} theme={dark?'revu-dark':'revu-light'}
     keepCurrentModel saveViewState
     onMount={instance=>{editorRef.current=instance;setEditor(instance);}}
     loading={<div className="editor-loading">Opening editor…</div>}
     options={{
-      automaticLayout:true,fontFamily:"'Cascadia Code', Consolas, 'Courier New', monospace",
-      fontSize:14,lineHeight:24,padding:{top:0,bottom:24},minimap:{enabled:false},
+      automaticLayout:true,fontFamily,fontSize,lineHeight:editorLineHeight,padding:{top:0,bottom:24},minimap:{enabled:false},
       scrollBeyondLastLine:false,smoothScrolling:true,renderLineHighlight:'line',
       overviewRulerLanes:0,hideCursorInOverviewRuler:true,lineNumbersMinChars:4,
       glyphMargin:false,folding:true,tabSize:2,stickyScroll:{enabled:false},
       wordWrap:file.model.getLanguageId()==='markdown'?'on':'off',
     }}/>
-    {toolbars.map(({node,item})=>createPortal(
-      <ReviewActions file={file} item={item} onAction={(...args)=>actionRef.current(...args)}
-        navigationDisabled={toolbars.length<=1} onNavigate={direction=>{
+    {portals.map(({toolbarNode,previewNode,item})=><Fragment key={item.id}>
+      {createPortal(<ReviewActions file={file} item={item} onAction={(...args)=>actionRef.current(...args)}
+        onReveal={()=>{
+          if(!editor)return;
+          const position=file.model.getPositionAt(item.start);
+          editor.revealLineInCenter(position.lineNumber);editor.setPosition({lineNumber:position.lineNumber,column:1});editor.focus();
+          for(const portal of portals)portal.toolbarNode.parentElement?.classList.toggle('active',portal.item.id===item.id);
+        }}
+        detailsExpanded={'decision' in item&&expandedRecords.has(item.id)}
+        onToggleDetails={'decision' in item?()=>setExpandedRecords(current=>{
+          const next=new Set(current);if(next.has(item.id))next.delete(item.id);else next.add(item.id);return next;
+        }):undefined}
+        navigationDisabled={portals.length<=1} onNavigate={direction=>{
           if(!editor)return;const items=reviewItems(file);const index=items.findIndex(entry=>entry.id===item.id);
           const target=items[(index+direction+items.length)%items.length];if(!target)return;
           const position=file.model.getPositionAt(target.start);editor.revealLineInCenter(position.lineNumber);
           editor.setPosition({lineNumber:position.lineNumber,column:1});editor.focus();
-          for(const toolbar of toolbars)toolbar.node.parentElement?.classList.toggle('active',toolbar.item.id===target.id);
-        }}/>,node,item.id))}
+          for(const portal of portals)portal.toolbarNode.parentElement?.classList.toggle('active',portal.item.id===target.id);
+        }}/>,toolbarNode)}
+      {previewNode&&createPortal(<DiffPreview oldText={item.oldText} newText={item.newText}
+        showAfter={'decision' in item} highlightChanges={item.kind==='modify'}/>,previewNode)}
+    </Fragment>)}
   </>;
 }

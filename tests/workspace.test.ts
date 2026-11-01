@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, readFile, rm, rename } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, rm, rename, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Workspace, decode } from '../server/workspace';
@@ -52,6 +52,20 @@ test('project boundary, deduplication, deleted file and staged rename status',()
   await git(root,['add','-A']);
   assert.match((await w.status(p)).files[0].reason!,/Rename/);
   assert.equal((await w.read(p,'file.txt')).exists,false);
+}));
+test('deleted tracked file is reviewable and can be recreated from a missing snapshot',()=>fixture(async(root,w)=>{
+  const p=w.get((await w.add(root)).id);
+  await unlink(join(root,'file.txt'));
+  const status=await w.status(p);
+  assert.equal(status.files[0].status,'D');
+  assert.equal(status.files[0].reason,undefined);
+  const missing=await w.read(p,'file.txt');
+  assert.equal(missing.exists,false);assert.equal(missing.hash,'missing');
+  await w.save(p,'file.txt','missing','one\ntwo\nthree\n',false);
+  assert.equal(await readFile(join(root,'file.txt'),'utf8'),'one\ntwo\nthree\n');
+  const restored=await w.read(p,'file.txt');
+  const deleted=await w.save(p,'file.txt',restored.hash,'',false,false);
+  assert.equal(deleted.exists,false);
 }));
 test('HEAD change does not silently replace baseline',()=>fixture(async(root,w)=>{
   const p=w.get((await w.add(root)).id),base=p.base;

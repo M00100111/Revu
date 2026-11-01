@@ -32,6 +32,7 @@ export interface Chunk {
   oldText: string;
   newText: string;
   line: number;
+  fileDelete?: boolean;
 }
 export interface ReviewRecord extends Chunk {
   decision: 'accepted' | 'rejected';

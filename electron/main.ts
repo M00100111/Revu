@@ -1,19 +1,46 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, type MenuItemConstructorOptions } from 'electron';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { diff, merge } from '../server/git';
+import { diff } from '../server/git';
 import { HttpError, Workspace } from '../server/workspace';
 
 let mainWindow:BrowserWindow|null=null;
 const workspace=new Workspace(projectId=>mainWindow?.webContents.send('revu:project-changed',projectId));
+
+const openFoldersPath=()=>join(app.getPath('userData'),'open-folders.json');
+async function persistOpenFolders(){
+  try{
+    const roots=[...workspace.projects.values()].map(project=>project.root);
+    await writeFile(openFoldersPath(),JSON.stringify(roots),'utf8');
+  }catch(error){console.warn('Failed to remember open folders',error);}
+}
+async function restoreOpenFolders(){
+  let roots:unknown;
+  try{roots=JSON.parse(await readFile(openFoldersPath(),'utf8'));}
+  catch(error){
+    if((error as NodeJS.ErrnoException).code!=='ENOENT')console.warn('Failed to read open folders',error);
+    return;
+  }
+  if(!Array.isArray(roots))return;
+  for(const root of roots){
+    if(typeof root!=='string')continue;
+    try{await workspace.add(root);}
+    catch(error){console.warn('Failed to restore folder',root,error);}
+  }
+  await persistOpenFolders();
+}
 
 async function invoke(body:Record<string,any>){
   if(body.action==='projects')return [...workspace.projects.values()].map(project=>workspace.public(project));
   if(body.action==='pick'){
     if(!mainWindow)return null;
     const result=await dialog.showOpenDialog(mainWindow,{title:'Open Folder',properties:['openDirectory','createDirectory']});
-    return result.canceled?null:workspace.add(result.filePaths[0]);
+    if(result.canceled)return null;
+    const project=await workspace.add(result.filePaths[0]);
+    await persistOpenFolders();
+    return project;
   }
-  if(body.action==='removeProject'){workspace.remove(body.projectId);return null;}
+  if(body.action==='removeProject'){workspace.remove(body.projectId);await persistOpenFolders();return null;}
   const project=workspace.get(body.projectId);
   switch(body.action){
     case 'list':return workspace.list(project,body.path??'');
@@ -23,16 +50,13 @@ async function invoke(body:Record<string,any>){
     case 'refreshBase':
       project.base=project.repo?await workspace.head(project.repo):null;
       return workspace.public(project);
-    case 'save':return workspace.save(project,body.path,body.expected,body.text,body.bom);
+    case 'save':return workspace.save(project,body.path,body.expected,body.text,body.bom,body.exists);
     case 'diff':{
       if(body.base!==project.base)throw new HttpError(409,'Review base changed');
       const base=await workspace.baseline(project,body.path);
       const [chunks,changes]=await Promise.all([diff(base.text,body.text),diff(body.previous,body.text)]);
       return {version:body.version,chunks,changes};
     }
-    case 'merge':
-      await workspace.path(project,body.path,true);
-      return {...await merge(body.base,body.draft,body.external),version:body.version};
     default:throw new HttpError(400,'Unknown action');
   }
 }
@@ -71,7 +95,6 @@ function createWindow(){
     frame:false,
     webPreferences:{preload:join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false},
   });
-  mainWindow.once('ready-to-show',()=>mainWindow?.show());
   mainWindow.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   mainWindow.webContents.on('before-input-event',(event,input)=>{
     if(input.type==='keyDown'&&input.key==='F12'){event.preventDefault();mainWindow?.webContents.toggleDevTools();}
@@ -80,13 +103,14 @@ function createWindow(){
   mainWindow.on('maximize',maximized);mainWindow.on('unmaximize',maximized);
   mainWindow.on('closed',()=>{mainWindow=null;});
   const devUrl=process.env.REVU_DEV_URL;
-  if(devUrl)void mainWindow.loadURL(devUrl);
-  else void mainWindow.loadFile(join(__dirname,'../dist/index.html'));
+  const loading=devUrl?mainWindow.loadURL(devUrl):mainWindow.loadFile(join(__dirname,'../dist/index.html'));
+  void loading.then(()=>mainWindow?.show());
 }
 
-app.whenReady().then(()=>{
+app.whenReady().then(async()=>{
   app.setAppUserModelId('com.revu.editor');
   Menu.setApplicationMenu(null);
+  await restoreOpenFolders();
   createWindow();
   app.on('activate',()=>{if(BrowserWindow.getAllWindows().length===0)createWindow();});
 });
