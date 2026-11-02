@@ -14,7 +14,7 @@ import WindowControls from './WindowControls';
 
 const savedWidth=(key:string,fallback:number)=>{
   const value=Number(localStorage.getItem(key));
-  return value>=180&&value<=520?value:fallback;
+  return Number.isFinite(value)&&value>=250?value:fallback;
 };
 const savedStringSet=(key:string)=>{
   try{
@@ -33,10 +33,10 @@ export default function App(){
   const [panel,setPanel]=useState<Panel>('files');
   const [syncWidths,setSyncWidths]=useState(()=>localStorage.getItem('revu-sync-sidebar-widths')!=='false');
   const [widths,setWidths]=useState(()=>({
-    shared:savedWidth('revu-sidebar-width',236),
-    files:savedWidth('revu-file-sidebar-width',236),
-    review:savedWidth('revu-review-sidebar-width',236),
-    settings:savedWidth('revu-settings-sidebar-width',236),
+    shared:savedWidth('revu-sidebar-width',250),
+    files:savedWidth('revu-file-sidebar-width',250),
+    review:savedWidth('revu-review-sidebar-width',250),
+    settings:savedWidth('revu-settings-sidebar-width',250),
   }));
   const [tabs,setTabs]=useState<string[]>([]);
   const [activeId,setActiveId]=useState<string|null>(null);

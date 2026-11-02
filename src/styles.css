@@ -6,6 +6,7 @@
   --button: #242424; --button-text: #fff;
   --editor-font-family: 'Cascadia Code', Consolas, 'Courier New', monospace;
   --editor-font-size: 14px; --editor-line-height: 24px;
+  --sidebar-header-height: 54px;
 }
 :root[data-theme="dark"] {
   color-scheme: dark; --bg: #191919; --panel: #161616; --rail: #111; --text: #dedede;
@@ -39,10 +40,10 @@ button, input, label, .tab-bar, .project-bar, .tab, .project-tab, .project-dropd
 .activity-button:hover, .activity-button.selected { color: var(--text); }
 .activity-button.selected::before { content: ''; position: absolute; left: 0; top: 12px; bottom: 12px; width: 2px; background: var(--text); }
 .activity-footer { margin-top: auto; padding-bottom: 12px; }
-.explorer { position: relative; width: 236px; flex-shrink: 0; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
+.explorer { position: relative; width: 250px; min-width: 250px; flex-shrink: 0; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
 .resize-handle { position: absolute; z-index: 20; top: 0; right: -3px; width: 6px; height: 100%; cursor: col-resize; touch-action: none; }
 .resize-handle:hover { background: var(--text); opacity: .18; }
-.explorer-header { height: 54px; padding: 0 17px 0 21px; display: flex; align-items: center; justify-content: space-between; font-size: 13px; font-weight: 600; }
+.explorer-header { height: var(--sidebar-header-height); flex: 0 0 var(--sidebar-header-height); padding: 0 17px 0 21px; display: flex; align-items: center; justify-content: space-between; font-size: 13px; font-weight: 600; }
 .icon-button { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 4px; color: var(--muted); }
 .icon-button:hover { color: var(--text); background: var(--hover); }
 .workspace-name { padding: 12px 21px; font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -85,7 +86,7 @@ kbd { font: inherit; border: 1px solid var(--border); border-radius: 3px; paddin
 .status-divider { margin-left: 20px; }
 .error-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--hover); font-size: 12px; }
 .error-banner span { overflow-wrap: anywhere; }
-@media (max-width: 760px) { .explorer { width: 190px; } }
+@media (max-width: 760px) { .explorer { width: 250px; } }
 .project-bar { display: flex; height: 39px; flex-shrink: 0; padding-right: 116px; background: var(--panel); border-bottom: 1px solid var(--border); }
 .project-tabs { display: flex; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
 .project-tab { display: flex; align-items: center; gap: 8px; flex-shrink: 0; max-width: 240px; padding: 0 17px; border-right: 1px solid var(--border); color: var(--muted); font-size: 12px; }
@@ -101,10 +102,10 @@ kbd { font: inherit; border: 1px solid var(--border); border-radius: 3px; paddin
 .project-tree > summary > svg { flex-shrink: 0; }
 .project-tree > summary > span { overflow: hidden; text-overflow: ellipsis; }
 .empty-project-hint { color: var(--muted); font-size: 13px; }
-.review-dashboard { width: 236px; min-height: 0; }
+.review-dashboard { width: 250px; min-height: 0; }
 .review-changes { display: flex; flex: 0 0 38%; min-height: 160px; flex-direction: column; }
 .review-changes.split { flex: 1 1 auto; min-height: 0; }
-.review-chunk-pane { position: relative; display: flex; flex-shrink: 0; min-width: 180px; flex-direction: column; border-right: 1px solid var(--border); background: var(--panel); }
+.review-chunk-pane { position: relative; display: flex; flex-shrink: 0; min-width: 250px; flex-direction: column; border-right: 1px solid var(--border); background: var(--panel); }
 .review-chunk-pane .review-detail { min-height: 0; }
 .review-height-handle { position: relative; height: 6px; flex: 0 0 6px; cursor: row-resize; touch-action: none; }
 .review-height-handle::after { content: ''; position: absolute; left: 0; right: 0; top: 2px; border-top: 1px solid var(--border); }
@@ -112,12 +113,11 @@ kbd { font: inherit; border: 1px solid var(--border); border-radius: 3px; paddin
 .review-changes-header { position: relative; height: 38px; flex-shrink: 0; padding: 0 14px 0 12px; display: flex; align-items: center; border-bottom: 1px solid var(--border); }
 .review-branch { position: absolute; left: 50%; max-width: 24%; transform: translateX(-50%); overflow: hidden; color: var(--muted); font-size: 10px; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
 .review-project-name { max-width: 30%; overflow: hidden; padding-left: 8px; font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
-.review-changes-header > .project-dropdown { max-width: 30%; }
+.review-changes-header > .project-dropdown { flex: 0 0 auto; max-width: none; }
 .review-bulk-actions { z-index: 1; display: flex; align-items: center; gap: 5px; margin-left: auto; padding-left: 6px; background: var(--panel); }
 .review-bulk-actions button { height: 25px; padding: 0; border-radius: 4px; font-size: 11px; }
-.review-bulk-actions button:hover:enabled { background: var(--hover); }
 .project-dropdown { position: relative; min-width: 0; }
-.project-dropdown-trigger { display: flex; align-items: center; gap: 5px; width: 100%; max-width: 160px; padding: 5px 3px 5px 8px; border-radius: 4px; font-size: 13px; font-weight: 400; }
+.project-dropdown-trigger { display: flex; align-items: center; gap: 5px; width: auto; max-width: 160px; padding: 5px 3px 5px 8px; border-radius: 4px; font-size: 13px; font-weight: 400; }
 .project-dropdown-trigger:hover, .project-dropdown-trigger[aria-expanded="true"] { background: var(--hover); }
 .project-dropdown-trigger span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-dropdown-trigger svg { transform: rotate(90deg); }
@@ -143,6 +143,7 @@ kbd { font: inherit; border: 1px solid var(--border); border-radius: 3px; paddin
 .review-file-actions { display: flex; align-items: center; justify-self: end; gap: 5px; }
 .review-file-actions button { padding: 0; font-size: 11px; }
 .review-file-status { justify-self: end; flex-shrink: 0; font-size: 9px; font-weight: 600; }.status-a { color: #28814b; }.status-m { color: #b57918; }.status-d { color: #b6454d; }
+.review-file-name.review-complete { color: var(--text); }
 .review-warning button { font-size: 11px; text-decoration: underline; }
 .dashboard-chunk { border: 1px solid var(--border); border-radius: 4px; margin-top: 7px; overflow: hidden; }
 .review-actions { min-height: 30px; display: flex; align-items: center; gap: 6px; padding: 0 8px; background: var(--panel); font-family: "Segoe UI", "Microsoft YaHei", sans-serif; font-size: 10px; color: var(--text); }

@@ -3,7 +3,7 @@ export default function ResizeHandle({width,onResize,label='Resize sidebar'}:{wi
   function start(event:ReactPointerEvent<HTMLDivElement>){
     event.preventDefault();
     const origin=event.clientX;
-    const move=(next:PointerEvent)=>onResize(Math.max(180,Math.min(520,width+next.clientX-origin)));
+    const move=(next:PointerEvent)=>onResize(Math.max(250,width+next.clientX-origin));
     const stop=()=>{window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',stop);};
     window.addEventListener('pointermove',move);window.addEventListener('pointerup',stop);
   }

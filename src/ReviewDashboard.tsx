@@ -65,10 +65,12 @@ export default function ReviewDashboard({projects,documents,statuses,filter,sele
   const fileRow=(row:ReviewFileRow)=>{
     const key=row.project.id+'/'+row.path,file=row.file;
     const status=(row.status?.status??'M')[0].toUpperCase();
+    const reviewedOnly=!!file&&!file.chunks.length&&!!file.records.length;
+    const nameClass=reviewedOnly?'review-complete':'status-'+status.toLowerCase();
     const unavailable=!file||file.computing||file.syncing||file.saving||!!(file.syncError||file.diffError||file.reason);
     const open=()=>{onSelectedChange(key);if(!(row.status?.reason&&!row.file))onOpen(row.project,row.path);};
     return <div key={key} className={'review-file-row '+(selected===key?'active':'')}>
-      <button className={'review-file-name status-'+status.toLowerCase()} title={row.path} onClick={open}>{row.path}</button>
+      <button className={'review-file-name '+nameClass} title={row.path} onClick={open}>{row.path}</button>
       <div className="review-file-actions">
         <button className="action-accept" disabled={unavailable||!file?.chunks.length}
           onClick={()=>file&&onFileBulk(file,'accept')}>Accept</button>
