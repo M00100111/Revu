@@ -9,6 +9,8 @@ const paths = {
   chevron: 'm9 6 6 6-6 6',
   close: 'm6 6 12 12M6 18 18 6',
   save: 'M5 3h12l4 4v14H3V3h2Zm2 0v6h10V3M7 21v-8h10v8',
+  split: 'M4 4h6v16H4V4Zm10 0h6v16h-6V4Z',
+  merge: 'M4 4h16v16H4V4Zm5 5 3 3-3 3m6-6-3 3 3 3',
   settings: 'M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6Zm8 3 2-1-2-4-2 1a8 8 0 0 0-2-1l-1-3h-5L9 7a8 8 0 0 0-2 1L5 7l-2 4 2 1a8 8 0 0 0 0 2l-2 1 2 4 2-1a8 8 0 0 0 2 1l1 3h5l1-3a8 8 0 0 0 2-1l2 1 2-4-2-1a8 8 0 0 0 0-2Z',
 } as const;
 export default function Icon({ name, size = 18, style }: {

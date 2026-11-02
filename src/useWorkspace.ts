@@ -176,15 +176,13 @@ export function useWorkspace(onError: (message: string) => void) {
     } catch(error) { onError(errorMessage(error)); }
   }
 
-  function bulk(projectIds:string[],action:ReviewBulkAction) {
-    const ids=new Set(projectIds);
-    const files=[...docs.current.values()].filter(file=>ids.has(file.project.id)&&
-      (action==='undo'?file.records.length:file.chunks.length));
+  function applyBulk(files:OpenFile[],action:ReviewBulkAction,confirmAction:boolean) {
+    files=files.filter(file=>action==='undo'?file.records.length:file.chunks.length);
     const count=files.reduce((sum,file)=>sum+(action==='undo'?file.records.length:file.chunks.length),0);
     if(!count)return;
     const label=action[0].toUpperCase()+action.slice(1);
     const state=action==='undo'?'reviewed':'pending';
-    if(!window.confirm(`${label} ${count} ${state} change${count===1?'':'s'} across ${files.length} file${files.length===1?'':'s'}?`))return;
+    if(confirmAction&&!window.confirm(`${label} ${count} ${state} change${count===1?'':'s'} across ${files.length} file${files.length===1?'':'s'}?`))return;
     try{
       const plans=files.map(file=>{
         if(file.computing||file.syncing||file.saving||file.syncError||file.diffError||file.reason)
@@ -211,6 +209,15 @@ export function useWorkspace(onError: (message: string) => void) {
       }
       emit();
     }catch(error){onError(errorMessage(error));}
+  }
+
+  function bulk(projectIds:string[],action:ReviewBulkAction) {
+    const ids=new Set(projectIds);
+    applyBulk([...docs.current.values()].filter(file=>ids.has(file.project.id)),action,true);
+  }
+
+  function bulkFile(file:OpenFile,action:ReviewBulkAction) {
+    applyBulk([file],action,false);
   }
 
   function editReview(file: OpenFile, item: Chunk, expected: string, replacement: string, added?: ReviewRecord) {
@@ -321,5 +328,5 @@ export function useWorkspace(onError: (message: string) => void) {
     return ()=>{live=false;unsubscribe();window.removeEventListener('focus',refreshAll);};
   },[onError]);
 
-  return { projects, documents, statuses, tick, load, addProject, removeProject, save, act, bulk, refreshBase, refresh };
+  return { projects, documents, statuses, tick, load, addProject, removeProject, save, act, bulk, bulkFile, refreshBase, refresh };
 }

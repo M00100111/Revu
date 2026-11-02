@@ -4,6 +4,7 @@ import type { OpenFile, Project } from './editor';
 import { reviewItems, ReviewActions, type ActionHandler } from './ReviewActions';
 import ResizeHandle from './ResizeHandle';
 import ProjectDropdown from './ProjectDropdown';
+import Icon from './Icon';
 
 interface ReviewFileRow {project:Project;status?:ChangeFile;file?:OpenFile;path:string}
 const MIN_DETAIL_HEIGHT=120;
@@ -16,12 +17,14 @@ const savedChangesHeight=()=>{
   return Number.isFinite(value)&&value>=MIN_CHANGES_HEIGHT?value:null;
 };
 
-export default function ReviewDashboard({projects,documents,statuses,filter,selected,width,onResize,onOpen,onAction,onBulk,onRefreshBase,onFilterChange,onSelectedChange}:{
+export default function ReviewDashboard({projects,documents,statuses,filter,selected,width,onResize,onOpen,onAction,onBulk,onFileBulk,onRefreshBase,onFilterChange,onSelectedChange,split,onSplitChange,chunkWidth,onChunkResize}:{
   projects:Project[];documents:OpenFile[];statuses:Record<string,ProjectStatus>;
   filter:string;selected:string;
   width:number;onResize:(width:number)=>void;onOpen:(project:Project,path:string,line?:number)=>void;
   onAction:ActionHandler;onBulk:(projectIds:string[],action:ReviewBulkAction)=>void;onRefreshBase:(project:Project)=>void;
+  onFileBulk:(file:OpenFile,action:ReviewBulkAction)=>void;
   onFilterChange:(filter:string)=>void;onSelectedChange:(selected:string)=>void;
+  split:boolean;onSplitChange:(split:boolean)=>void;chunkWidth:number;onChunkResize:(width:number)=>void;
 }){
   const [changesHeight,setChangesHeight]=useState<number|null>(savedChangesHeight);
   const dashboardRef=useRef<HTMLElement|null>(null);
@@ -62,17 +65,25 @@ export default function ReviewDashboard({projects,documents,statuses,filter,sele
   const fileRow=(row:ReviewFileRow)=>{
     const key=row.project.id+'/'+row.path,file=row.file;
     const status=(row.status?.status??'M')[0].toUpperCase();
-    return <button key={key} className={'review-file-row '+(selected===key?'active':'')}
-      onClick={()=>{onSelectedChange(key);if(!(row.status?.reason&&!row.file))onOpen(row.project,row.path);}}>
-      <span className="review-file-main"><strong title={row.path}>{row.path}</strong>
-        <small>{file?.chunks.length??0} pending · {file?.records.length??0} reviewed</small></span>
+    const unavailable=!file||file.computing||file.syncing||file.saving||!!(file.syncError||file.diffError||file.reason);
+    const open=()=>{onSelectedChange(key);if(!(row.status?.reason&&!row.file))onOpen(row.project,row.path);};
+    return <div key={key} className={'review-file-row '+(selected===key?'active':'')}>
+      <button className={'review-file-name status-'+status.toLowerCase()} title={row.path} onClick={open}>{row.path}</button>
+      <div className="review-file-actions">
+        <button className="action-accept" disabled={unavailable||!file?.chunks.length}
+          onClick={()=>file&&onFileBulk(file,'accept')}>Accept</button>
+        <button className="action-reject" disabled={unavailable||!file?.chunks.length}
+          onClick={()=>file&&onFileBulk(file,'reject')}>Reject</button>
+        <button disabled={unavailable||!file?.records.length||file.records.some(record=>record.stale)}
+          onClick={()=>file&&onFileBulk(file,'undo')}>Undo</button>
+      </div>
+      <button className="review-file-summary" onClick={open}>
+        {file?.chunks.length??0} pending · {file?.records.length??0} reviewed
+      </button>
       <span className={'review-file-status status-'+status.toLowerCase()}>{status}</span>
-    </button>;
+    </div>;
   };
-  return <aside ref={dashboardRef} className="explorer review-dashboard" style={{width}}>
-    <header className="explorer-header"><span>Review</span></header>
-    {!projects.length?<p className="sidebar-empty">Open a project to begin</p>:<>
-      <section className="review-detail">
+  const detail=<section className="review-detail">
         {!current?<p className="sidebar-empty">Select a changed file</p>:<>
           <div className="review-detail-heading"><strong title={current.path}>{current.path}</strong>
             <span>{currentItems.length} chunk{currentItems.length===1?'':'s'}</span></div>
@@ -92,8 +103,8 @@ export default function ReviewDashboard({projects,documents,statuses,filter,sele
             </button>
           </div>)}
         </>}
-      </section>
-      <div className="review-height-handle" role="separator" aria-label="Resize changed files"
+      </section>;
+  const heightHandle=<div className="review-height-handle" role="separator" aria-label="Resize changed files"
         aria-orientation="horizontal" tabIndex={0} aria-valuenow={changesHeight??undefined}
         onPointerDown={event=>{
           const height=changesRef.current?.getBoundingClientRect().height??MIN_CHANGES_HEIGHT;
@@ -113,35 +124,60 @@ export default function ReviewDashboard({projects,documents,statuses,filter,sele
           event.preventDefault();
           const height=changesHeight??changesRef.current?.getBoundingClientRect().height??MIN_CHANGES_HEIGHT;
           setChangesHeight(clampChangesHeight(height+(event.key==='ArrowUp'?12:-12)));
-        }}/>
-      <section ref={changesRef} className="review-changes" aria-label="Changed files"
-        style={changesHeight===null?undefined:{flexBasis:changesHeight}}>
+        }}/>;
+  const changes=<section ref={changesRef} className={'review-changes '+(split?'split':'')} aria-label="Changed files"
+        style={split||changesHeight===null?undefined:{flexBasis:changesHeight}}>
         <header className="review-changes-header">
           {projects.length===1?<strong className="review-project-name" title={projects[0].name}>{projects[0].name}</strong>:
             <ProjectDropdown projects={projects} value={filter} onChange={onFilterChange}/>}
           <span className="review-branch" title={branch}>{branch}</span>
           <div className="review-bulk-actions">
             <button title="Accept all pending changes" aria-label="Accept all pending changes"
-              disabled={!pending} onClick={()=>bulk('accept')}>✓</button>
+              className="action-accept" disabled={!pending} onClick={()=>bulk('accept')}>Accept</button>
             <button title="Reject all pending changes" aria-label="Reject all pending changes"
-              disabled={!pending} onClick={()=>bulk('reject')}>×</button>
+              className="action-reject" disabled={!pending} onClick={()=>bulk('reject')}>Reject</button>
             <button title="Undo all reviewed changes" aria-label="Undo all reviewed changes"
-              disabled={!reviewed} onClick={()=>bulk('undo')}>↶</button>
+              disabled={!reviewed} onClick={()=>bulk('undo')}>Undo</button>
           </div>
         </header>
         <div className="review-file-list">
           {grouped?scoped.map(project=>{
             const projectRows=rows.filter(row=>row.project.id===project.id);
             if(!projectRows.length)return null;
+            const projectPending=projectRows.reduce((sum,row)=>sum+(row.file?.chunks.length??0),0);
+            const projectReviewed=projectRows.reduce((sum,row)=>sum+(row.file?.records.length??0),0);
             return <div className="review-file-group" key={project.id}>
               <div className="review-file-group-heading"><strong>{project.name}</strong>
-                <span>{statuses[project.id]?.branch}</span></div>
+                <span>{statuses[project.id]?.branch}</span>
+                <div className="review-file-group-actions">
+                  <button className="action-accept" disabled={!projectPending}
+                    onClick={()=>onBulk([project.id],'accept')}>Accept</button>
+                  <button className="action-reject" disabled={!projectPending}
+                    onClick={()=>onBulk([project.id],'reject')}>Reject</button>
+                  <button disabled={!projectReviewed} onClick={()=>onBulk([project.id],'undo')}>Undo</button>
+                </div>
+              </div>
               {projectRows.map(fileRow)}
             </div>;
           }):rows.map(fileRow)}
         </div>
-      </section>
-    </>}
-    <ResizeHandle width={width} onResize={onResize}/>
-  </aside>;
+      </section>;
+  return <>
+    <aside ref={dashboardRef} className="explorer review-dashboard" style={{width}}>
+      <header className="explorer-header"><span>Review</span>
+        <button className="icon-button" title={split?'Merge review panes':'Split review panes'}
+          aria-label={split?'Merge review panes':'Split review panes'} onClick={()=>onSplitChange(!split)}>
+          <Icon name={split?'merge':'split'} size={17}/>
+        </button>
+      </header>
+      {!projects.length?<p className="sidebar-empty">Open a project to begin</p>:
+        split?changes:<>{detail}{heightHandle}{changes}</>}
+      <ResizeHandle width={width} onResize={onResize}/>
+    </aside>
+    {split&&projects.length>0&&<section className="review-chunk-pane" style={{width:chunkWidth}}>
+      <header className="explorer-header"><span>Chunks</span></header>
+      {detail}
+      <ResizeHandle width={chunkWidth} onResize={onChunkResize} label="Resize chunk pane"/>
+    </section>}
+  </>;
 }

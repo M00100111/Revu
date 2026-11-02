@@ -16,6 +16,12 @@ const savedWidth=(key:string,fallback:number)=>{
   const value=Number(localStorage.getItem(key));
   return value>=180&&value<=520?value:fallback;
 };
+const savedStringSet=(key:string)=>{
+  try{
+    const value=JSON.parse(localStorage.getItem(key)??'[]');
+    return new Set<string>(Array.isArray(value)?value.filter((item:unknown)=>typeof item==='string'):[]);
+  }catch{return new Set<string>();}
+};
 const DEFAULT_EDITOR_FONT="'Cascadia Code', Consolas, 'Courier New', monospace";
 const savedFontSize=()=>{
   const value=Number(localStorage.getItem('revu-editor-font-size'));
@@ -44,8 +50,10 @@ export default function App(){
   const [reveal,setReveal]=useState<{id:string;line:number}|null>(null);
   const [reviewFilter,setReviewFilter]=useState('all');
   const [reviewSelected,setReviewSelected]=useState('');
-  const [collapsedProjects,setCollapsedProjects]=useState<Set<string>>(()=>new Set());
-  const [expandedDirectories,setExpandedDirectories]=useState<Set<string>>(()=>new Set());
+  const [reviewSplit,setReviewSplit]=useState(()=>localStorage.getItem('revu-review-split')==='true');
+  const [reviewChunkWidth,setReviewChunkWidth]=useState(()=>savedWidth('revu-review-chunk-width',320));
+  const [collapsedProjects,setCollapsedProjects]=useState(()=>savedStringSet('revu-collapsed-projects'));
+  const [expandedDirectories,setExpandedDirectories]=useState(()=>savedStringSet('revu-expanded-directories'));
   const workspace=useWorkspace(setError);
   const {projects,documents,statuses,tick}=workspace;
   const editorRef=useRef<monaco.editor.IStandaloneCodeEditor|null>(null);
@@ -81,6 +89,16 @@ export default function App(){
     localStorage.setItem('revu-settings-sidebar-width',String(widths.settings));
   },[syncWidths,widths]);
   useEffect(()=>localStorage.setItem('revu-editor-tab-mode',mixed?'mixed':'isolated'),[mixed]);
+  useEffect(()=>{
+    localStorage.setItem('revu-review-split',String(reviewSplit));
+    localStorage.setItem('revu-review-chunk-width',String(reviewChunkWidth));
+  },[reviewSplit,reviewChunkWidth]);
+  useEffect(()=>{
+    localStorage.setItem('revu-collapsed-projects',JSON.stringify([...collapsedProjects]));
+  },[collapsedProjects]);
+  useEffect(()=>{
+    localStorage.setItem('revu-expanded-directories',JSON.stringify([...expandedDirectories]));
+  },[expandedDirectories]);
   useEffect(()=>{
     const family=fontFamily.trim()||DEFAULT_EDITOR_FONT;
     const size=Math.max(10,Math.min(24,fontSize));
@@ -171,8 +189,6 @@ export default function App(){
     try{
       await workspace.removeProject(project);
       setTabs(current=>current.filter(id=>!affected.some(file=>file.id===id)));lastFile.current.delete(project.id);
-      setCollapsedProjects(current=>{const next=new Set(current);next.delete(project.id);return next;});
-      setExpandedDirectories(current=>new Set([...current].filter(key=>!key.startsWith(project.id+'/'))));
       if(activeFile?.project.id===project.id){const next=remaining[0];if(next)selectFile(next);else setActiveId(null);}
       if(projectId===project.id)setProjectId(remaining[0]?.project.id??projects.find(item=>item.id!==project.id)?.id??null);
       setError('');
@@ -198,17 +214,18 @@ export default function App(){
       <header className="explorer-header"><span>File</span><button className="icon-button" onClick={addFolder}
         disabled={picking} title="Open folder" aria-label="Open folder"><Icon name="folder" size={17}/></button></header>
       {projects.length?<div className="tree-scroll">{projects.map(project=><details className="project-tree" key={project.id}
-        open={!collapsedProjects.has(project.id)} onToggle={event=>{
+        open={!collapsedProjects.has(project.root)} onToggle={event=>{
           const open=event.currentTarget.open;
           setCollapsedProjects(current=>{
-            if(open===!current.has(project.id))return current;
-            const next=new Set(current);if(open)next.delete(project.id);else next.add(project.id);return next;
+            if(open===!current.has(project.root))return current;
+            const next=new Set(current);if(open)next.delete(project.root);else next.add(project.root);return next;
           });
         }}>
         <summary className="workspace-name" title={project.root} onContextMenu={async event=>{
           event.preventDefault();if(await window.revu.contextMenu('project')==='close')void closeProject(project);
         }}><Icon name="chevron" size={12}/><Icon name="folder" size={15}/><span>{project.name}</span></summary>
-        <FileTree projectId={project.id} activePath={activeFile?.project.id===project.id?activeFile.path:null}
+        <FileTree projectId={project.id} projectRoot={project.root}
+          activePath={activeFile?.project.id===project.id?activeFile.path:null}
           onOpen={path=>void openFile(project,path)} onError={setError}
           expandedDirectories={expandedDirectories} onDirectoryToggle={toggleDirectory}/>
       </details>)}</div>:<p className="sidebar-empty">No folders open</p>}
@@ -217,7 +234,9 @@ export default function App(){
     {panel==='review'&&<ReviewDashboard projects={projects} documents={documents} statuses={statuses}
       filter={reviewFilter} selected={reviewSelected} onFilterChange={setReviewFilter} onSelectedChange={setReviewSelected}
       width={sidebarWidth} onResize={resizeSidebar} onOpen={openFile} onAction={workspace.act}
-      onBulk={workspace.bulk} onRefreshBase={workspace.refreshBase}/>}
+      onBulk={workspace.bulk} onFileBulk={workspace.bulkFile} onRefreshBase={workspace.refreshBase}
+      split={reviewSplit} onSplitChange={setReviewSplit}
+      chunkWidth={reviewChunkWidth} onChunkResize={setReviewChunkWidth}/>}
     {panel==='settings'&&<SettingsSidebar width={sidebarWidth} onResize={resizeSidebar}
       category={settingsCategory} onCategoryChange={setSettingsCategory}/>}
     {panel==='settings'?<SettingsPage category={settingsCategory} syncWidths={syncWidths} onChange={changeWidthSync}
