@@ -2,9 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { monaco, type OpenFile, type Project } from './editor';
 import { api, ApiError, errorMessage } from './files';
 import type { Chunk, DiffResult, ProjectStatus, ReviewAction, ReviewBulkAction, ReviewRecord, Snapshot } from '../shared/types';
-import { mapRange, reconcile, replaceExact } from '../shared/review';
+import { invalidateFileReview, mapRange, reconcile, replaceExact } from '../shared/review';
 import { planBulkReview } from '../shared/bulkReview';
-import { externalSyncKind, resetForExternalSnapshot } from './externalSync';
+import { externalSyncKind, rebaseExternalReview, resetForExternalSnapshot } from './externalSync';
 
 export function useWorkspace(onError: (message: string) => void) {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -18,6 +18,7 @@ export function useWorkspace(onError: (message: string) => void) {
   const [tick, setTick] = useState(0);
   const refreshTasks = useRef(new Map<string, Promise<void>>());
   const refreshAgain = useRef(new Set<string>());
+  const internalEdits = useRef(new Set<string>());
   const refreshRef = useRef<(project: Project) => Promise<void>>(async () => {});
   const emit = useCallback(() => { setDocuments([...docs.current.values()]); setTick(v => v + 1); }, []);
 
@@ -30,12 +31,14 @@ export function useWorkspace(onError: (message: string) => void) {
         base, text, previous, version });
       if (file.version !== version || file.project.base !== base || result.version !== version) return;
       let chunks=result.chunks;
-      if(!file.synced.exists&&!file.draftExists){
-        chunks=chunks.length?chunks.map(chunk=>({...chunk,fileDelete:true})):[{
-          id:'file-delete',kind:'delete' as const,oldStart:0,oldEnd:file.baseline.length,start:0,end:text.length,
-          oldText:file.baseline,newText:text,line:1,fileDelete:true,
-        }];
-      }
+      if(!file.baselineExists&&file.draftExists)chunks=[{
+        id:'file-add',kind:'add' as const,oldStart:0,oldEnd:0,start:0,end:text.length,
+        oldText:'',newText:text,line:1,fileChange:'add',
+      }];
+      else if(file.baselineExists&&!file.draftExists)chunks=[{
+        id:'file-delete',kind:'delete' as const,oldStart:0,oldEnd:file.baseline.length,start:0,end:0,
+        oldText:file.baseline,newText:'',line:1,fileChange:'delete',
+      }];
       const state = reconcile(file.records, chunks, result.changes, text);
       file.records = state.records;
       file.chunks = state.chunks.map((chunk, index) => ({...chunk,id:version + ':' + index}));
@@ -73,19 +76,26 @@ export function useWorkspace(onError: (message: string) => void) {
     const task = (async () => {
       const [snapshot, base] = await Promise.all([
         api<Snapshot>('read', {projectId:project.id,path}),
-        api<{text:string;bom?:boolean;reason?:string}>('baseline', {projectId:project.id,path}),
+        api<{text:string;bom?:boolean;exists:boolean;reason?:string}>('baseline', {projectId:project.id,path}),
       ]);
       if (snapshot.reason) throw new Error(snapshot.reason);
       if(!snapshot.exists)snapshot.bom=base.bom??false;
       const model = monaco.editor.createModel(snapshot.text, undefined,
         monaco.Uri.from({scheme:'file',path:'/' + id}));
+      if(!snapshot.exists&&base.text.includes('\r\n')){
+        model.setEOL(monaco.editor.EndOfLineSequence.CRLF);
+      }
       const file: OpenFile = {
         id, project, path, name:path.split('/').pop()!, model, synced:snapshot,draftExists:snapshot.exists,
-        baseline:base.text, reason:base.reason, dirty:false, version:1, reviewText:snapshot.text,
+        baseline:base.text,baselineExists:base.exists, reason:base.reason, dirty:false, version:1, reviewText:snapshot.text,
         chunks:[], records:[], computing:false, syncing:false, saving:false,
         diffError:'', notice:'', subscription:{dispose(){}},
       };
       file.subscription = model.onDidChangeContent(() => {
+        if(!internalEdits.current.has(file.id)){
+          file.draftExists=true;
+          file.records=invalidateFileReview(file.records);
+        }
         file.version++;
         file.dirty = file.draftExists !== file.synced.exists || model.getValue() !== file.synced.text;
         schedule(file);
@@ -111,10 +121,17 @@ export function useWorkspace(onError: (message: string) => void) {
       }
       clearTimeout(timers.current.get(file.id));
       timers.current.delete(file.id);
-      resetForExternalSnapshot(file, external);
+      let review={text:external.text,records:[] as ReviewRecord[]};
+      if(file.project.git&&!file.reason&&!external.reason&&file.records.length){
+        const result=await api<DiffResult>('diff',{projectId:file.project.id,path:file.path,
+          base:file.project.base,text:external.text,previous:external.text,version:file.version});
+        review=rebaseExternalReview(file.records,result.chunks,external.text);
+      }
+      resetForExternalSnapshot(file, external, review);
       if (external.reason) file.reason = external.reason;
-      file.model.setValue(external.text);
-      file.dirty = false;
+      internalEdits.current.add(file.id);
+      try{file.model.setValue(review.text);}finally{internalEdits.current.delete(file.id);}
+      file.dirty = review.text !== external.text;
       schedule(file);
     } catch(error) {
       file.syncError = errorMessage(error);
@@ -152,24 +169,24 @@ export function useWorkspace(onError: (message: string) => void) {
     try {
       if (action === 'undo') {
         const record = file.records.find(item => item.id === id);
-        if (!record || record.stale) throw new Error('This review record is stale and cannot overwrite newer changes.');
+        if (!record) throw new Error('This review record is no longer available.');
         if (record.decision === 'accepted') {
           file.records = file.records.filter(item => item !== record);
           schedule(file);
         } else {
-          if(record.fileDelete)file.draftExists=false;
+          if(record.fileChange)file.draftExists=record.fileChange==='add';
           editReview(file, record, record.oldText, record.newText, undefined);
         }
       } else {
         const chunk = file.chunks.find(item => item.id === id);
         if (!chunk) throw new Error('The diff changed. Select the chunk again.');
-        const record: ReviewRecord = {...chunk,id:crypto.randomUUID(),decision:action === 'accept' ? 'accepted' : 'rejected',stale:false};
+        const record: ReviewRecord = {...chunk,id:crypto.randomUUID(),decision:action === 'accept' ? 'accepted' : 'rejected'};
         if (action === 'accept') {
           file.records.push(record);
           file.chunks = file.chunks.filter(item => item !== chunk);
           emit();
         } else {
-          if(chunk.fileDelete)file.draftExists=true;
+          if(chunk.fileChange)file.draftExists=chunk.fileChange==='delete';
           editReview(file, chunk, chunk.newText, chunk.oldText, record);
         }
       }
@@ -187,22 +204,32 @@ export function useWorkspace(onError: (message: string) => void) {
       const plans=files.map(file=>{
         if(file.computing||file.syncing||file.saving||file.syncError||file.diffError||file.reason)
           throw new Error(`${file.path} is not ready for review actions.`);
-        if(action==='undo'&&file.records.some(record=>record.stale))
-          throw new Error(`${file.path} contains a stale review record.`);
         return {file,plan:planBulkReview({text:file.model.getValue(),chunks:file.chunks,records:file.records},
           action,()=>crypto.randomUUID())};
       });
       for(const {file,plan} of plans){
         const textChanged=plan.text!==file.model.getValue();
-        if(action==='reject'&&file.chunks.some(chunk=>chunk.fileDelete))file.draftExists=true;
-        if(action==='undo'&&file.records.some(record=>record.fileDelete&&record.decision==='rejected'))file.draftExists=false;
+        if(action==='reject'){
+          const change=file.chunks.find(chunk=>chunk.fileChange)?.fileChange;
+          if(change)file.draftExists=change==='delete';
+        }
+        if(action==='undo'){
+          const change=file.records.find(record=>record.fileChange&&record.decision==='rejected')?.fileChange;
+          if(change)file.draftExists=change==='add';
+        }
         file.records=plan.records;file.chunks=plan.chunks;
         if(plan.edits.length){
           file.reviewText=plan.text;
           const edits=plan.edits.map(edit=>({range:new monaco.Range(
             file.model.getPositionAt(edit.start).lineNumber,file.model.getPositionAt(edit.start).column,
             file.model.getPositionAt(edit.end).lineNumber,file.model.getPositionAt(edit.end).column),text:edit.text}));
-          file.model.pushStackElement();file.model.pushEditOperations([],edits,()=>null);file.model.pushStackElement();
+          internalEdits.current.add(file.id);
+          try{
+            file.model.pushStackElement();file.model.pushEditOperations([],edits,()=>null);file.model.pushStackElement();
+          }finally{internalEdits.current.delete(file.id);}
+          file.reviewText=file.model.getValue();
+          const fileRecord=file.records.find(record=>record.fileChange&&record.decision==='rejected');
+          if(fileRecord){fileRecord.oldText=file.reviewText;fileRecord.start=0;fileRecord.end=file.reviewText.length;}
         }
         file.dirty=file.draftExists!==file.synced.exists||file.model.getValue()!==file.synced.text;
         if(!textChanged&&action==='undo')schedule(file);
@@ -224,18 +251,25 @@ export function useWorkspace(onError: (message: string) => void) {
     const current = file.model.getValue();
     const text = replaceExact(current,item.start,item.end,expected,replacement);
     const delta: Chunk = {...item, oldStart:item.start,oldEnd:item.end,start:item.start,end:item.start+replacement.length};
-    file.records = file.records.filter(record => record.id !== item.id).map(record => {
-      if(record.stale) return record;
+    file.records = file.records.filter(record => record.id !== item.id).flatMap(record => {
       const mapped = mapRange(record.start,record.end,[delta]);
-      return mapped ? {...record,...mapped} : {...record,stale:true};
+      return mapped ? [{...record,...mapped}] : [];
     });
     if(added) file.records.push({...added,end:item.start+replacement.length});
     // Account for this known edit now; the next diff maps only later user edits.
     file.reviewText = text;
     const start = file.model.getPositionAt(item.start), end = file.model.getPositionAt(item.end);
-    file.model.pushStackElement();
-    file.model.pushEditOperations([], [{range:new monaco.Range(start.lineNumber,start.column,end.lineNumber,end.column),text:replacement}], () => null);
-    file.model.pushStackElement();
+    internalEdits.current.add(file.id);
+    try{
+      file.model.pushStackElement();
+      file.model.pushEditOperations([], [{range:new monaco.Range(start.lineNumber,start.column,end.lineNumber,end.column),text:replacement}], () => null);
+      file.model.pushStackElement();
+    }finally{internalEdits.current.delete(file.id);}
+    file.reviewText=file.model.getValue();
+    if(added?.fileChange&&added.decision==='rejected'){
+      const record=file.records.find(record=>record.id===added.id);
+      if(record){record.oldText=file.reviewText;record.start=0;record.end=file.reviewText.length;}
+    }
     file.dirty=file.draftExists!==file.synced.exists||file.model.getValue()!==file.synced.text;
     schedule(file);
   }
@@ -303,8 +337,8 @@ export function useWorkspace(onError: (message: string) => void) {
       const updated = await api<Project>('refreshBase',{projectId:project.id});
       Object.assign(project,updated);
       for(const file of affected) {
-        const base = await api<{text:string;reason?:string}>('baseline',{projectId:project.id,path:file.path});
-        file.baseline = base.text; file.records = []; file.chunks=[]; file.reason=base.reason;
+        const base = await api<{text:string;exists:boolean;reason?:string}>('baseline',{projectId:project.id,path:file.path});
+        file.baseline = base.text;file.baselineExists=base.exists;file.records = [];file.chunks=[];file.reason=base.reason;
         file.reviewText=file.model.getValue(); schedule(file);
       }
       setProjects([...projectRef.current]);

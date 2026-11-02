@@ -45,20 +45,27 @@ export function mapRange(start: number, end: number, changes: Chunk[]) {
   return { start: start + delta, end: end + delta };
 }
 
+export function invalidateFileReview(records:ReviewRecord[]) {
+  return records.filter(record=>!record.fileChange);
+}
+
 export function reconcile(records: ReviewRecord[], chunks: Chunk[], changes: Chunk[], text: string) {
-  const next = records.map(record => {
-    if (record.stale) return record;
+  const next = records.flatMap(record => {
+    if(record.fileChange){
+      return [{...record,start:0,end:text.length,line:1}];
+    }
     const range = mapRange(record.start, record.end, changes);
     const expected = record.decision === 'accepted' ? record.newText : record.oldText;
-    if (!range || text.slice(range.start, range.end) !== expected) return { ...record, stale: true };
+    if (!range || text.slice(range.start, range.end) !== expected) return [];
     const matches = chunks.filter(chunk => chunk.oldStart === record.oldStart &&
       chunk.oldEnd === record.oldEnd && chunk.oldText === record.oldText &&
       chunk.newText === record.newText && chunk.start === range.start && chunk.end === range.end);
-    if (record.decision === 'accepted' && matches.length !== 1) return { ...record, ...range, stale: true };
-    return { ...record, ...range, line: text.slice(0, range.start).split('\n').length };
+    if (record.decision === 'accepted' && matches.length !== 1) return [];
+    return [{ ...record, ...range, line: text.slice(0, range.start).split('\n').length }];
   });
-  const pending = chunks.filter(chunk => !next.some(record => !record.stale &&
-    record.decision === 'accepted' && record.oldStart === chunk.oldStart &&
-    record.oldEnd === chunk.oldEnd && record.start === chunk.start && record.newText === chunk.newText));
+  const pending = chunks.filter(chunk => !next.some(record => record.decision === 'accepted' &&
+    (record.fileChange ? record.fileChange===chunk.fileChange&&record.oldText===chunk.oldText&&record.newText===chunk.newText
+      : record.oldStart === chunk.oldStart && record.oldEnd === chunk.oldEnd &&
+        record.start === chunk.start && record.newText === chunk.newText)));
   return { records: next, chunks: pending };
 }

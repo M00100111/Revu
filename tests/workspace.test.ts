@@ -25,7 +25,8 @@ test('staged and unstaged modifications share fixed HEAD and saving leaves index
   const indexBefore=await git(root,['show',':file.txt']);
   const status=await w.status(p);
   assert.deepEqual(status.files.map(f=>f.path),['file.txt']);
-  assert.equal((await w.baseline(p,'file.txt')).text,'one\ntwo\nthree\n');
+  const baseline=await w.baseline(p,'file.txt');
+  assert.equal(baseline.text,'one\ntwo\nthree\n');assert.equal(baseline.exists,true);
   const snapshot=await w.read(p,'file.txt');
   await w.save(p,'file.txt',snapshot.hash,'draft\n',false);
   assert.deepEqual(await git(root,['show',':file.txt']),indexBefore);
@@ -83,6 +84,7 @@ test('empty repository and non Git folder',async()=>{
     await git(other,['init','-q']);await writeFile(join(other,'new.txt'),'new');
     const p=w.get((await w.add(other)).id);
     assert.equal(p.base,null);assert.equal((await w.status(p)).files[0].status,'A');
-    assert.equal((await w.baseline(p,'new.txt')).text,'');
+    const baseline=await w.baseline(p,'new.txt');
+    assert.equal(baseline.text,'');assert.equal(baseline.exists,false);
   }finally{w.dispose();await rm(root,{recursive:true,force:true});}
 });

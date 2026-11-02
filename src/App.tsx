@@ -58,7 +58,6 @@ export default function App(){
   const {projects,documents,statuses,tick}=workspace;
   const editorRef=useRef<monaco.editor.IStandaloneCodeEditor|null>(null);
   const lastFile=useRef(new Map<string,string>());
-  const documentsRef=useRef(documents);documentsRef.current=documents;
   const openFiles=tabs.map(id=>documents.find(file=>file.id===id)).filter((f):f is OpenFile=>!!f);
   const activeFile=openFiles.find(file=>file.id===activeId);
   const visibleFiles=mixed?openFiles:openFiles.filter(file=>file.project.id===projectId);
@@ -109,11 +108,7 @@ export default function App(){
     document.documentElement.style.setProperty('--editor-font-size',size+'px');
     document.documentElement.style.setProperty('--editor-line-height',lineHeight+'px');
   },[fontFamily,fontSize]);
-  useEffect(()=>{
-    const beforeUnload=(event:BeforeUnloadEvent)=>{if(documentsRef.current.some(file=>file.dirty))event.preventDefault();};
-    window.addEventListener('beforeunload',beforeUnload);
-    return()=>window.removeEventListener('beforeunload',beforeUnload);
-  },[]);
+  useEffect(()=>{window.revu.setDirty(documents.some(file=>file.dirty));},[documents]);
   useEffect(()=>{
     const onKeyDown=(event:KeyboardEvent)=>{
       if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'){
@@ -160,7 +155,7 @@ export default function App(){
     if(dirty.length&&!window.confirm(`${dirty.length} tab${dirty.length===1?' has':'s have'} unsaved changes. Discard the draft${dirty.length===1?'':'s'} and close?`))return;
     const closing=new Set(targets.map(file=>file.id));
     for(const file of dirty){
-      file.records=file.records.map(record=>({...record,stale:true}));file.draftExists=file.synced.exists;
+      file.records=[];file.chunks=[];file.draftExists=file.synced.exists;
       file.model.setValue(file.synced.text);file.dirty=false;
     }
     const remaining=openFiles.filter(file=>!closing.has(file.id));

@@ -5,6 +5,7 @@ import { reviewItems, ReviewActions, type ActionHandler } from './ReviewActions'
 import ResizeHandle from './ResizeHandle';
 import ProjectDropdown from './ProjectDropdown';
 import Icon from './Icon';
+import DiffPreview from './DiffPreview';
 
 interface ReviewFileRow {project:Project;status?:ChangeFile;file?:OpenFile;path:string}
 const MIN_DETAIL_HEIGHT=120;
@@ -27,6 +28,7 @@ export default function ReviewDashboard({projects,documents,statuses,filter,sele
   split:boolean;onSplitChange:(split:boolean)=>void;chunkWidth:number;onChunkResize:(width:number)=>void;
 }){
   const [changesHeight,setChangesHeight]=useState<number|null>(savedChangesHeight);
+  const [expandedRecords,setExpandedRecords]=useState<Set<string>>(()=>new Set());
   const dashboardRef=useRef<HTMLElement|null>(null);
   const changesRef=useRef<HTMLElement|null>(null);
   const dragRef=useRef<{y:number;height:number}|null>(null);
@@ -76,7 +78,7 @@ export default function ReviewDashboard({projects,documents,statuses,filter,sele
           onClick={()=>file&&onFileBulk(file,'accept')}>Accept</button>
         <button className="action-reject" disabled={unavailable||!file?.chunks.length}
           onClick={()=>file&&onFileBulk(file,'reject')}>Reject</button>
-        <button disabled={unavailable||!file?.records.length||file.records.some(record=>record.stale)}
+        <button disabled={unavailable||!file?.records.length}
           onClick={()=>file&&onFileBulk(file,'undo')}>Undo</button>
       </div>
       <button className="review-file-summary" onClick={open}>
@@ -95,15 +97,25 @@ export default function ReviewDashboard({projects,documents,statuses,filter,sele
             <p className="review-warning">{current.status?.reason||current.file?.reason}</p>}
           {current.file?.computing&&<p className="tree-note">Updating diff…</p>}
           {current.file?.diffError&&<p className="review-warning">{current.file.diffError}</p>}
-          {current.file&&currentItems.map(item=><div className="dashboard-chunk" key={item.id}>
-            <ReviewActions file={current.file!} item={item} onAction={onAction}
-              onReveal={()=>onOpen(current.project,current.path,item.line)}/>
-            <button className="chunk-preview" title="Go to code"
-              onClick={()=>onOpen(current.project,current.path,item.line)}>
-              <span className="removed">{item.oldText?'- '+item.oldText.split(/\r?\n/)[0]:''}</span>
-              <span className="added">{item.newText?'+ '+item.newText.split(/\r?\n/)[0]:''}</span>
-            </button>
-          </div>)}
+          {current.file&&currentItems.map(item=>{
+            const record='decision' in item;
+            const expanded=record&&expandedRecords.has(item.id);
+            return <div className="dashboard-chunk" key={item.id}>
+              <ReviewActions file={current.file!} item={item} onAction={onAction}
+                detailsExpanded={expanded} onToggleDetails={record?()=>setExpandedRecords(current=>{
+                  const next=new Set(current);if(next.has(item.id))next.delete(item.id);else next.add(item.id);return next;
+                }):undefined}
+                onReveal={()=>onOpen(current.project,current.path,item.line)}/>
+              {expanded?<div className="dashboard-expanded-preview">
+                <DiffPreview oldText={item.oldText} newText={item.newText}
+                  highlightChanges={item.kind==='modify'}/>
+              </div>:<button className="chunk-preview" title="Go to code"
+                onClick={()=>onOpen(current.project,current.path,item.line)}>
+                <span className="removed">{item.oldText?'- '+item.oldText.split(/\r?\n/)[0]:''}</span>
+                <span className="added">{item.newText?'+ '+item.newText.split(/\r?\n/)[0]:''}</span>
+              </button>}
+            </div>;
+          })}
         </>}
       </section>;
   const heightHandle=<div className="review-height-handle" role="separator" aria-label="Resize changed files"

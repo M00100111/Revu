@@ -25,7 +25,7 @@ function replacementPlan(text:string, items:Chunk[], replacement:(item:Chunk)=>s
 
 export function planBulkReview(state:BulkReviewState,action:ReviewBulkAction,id:()=>string):BulkReviewPlan {
   if(action==='accept'){
-    const accepted=state.chunks.map(chunk=>({...chunk,id:id(),decision:'accepted' as const,stale:false}));
+    const accepted=state.chunks.map(chunk=>({...chunk,id:id(),decision:'accepted' as const}));
     return {...state,chunks:[],records:[...state.records,...accepted],edits:[]};
   }
   const items=action==='reject'?state.chunks:state.records.filter(record=>record.decision==='rejected');
@@ -35,16 +35,15 @@ export function planBulkReview(state:BulkReviewState,action:ReviewBulkAction,id:
   }
   const replaced=replacementPlan(state.text,items,item=>action==='reject'?item.oldText:item.newText);
   if(action==='undo')return {text:replaced.text,chunks:[],records:[],edits:replaced.edits};
-  const mapped=state.records.map(record=>{
-    if(record.stale)return record;
+  const mapped=state.records.flatMap(record=>{
     const range=mapRange(record.start,record.end,replaced.changes);
-    return range?{...record,...range}:{...record,stale:true};
+    return range?[{...record,...range}]:[];
   });
   const ranges=new Map(replaced.changes.map(change=>[change.id,change]));
   const rejected=state.chunks.map(chunk=>{
     const range=ranges.get(chunk.id)!;
     return {...chunk,id:id(),start:range.start,end:range.end,
-      line:replaced.text.slice(0,range.start).split('\n').length,decision:'rejected' as const,stale:false};
+      line:replaced.text.slice(0,range.start).split('\n').length,decision:'rejected' as const};
   });
   return {text:replaced.text,chunks:[],records:[...mapped,...rejected],edits:replaced.edits};
 }

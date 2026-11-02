@@ -158,10 +158,10 @@ kbd { font: inherit; border: 1px solid var(--border); border-radius: 3px; paddin
 .review-jump-space { align-self: stretch; flex: 1 1 12px; min-width: 8px; cursor: pointer; }
 .review-jump-space:focus-visible { outline: 1px solid var(--muted); outline-offset: -3px; }
 .review-state.add, .action-accept { color: #287b46; }.review-state.modify { color: #a66a0d; }.review-state.delete, .action-reject { color: #b54b4b; }
-.review-state.accepted { color: #287b46; }.review-state.rejected { color: #b54b4b; }
-.review-state.stale { color: var(--muted); }
 .chunk-preview { display: block; padding: 6px 10px; width: 100%; text-align: left; font: 11px/18px Consolas, monospace; }
 .chunk-preview span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dashboard-expanded-preview { overflow-x: auto; }
+.dashboard-expanded-preview .diff-preview pre { padding: 6px 10px; }
 .removed { color: #b54b4b; }
 .added { color: #287b46; }
 .inline-review { z-index: 5; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); background: var(--panel); }
@@ -189,8 +189,8 @@ kbd { font: inherit; border: 1px solid var(--border); border-radius: 3px; paddin
 :root[data-theme="dark"] .diff-after, :root[data-theme="dark"] .review-added-line { background: #203025; color: #9dcea8; }
 :root[data-theme="dark"] .diff-preview mark { background: #60343a; }
 :root[data-theme="dark"] .diff-after mark, :root[data-theme="dark"] .review-inline-added { background: #365c40; }
-:root[data-theme="dark"] .added, :root[data-theme="dark"] .review-state.accepted { color: #9dcea8; }
-:root[data-theme="dark"] .removed, :root[data-theme="dark"] .review-state.rejected { color: #efa1a6; }
+:root[data-theme="dark"] .added { color: #9dcea8; }
+:root[data-theme="dark"] .removed { color: #efa1a6; }
 :root[data-theme="dark"] .review-actions.add { background: #203025; }:root[data-theme="dark"] .review-actions.modify { background: #352d1c; }:root[data-theme="dark"] .review-actions.delete { background: #352023; }
 :root[data-theme="dark"] .review-actions.reviewed { background: var(--bg); }
 :root[data-theme="dark"] .inline-review .review-actions.add { border-color: #69b781; background: var(--bg); }

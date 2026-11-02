@@ -5,6 +5,9 @@ import { diff } from '../server/git';
 import { HttpError, Workspace } from '../server/workspace';
 
 let mainWindow:BrowserWindow|null=null;
+let hasDirtyDrafts=false;
+let closeApproved=false;
+let confirmingClose=false;
 const workspace=new Workspace(projectId=>mainWindow?.webContents.send('revu:project-changed',projectId));
 
 const openFoldersPath=()=>join(app.getPath('userData'),'open-folders.json');
@@ -89,7 +92,12 @@ ipcMain.handle('revu:window-control',(event,action:'minimize'|'maximize'|'close'
   return window.isMaximized();
 });
 
+ipcMain.on('revu:dirty-state',(event,dirty:boolean)=>{
+  if(mainWindow?.webContents===event.sender)hasDirtyDrafts=!!dirty;
+});
+
 function createWindow(){
+  hasDirtyDrafts=false;closeApproved=false;confirmingClose=false;
   mainWindow=new BrowserWindow({
     width:1280,height:800,minWidth:720,minHeight:500,show:false,backgroundColor:'#ffffff',
     frame:false,
@@ -101,6 +109,21 @@ function createWindow(){
   });
   const maximized=()=>mainWindow?.webContents.send('revu:maximized',mainWindow.isMaximized());
   mainWindow.on('maximize',maximized);mainWindow.on('unmaximize',maximized);
+  mainWindow.on('close',event=>{
+    if(closeApproved||!hasDirtyDrafts)return;
+    event.preventDefault();
+    if(confirmingClose||!mainWindow)return;
+    confirmingClose=true;
+    void dialog.showMessageBox(mainWindow,{
+      type:'warning',title:'Unsaved Changes',message:'There are unsaved files.',
+      detail:'Discard the unsaved changes and close Revu?',
+      buttons:['Cancel','Discard and Close'],defaultId:0,cancelId:0,noLink:true,
+    }).then(result=>{
+      confirmingClose=false;
+      if(result.response!==1||!mainWindow)return;
+      closeApproved=true;mainWindow.close();
+    });
+  });
   mainWindow.on('closed',()=>{mainWindow=null;});
   const devUrl=process.env.REVU_DEV_URL;
   const loading=devUrl?mainWindow.loadURL(devUrl):mainWindow.loadFile(join(__dirname,'../dist/index.html'));
@@ -115,4 +138,4 @@ app.whenReady().then(async()=>{
   app.on('activate',()=>{if(BrowserWindow.getAllWindows().length===0)createWindow();});
 });
 app.on('window-all-closed',()=>app.quit());
-app.on('before-quit',()=>workspace.dispose());
+app.on('will-quit',()=>workspace.dispose());

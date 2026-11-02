@@ -100,12 +100,12 @@ export class Workspace {
   }
   async baseline(p: Registered, path: string) {
     await this.path(p, path, true);
-    if (!p.repo || !p.base) return { text: '', bom: false };
+    if (!p.repo || !p.base) return { text: '', bom: false, exists:false };
     const repoPath = relative(p.repo, resolve(p.root, path)).split(sep).join('/');
     const listing = (await git(p.repo, ['ls-tree', '-z', p.base, '--', repoPath])).toString();
-    if (!listing) return { text: '', bom: false };
+    if (!listing) return { text: '', bom: false, exists:false };
     const match = /^(\d+) \w+ ([a-f0-9]+)\t/.exec(listing);
-    if (!match || !['100644','100755'].includes(match[1])) return { text: '', bom: false, reason: 'Unsupported file type' };
+    if (!match || !['100644','100755'].includes(match[1])) return { text: '', bom: false, exists:true, reason: 'Unsupported file type' };
     return decode(await git(p.repo, ['cat-file', 'blob', match[2]]));
   }
   async status(p: Registered): Promise<ProjectStatus> {

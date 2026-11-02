@@ -11,14 +11,14 @@ export function ReviewActions({file,item,onAction,onNavigate,navigationDisabled=
 }){
   const record='decision' in item?item:null;
   const version=file.version;
-  const disabled=!!(file.computing||file.syncing||file.saving||file.diffError||file.syncError||file.reason||record?.stale);
+  const disabled=!!(file.computing||file.syncing||file.saving||file.diffError||file.syncError||file.reason);
   const label=item.kind[0].toUpperCase()+item.kind.slice(1);
-  const reviewedLabel=record?`${label} · ${record.stale?'Stale':record.decision==='accepted'?'Accepted':'Rejected'}`:label;
+  const reviewedLabel=record?`${label} · ${record.decision==='accepted'?'Accepted':'Rejected'}`:label;
   return <div className={'review-actions '+(record?'reviewed':item.kind)}>
-    {record&&onToggleDetails?<button className={'review-state review-record-toggle '+(record.stale?'stale':record.decision)}
+    {record&&onToggleDetails?<button className={'review-state review-record-toggle '+item.kind}
       aria-expanded={detailsExpanded} onClick={onToggleDetails}>
       {reviewedLabel}
-    </button>:<span className={'review-state '+(record?(record.stale?'stale':record.decision):item.kind)}>{reviewedLabel}</span>}
+    </button>:<span className={'review-state '+item.kind}>{reviewedLabel}</span>}
     <span className="review-line">L{item.line}</span>
     {onReveal&&<div className="review-jump-space" role="button" tabIndex={0} title="Go to code" aria-label="Go to code"
       onClick={onReveal} onKeyDown={event=>{

@@ -32,11 +32,10 @@ export interface Chunk {
   oldText: string;
   newText: string;
   line: number;
-  fileDelete?: boolean;
+  fileChange?: 'add' | 'delete';
 }
 export interface ReviewRecord extends Chunk {
   decision: 'accepted' | 'rejected';
-  stale: boolean;
 }
 export interface DiffResult { version: number; chunks: Chunk[]; changes: Chunk[] }
 export type ReviewAction = 'accept' | 'reject' | 'undo';

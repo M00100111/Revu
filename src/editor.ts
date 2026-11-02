@@ -49,6 +49,7 @@ export interface OpenFile {
   synced: Snapshot;
   draftExists: boolean;
   baseline: string;
+  baselineExists: boolean;
   dirty: boolean;
   version: number;
   reviewText: string;

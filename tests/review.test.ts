@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { diff } from '../server/git';
-import { reconcile, replaceExact, mapRange } from '../shared/review';
+import { invalidateFileReview, reconcile, replaceExact, mapRange } from '../shared/review';
 import { chunkKind } from '../shared/review';
 import { planBulkReview } from '../shared/bulkReview';
 import type { ReviewRecord } from '../shared/types';
@@ -38,26 +38,67 @@ test('accepted record survives disjoint insertion; overlapping edit invalidates 
   const base='a\nb\nc\nd\ne\nf\n';
   const draft='a\nB\nc\nd\ne\nf\n';
   const [chunk]=await diff(base,draft);
-  const record:ReviewRecord={...chunk,id:'record',decision:'accepted',stale:false};
+  const record:ReviewRecord={...chunk,id:'record',decision:'accepted'};
   const current='prefix\n'+draft;
   const state=reconcile([record],await diff(base,current),await diff(draft,current),current);
-  assert.equal(state.records[0].stale,false);
   assert.equal(state.records[0].start,chunk.start+7);
   assert.equal(state.chunks.length,1);
   const overlap=draft.replace('B','changed');
-  assert.equal(reconcile([record],await diff(base,overlap),await diff(draft,overlap),overlap).records[0].stale,true);
+  const changed=reconcile([record],await diff(base,overlap),await diff(draft,overlap),overlap);
+  assert.equal(changed.records.length,0);
+  assert.equal(changed.chunks.length,1);
 });
 test('rejected record remains without live diff and can undo through disjoint changes',async()=>{
   const base='a\nb\nc\nd\ne\nf\n',draft='a\nB\nc\nd\ne\nf\n';
   const [chunk]=await diff(base,draft);
-  const record:ReviewRecord={...chunk,id:'reject',decision:'rejected',stale:false,end:chunk.start+chunk.oldText.length};
+  const record:ReviewRecord={...chunk,id:'reject',decision:'rejected',end:chunk.start+chunk.oldText.length};
   const rejected=replaceExact(draft,chunk.start,chunk.end,chunk.newText,chunk.oldText);
   const current=rejected+'tail\n';
   const state=reconcile([record],await diff(base,current),await diff(rejected,current),current);
   assert.equal(state.records.length,1);
-  assert.equal(state.records[0].stale,false);
   const r=state.records[0];
   assert.equal(replaceExact(current,r.start,r.end,r.oldText,r.newText),draft+'tail\n');
+});
+test('rejected delete remains visible after its text is restored to the baseline',async()=>{
+  const base='one\ntwo\nthree\n',draft='one\nthree\n';
+  const [chunk]=await diff(base,draft);
+  assert.equal(chunk.kind,'delete');
+  const restored=replaceExact(draft,chunk.start,chunk.end,chunk.newText,chunk.oldText);
+  const record:ReviewRecord={...chunk,id:'rejected-delete',decision:'rejected',
+    end:chunk.start+chunk.oldText.length};
+  const state=reconcile([record],await diff(base,restored),await diff(restored,restored),restored);
+  assert.equal(state.chunks.length,0);
+  assert.deepEqual(state.records.map(item=>item.id),['rejected-delete']);
+});
+test('file-level review records follow existence and return to pending after later edits',async()=>{
+  const deleted={id:'delete',kind:'delete' as const,oldStart:0,oldEnd:4,start:0,end:0,
+    oldText:'one\n',newText:'',line:1,fileChange:'delete' as const};
+  const rejectedDelete:ReviewRecord={...deleted,id:'rejected-delete',decision:'rejected'};
+  const restored=reconcile([rejectedDelete],[],[],'one\n');
+  assert.equal(restored.records.length,1);assert.equal(restored.chunks.length,0);
+  const edited='THREE\n';
+  const changed=reconcile(invalidateFileReview([rejectedDelete]),await diff('one\n',edited),
+    await diff('one\n',edited),edited);
+  assert.equal(changed.records.length,0);assert.equal(changed.chunks.length,1);
+  const acceptedDelete:ReviewRecord={...deleted,id:'accepted-delete',decision:'accepted'};
+  assert.equal(reconcile([acceptedDelete],[deleted],[],'').chunks.length,0);
+  const recreated=reconcile(invalidateFileReview([acceptedDelete]),await diff('one\n',edited),
+    await diff('',edited),edited);
+  assert.equal(recreated.records.length,0);assert.equal(recreated.chunks.length,1);
+
+  const added={id:'add',kind:'add' as const,oldStart:0,oldEnd:0,start:0,end:4,
+    oldText:'',newText:'new\n',line:1,fileChange:'add' as const};
+  const acceptedAdd:ReviewRecord={...added,id:'accepted-add',decision:'accepted'};
+  assert.equal(reconcile([acceptedAdd],[added],[],'new\n').chunks.length,0);
+  const revised={...added,newText:'newer\n',end:6};
+  const revisedState=reconcile(invalidateFileReview([acceptedAdd]),[revised],
+    await diff('new\n','newer\n'),'newer\n');
+  assert.equal(revisedState.records.length,0);assert.equal(revisedState.chunks.length,1);
+  const rejectedAdd:ReviewRecord={...added,id:'rejected-add',decision:'rejected',end:0};
+  assert.equal(reconcile([rejectedAdd],[],[],'').records.length,1);
+  const readded=reconcile(invalidateFileReview([rejectedAdd]),[revised],
+    await diff('','newer\n'),'newer\n');
+  assert.equal(readded.records.length,0);assert.equal(readded.chunks.length,1);
 });
 test('ambiguous zero length boundary is not moved or replaced',async()=>{
   const changes=await diff('x\ny\n','x\nz\ny\n');
