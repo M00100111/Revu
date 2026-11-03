@@ -146,6 +146,7 @@ kbd { font: inherit; border: 1px solid var(--border); border-radius: 3px; paddin
 .review-file-name.review-complete { color: var(--text); }
 .review-warning button { font-size: 11px; text-decoration: underline; }
 .dashboard-chunk { border: 1px solid var(--border); border-radius: 4px; margin-top: 7px; overflow: hidden; }
+.dashboard-chunk.active { border-width: 2px; }
 .review-actions { min-height: 30px; display: flex; align-items: center; gap: 6px; padding: 0 8px; background: var(--panel); font-family: "Segoe UI", "Microsoft YaHei", sans-serif; font-size: 10px; color: var(--text); }
 .review-actions.add { background: #edf7ef; }.review-actions.modify { background: #fff4db; }.review-actions.delete { background: #fbecee; }.review-actions.reviewed { background: var(--bg); }
 .review-actions button { padding: 3px 7px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg); }

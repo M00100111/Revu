@@ -50,6 +50,7 @@ export default function App(){
   const [reveal,setReveal]=useState<{id:string;line:number}|null>(null);
   const [reviewFilter,setReviewFilter]=useState('all');
   const [reviewSelected,setReviewSelected]=useState('');
+  const [reviewReveal,setReviewReveal]=useState<{fileId:string;itemId:string;token:number}|null>(null);
   const [reviewSplit,setReviewSplit]=useState(()=>localStorage.getItem('revu-review-split')==='true');
   const [reviewChunkWidth,setReviewChunkWidth]=useState(()=>savedWidth('revu-review-chunk-width',320));
   const [collapsedProjects,setCollapsedProjects]=useState(()=>savedStringSet('revu-collapsed-projects'));
@@ -228,6 +229,7 @@ export default function App(){
     </aside>}
     {panel==='review'&&<ReviewDashboard projects={projects} documents={documents} statuses={statuses}
       filter={reviewFilter} selected={reviewSelected} onFilterChange={setReviewFilter} onSelectedChange={setReviewSelected}
+      revealTarget={reviewReveal}
       width={sidebarWidth} onResize={resizeSidebar} onOpen={openFile} onAction={workspace.act}
       onBulk={workspace.bulk} onFileBulk={workspace.bulkFile} onRefreshBase={workspace.refreshBase}
       split={reviewSplit} onSplitChange={setReviewSplit}
@@ -257,7 +259,12 @@ export default function App(){
         {activeFile.notice&&<div className="sync-notice">{activeFile.notice}</div>}
         {(activeFile.reason||activeFile.diffError)&&<div className="review-warning">{activeFile.reason||activeFile.diffError}</div>}
         <div className="editor-container"><EditorArea file={activeFile} dark={dark} editorRef={editorRef}
-          tick={tick} onAction={workspace.act} revealLine={reveal?.id===activeFile.id?reveal.line:undefined}
+          tick={tick} onAction={workspace.act} onReviewReveal={itemId=>{
+            setPanel('review');
+            setReviewFilter(current=>current==='all'||current===activeFile.project.id?current:activeFile.project.id);
+            setReviewSelected(activeFile.id);
+            setReviewReveal(current=>({fileId:activeFile.id,itemId,token:(current?.token??0)+1}));
+          }} revealLine={reveal?.id===activeFile.id?reveal.line:undefined}
           fontFamily={fontFamily.trim()||DEFAULT_EDITOR_FONT} fontSize={fontSize}/></div>
         <footer className="status-bar"><span>{activeFile.dirty?'Unsaved':'Saved'}
           {activeFile.computing?' · Updating diff…':''}</span>

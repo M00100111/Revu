@@ -18,9 +18,10 @@ const savedChangesHeight=()=>{
   return Number.isFinite(value)&&value>=MIN_CHANGES_HEIGHT?value:null;
 };
 
-export default function ReviewDashboard({projects,documents,statuses,filter,selected,width,onResize,onOpen,onAction,onBulk,onFileBulk,onRefreshBase,onFilterChange,onSelectedChange,split,onSplitChange,chunkWidth,onChunkResize}:{
+export default function ReviewDashboard({projects,documents,statuses,filter,selected,revealTarget,width,onResize,onOpen,onAction,onBulk,onFileBulk,onRefreshBase,onFilterChange,onSelectedChange,split,onSplitChange,chunkWidth,onChunkResize}:{
   projects:Project[];documents:OpenFile[];statuses:Record<string,ProjectStatus>;
   filter:string;selected:string;
+  revealTarget:{fileId:string;itemId:string;token:number}|null;
   width:number;onResize:(width:number)=>void;onOpen:(project:Project,path:string,line?:number)=>void;
   onAction:ActionHandler;onBulk:(projectIds:string[],action:ReviewBulkAction)=>void;onRefreshBase:(project:Project)=>void;
   onFileBulk:(file:OpenFile,action:ReviewBulkAction)=>void;
@@ -31,6 +32,7 @@ export default function ReviewDashboard({projects,documents,statuses,filter,sele
   const [expandedRecords,setExpandedRecords]=useState<Set<string>>(()=>new Set());
   const dashboardRef=useRef<HTMLElement|null>(null);
   const changesRef=useRef<HTMLElement|null>(null);
+  const chunkRefs=useRef(new Map<string,HTMLDivElement>());
   const dragRef=useRef<{y:number;height:number}|null>(null);
   const clampChangesHeight=useCallback((height:number)=>{
     const available=(dashboardRef.current?.clientHeight??window.innerHeight)-REVIEW_HEADER_HEIGHT-REVIEW_RESIZE_HEIGHT;
@@ -56,6 +58,12 @@ export default function ReviewDashboard({projects,documents,statuses,filter,sele
       file:documents.find(file=>file.project.id===project.id&&file.path===path)}));
   }),[scoped,statuses,documents]);
   useEffect(()=>{if(selected&&!rows.some(row=>row.project.id+'/'+row.path===selected))onSelectedChange('');},[rows,selected,onSelectedChange]);
+  useEffect(()=>{
+    if(!revealTarget||revealTarget.fileId!==selected)return;
+    const frame=requestAnimationFrame(()=>chunkRefs.current.get(revealTarget.itemId)
+      ?.scrollIntoView({block:'center',inline:'nearest',behavior:'smooth'}));
+    return()=>cancelAnimationFrame(frame);
+  },[revealTarget?.token,selected]);
   const current=rows.find(row=>row.project.id+'/'+row.path===selected);
   const currentItems=current?.file?reviewItems(current.file):[];
   const pending=rows.reduce((sum,row)=>sum+(row.file?.chunks.length??0),0);
@@ -100,7 +108,9 @@ export default function ReviewDashboard({projects,documents,statuses,filter,sele
           {current.file&&currentItems.map(item=>{
             const record='decision' in item;
             const expanded=record&&expandedRecords.has(item.id);
-            return <div className="dashboard-chunk" key={item.id}>
+            const active=revealTarget?.fileId===selected&&revealTarget.itemId===item.id;
+            return <div className={'dashboard-chunk '+(active?'active':'')} key={item.id}
+              ref={node=>{if(node)chunkRefs.current.set(item.id,node);else chunkRefs.current.delete(item.id);}}>
               <ReviewActions file={current.file!} item={item} onAction={onAction}
                 detailsExpanded={expanded} onToggleDetails={record?()=>setExpandedRecords(current=>{
                   const next=new Set(current);if(next.has(item.id))next.delete(item.id);else next.add(item.id);return next;

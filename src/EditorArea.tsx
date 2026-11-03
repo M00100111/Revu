@@ -7,9 +7,10 @@ import { monaco, type OpenFile } from './editor';
 import { reviewItems, ReviewActions, type ActionHandler } from './ReviewActions';
 import DiffPreview from './DiffPreview';
 
-export default function EditorArea({file,dark,editorRef,tick,onAction,revealLine,fontFamily,fontSize}:{
+export default function EditorArea({file,dark,editorRef,tick,onAction,onReviewReveal,revealLine,fontFamily,fontSize}:{
   file:OpenFile;dark:boolean;editorRef:MutableRefObject<monaco.editor.IStandaloneCodeEditor|null>;
-  tick:number;onAction:ActionHandler;revealLine?:number;fontFamily:string;fontSize:number;
+  tick:number;onAction:ActionHandler;onReviewReveal:(itemId:string)=>void;
+  revealLine?:number;fontFamily:string;fontSize:number;
 }){
   const [editor,setEditor]=useState<monaco.editor.IStandaloneCodeEditor|null>(null);
   const [portals,setPortals]=useState<{toolbarNode:HTMLElement;previewNode?:HTMLElement;item:Chunk|ReviewRecord}[]>([]);
@@ -127,6 +128,7 @@ export default function EditorArea({file,dark,editorRef,tick,onAction,revealLine
           const position=file.model.getPositionAt(item.start);
           editor.revealLineInCenter(position.lineNumber);editor.setPosition({lineNumber:position.lineNumber,column:1});editor.focus();
           for(const portal of portals)portal.toolbarNode.parentElement?.classList.toggle('active',portal.item.id===item.id);
+          onReviewReveal(item.id);
         }}
         detailsExpanded={'decision' in item&&expandedRecords.has(item.id)}
         onToggleDetails={'decision' in item?()=>setExpandedRecords(current=>{
