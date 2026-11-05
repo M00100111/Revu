@@ -61,6 +61,8 @@ export default function EditorArea({file,dark,editorRef,tick,onAction,onReviewRe
           let previewHeight=0;
           if(showPreview){
             preview=document.createElement('div');preview.className='inline-review-preview';
+            preview.addEventListener('mousedown',event=>event.stopPropagation());
+            preview.addEventListener('pointerdown',event=>event.stopPropagation());
             const previewRows=rows(item.oldText)+(record?rows(item.newText):0);
             previewHeight=previewRows*editorLineHeight;
             preview.style.height=previewHeight+'px';node.append(preview);

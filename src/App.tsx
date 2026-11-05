@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { monaco, type OpenFile, type Project } from './editor';
 import { errorMessage } from './files';
 import { useWorkspace } from './useWorkspace';
@@ -10,6 +10,7 @@ import TabBar, { type TabContextAction } from './TabBar';
 import ReviewDashboard from './ReviewDashboard';
 import SettingsPage, { SettingsSidebar, type SettingsCategory } from './SettingsPage';
 import WindowControls from './WindowControls';
+import NotificationCenter, { type AppNotification, type NotificationLevel } from './NotificationCenter';
 
 const savedWidth=(key:string,fallback:number)=>{
   const value=Number(localStorage.getItem(key));
@@ -45,7 +46,8 @@ export default function App(){
   const [settingsCategory,setSettingsCategory]=useState<SettingsCategory>('interaction');
   const [fontFamily,setFontFamily]=useState(()=>localStorage.getItem('revu-editor-font-family')||DEFAULT_EDITOR_FONT);
   const [fontSize,setFontSize]=useState(savedFontSize);
-  const [error,setError]=useState('');
+  const [notifications,setNotifications]=useState<AppNotification[]>([]);
+  const [notificationsOpen,setNotificationsOpen]=useState(false);
   const [picking,setPicking]=useState(false);
   const [reveal,setReveal]=useState<{id:string;line:number}|null>(null);
   const [reviewFilter,setReviewFilter]=useState('all');
@@ -56,10 +58,31 @@ export default function App(){
   const [reviewChunkWidth,setReviewChunkWidth]=useState(()=>savedWidth('revu-review-chunk-width',320));
   const [collapsedProjects,setCollapsedProjects]=useState(()=>savedStringSet('revu-collapsed-projects'));
   const [expandedDirectories,setExpandedDirectories]=useState(()=>savedStringSet('revu-expanded-directories'));
-  const workspace=useWorkspace(setError);
+  const notify=useCallback((level:NotificationLevel,message:string)=>{
+    const createdAt=Date.now();
+    setNotifications(current=>{
+      const duplicate=current.find(item=>item.level===level&&item.message===message&&createdAt-item.createdAt<3000);
+      if(duplicate){
+        const updated={...duplicate,createdAt,read:false,toast:true,count:duplicate.count+1};
+        return [updated,...current.filter(item=>item.id!==duplicate.id)];
+      }
+      return [{id:crypto.randomUUID(),level,message,createdAt,read:false,toast:true,count:1},...current];
+    });
+  },[]);
+  const notifyError=useCallback((message:string)=>notify('error',message),[notify]);
+  const notifyWarning=useCallback((message:string)=>notify('warning',message),[notify]);
+  const dismissToast=useCallback((id:string)=>setNotifications(current=>current.map(item=>
+    item.id===id?{...item,toast:false}:item)),[]);
+  const deleteNotification=useCallback((id:string)=>setNotifications(current=>current.filter(item=>item.id!==id)),[]);
+  const readNotification=useCallback((id:string)=>setNotifications(current=>current.map(item=>
+    item.id===id?{...item,read:true}:item)),[]);
+  const readAllNotifications=useCallback(()=>setNotifications(current=>current.map(item=>
+    item.read?item:{...item,read:true})),[]);
+  const workspace=useWorkspace(notifyError,notifyWarning);
   const {projects,projectsLoaded,documents,statuses,tick}=workspace;
   const editorRef=useRef<monaco.editor.IStandaloneCodeEditor|null>(null);
   const lastFile=useRef(new Map<string,string>());
+  const seenNotices=useRef(new Map<string,string>());
   const openFiles=tabs.map(id=>documents.find(file=>file.id===id)).filter((f):f is OpenFile=>!!f);
   const activeFile=openFiles.find(file=>file.id===activeId);
   const visibleFiles=mixed?openFiles:openFiles.filter(file=>file.project.id===projectId);
@@ -113,6 +136,17 @@ export default function App(){
   },[fontFamily,fontSize]);
   useEffect(()=>{window.revu.setDirty(documents.some(file=>file.dirty));},[documents]);
   useEffect(()=>{
+    const live=new Set(documents.map(file=>file.id));
+    for(const id of seenNotices.current.keys())if(!live.has(id))seenNotices.current.delete(id);
+    for(const file of documents){
+      if(!file.notice){seenNotices.current.delete(file.id);continue;}
+      const marker=file.notice+'\0'+file.synced.hash;
+      if(seenNotices.current.get(file.id)===marker)continue;
+      seenNotices.current.set(file.id,marker);
+      notify('info',`${file.project.name}/${file.path}: ${file.notice}`);
+    }
+  },[documents,tick,notify]);
+  useEffect(()=>{
     const valid=new Set(documents.flatMap(file=>file.records.map(record=>record.id)));
     setExpandedReviewRecords(current=>{
       const next=new Set([...current].filter(id=>valid.has(id)));
@@ -160,15 +194,15 @@ export default function App(){
     try{
       const project=await workspace.addProject();if(!project)return;
       if(!mixed||!activeFile)selectProject(project.id);
-      setPanel('files');setError('');
-    }catch(error){setError(errorMessage(error));}finally{setPicking(false);}
+      setPanel('files');
+    }catch(error){notifyError(errorMessage(error));}finally{setPicking(false);}
   }
   async function openFile(project:Project,path:string,line?:number){
     try{
       const file=await workspace.load(project,path);
       setTabs(current=>current.includes(file.id)?current:[...current,file.id]);
-      selectFile(file);if(line)setReveal({id:file.id,line});setError('');
-    }catch(error){setError(errorMessage(error));}
+      selectFile(file);if(line)setReveal({id:file.id,line});
+    }catch(error){notifyError(errorMessage(error));}
   }
   function closeFiles(targets:OpenFile[]){
     if(!targets.length||targets.some(file=>file.saving||file.syncing))return;
@@ -198,7 +232,7 @@ export default function App(){
     ?openFiles.filter(item=>item!==file):openFiles);
   async function closeProject(project:Project){
     const affected=documents.filter(file=>file.project.id===project.id);
-    if(affected.some(file=>file.saving||file.syncing)){setError('Wait for active file operations before closing the folder.');return;}
+    if(affected.some(file=>file.saving||file.syncing)){notify('warning','Wait for active file operations before closing the folder.');return;}
     const dirty=affected.filter(file=>file.dirty);
     if(dirty.length&&!window.confirm(`${project.name} has ${dirty.length} unsaved file${dirty.length===1?'':'s'}. Discard the drafts and close the folder?`))return;
     const remaining=openFiles.filter(file=>file.project.id!==project.id);
@@ -207,8 +241,7 @@ export default function App(){
       setTabs(current=>current.filter(id=>!affected.some(file=>file.id===id)));lastFile.current.delete(project.id);
       if(activeFile?.project.id===project.id){const next=remaining[0];if(next)selectFile(next);else setActiveId(null);}
       if(projectId===project.id)setProjectId(remaining[0]?.project.id??projects.find(item=>item.id!==project.id)?.id??null);
-      setError('');
-    }catch(error){setError(errorMessage(error));}
+    }catch(error){notifyError(errorMessage(error));}
   }
   const sidebarWidth=panel?(syncWidths?widths.shared:widths[panel]):0;
   const resizeSidebar=(width:number)=>{
@@ -225,13 +258,18 @@ export default function App(){
     <WindowControls onSave={()=>{if(activeFile)void workspace.save(activeFile);}}
       saveDisabled={!activeFile||!activeFile.dirty||!!(activeFile.saving||activeFile.syncing||activeFile.reason)}
       saving={!!activeFile?.saving}/>
-    <Sidebar panel={panel} setPanel={setPanel} dark={dark} toggleTheme={()=>setDark(!dark)}/>
+    <Sidebar panel={panel} setPanel={setPanel} dark={dark} toggleTheme={()=>setDark(!dark)}
+      notificationCount={notifications.filter(item=>!item.read).length} notificationsOpen={notificationsOpen}
+      toggleNotifications={()=>setNotificationsOpen(open=>!open)}/>
+    <NotificationCenter notifications={notifications} open={notificationsOpen}
+      onClose={()=>setNotificationsOpen(false)} onDismissToast={dismissToast}
+      onDelete={deleteNotification} onRead={readNotification} onReadAll={readAllNotifications}/>
     {panel==='files'&&<FileSidebar width={sidebarWidth} projects={projects} projectsLoaded={projectsLoaded}
       openFiles={openFiles} activeFile={activeFile}
       mixed={mixed} picking={picking} collapsedProjects={collapsedProjects} expandedDirectories={expandedDirectories}
       onResize={resizeSidebar} onAddFolder={()=>void addFolder()} onSelectFile={selectFile}
       onOpenFile={(project,path)=>void openFile(project,path)} onCloseProject={project=>void closeProject(project)}
-      onProjectToggle={toggleProject} onDirectoryToggle={toggleDirectory} onError={setError}/>}
+      onProjectToggle={toggleProject} onDirectoryToggle={toggleDirectory} onError={notifyError}/>}
     {panel==='review'&&<ReviewDashboard projects={projects} documents={documents} statuses={statuses}
       filter={reviewFilter} selected={reviewSelected} onFilterChange={setReviewFilter} onSelectedChange={setReviewSelected}
       revealTarget={reviewReveal}
@@ -250,8 +288,6 @@ export default function App(){
       onFontFamilyChange={setFontFamily} onFontSizeChange={value=>setFontSize(Math.max(10,Math.min(24,value)))}
       onResetEditor={()=>{setFontFamily(DEFAULT_EDITOR_FONT);setFontSize(14);}}/>:<>
     <main className="main">
-      {error&&<div className="error-banner" role="alert"><span>{error}</span><button className="icon-button"
-        aria-label="Dismiss error" onClick={()=>setError('')}><Icon name="close" size={14}/></button></div>}
       {projects.length>0&&<>
         {!mixed&&!(hideSingleProjectTabs&&projects.length===1)&&<div className="project-bar"><div className="project-tabs" aria-label="Project tabs">
           {projects.map(project=><button key={project.id} className={'project-tab '+(project.id===projectId?'active':'')}
@@ -265,7 +301,6 @@ export default function App(){
       </>}
       {activeFile?<>
         <div className="breadcrumb"><span>{activeFile.project.name}</span><span>/</span><span>{activeFile.path}</span></div>
-        {activeFile.notice&&<div className="sync-notice">{activeFile.notice}</div>}
         {(activeFile.reason||activeFile.diffError)&&<div className="review-warning">{activeFile.reason||activeFile.diffError}</div>}
         <div className="editor-container"><EditorArea file={activeFile} dark={dark} editorRef={editorRef}
           tick={tick} onAction={workspace.act} onReviewReveal={itemId=>{

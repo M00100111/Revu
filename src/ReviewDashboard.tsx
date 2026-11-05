@@ -11,6 +11,7 @@ const MIN_DETAIL_HEIGHT=120;
 const MIN_CHANGES_HEIGHT=160;
 const REVIEW_HEADER_HEIGHT=54;
 const REVIEW_RESIZE_HEIGHT=6;
+const firstPreviewLine=(text:string)=>text.split(/\r?\n/).find(line=>line.trim().length>0)??'';
 
 const savedChangesHeight=()=>{
   const value=Number(localStorage.getItem('revu-review-changes-height'));
@@ -113,8 +114,8 @@ export default function ReviewDashboard({projects,documents,statuses,filter,sele
                 onReveal={()=>onOpen(current.project,current.path,item.line)}/>
               <button className="chunk-preview" title="Go to code"
                 onClick={()=>onOpen(current.project,current.path,item.line)}>
-                <span className="removed">{item.oldText?'- '+item.oldText.split(/\r?\n/)[0]:''}</span>
-                <span className="added">{item.newText?'+ '+item.newText.split(/\r?\n/)[0]:''}</span>
+                <span className="removed">{firstPreviewLine(item.oldText)?'- '+firstPreviewLine(item.oldText):''}</span>
+                <span className="added">{firstPreviewLine(item.newText)?'+ '+firstPreviewLine(item.newText):''}</span>
               </button>
             </div>;
           })}

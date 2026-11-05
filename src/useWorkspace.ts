@@ -6,7 +6,7 @@ import { invalidateFileReview, mapRange, reconcile, replaceExact } from '../shar
 import { planBulkReview } from '../shared/bulkReview';
 import { externalSyncKind, rebaseExternalReview, resetForExternalSnapshot } from './externalSync';
 
-export function useWorkspace(onError: (message: string) => void) {
+export function useWorkspace(onError: (message: string) => void,onNotice:(message:string)=>void) {
   const [projects, setProjects] = useState<Project[]>([]);
   const projectRef = useRef(projects);
   projectRef.current = projects;
@@ -50,6 +50,7 @@ export function useWorkspace(onError: (message: string) => void) {
     } catch(error) {
       if (file.version !== version) return;
       file.diffError = errorMessage(error); file.computing = false; emit();
+      onError('Diff failed: '+file.diffError);
     }
   }
 
@@ -117,6 +118,7 @@ export function useWorkspace(onError: (message: string) => void) {
       const kind = externalSyncKind(file.synced.hash, external);
       if (kind === 'unchanged') return;
       if (kind === 'remove') {
+        onNotice(`${file.project.name}/${file.path} was deleted externally.`);
         discardExternalFile(file);
         return;
       }
