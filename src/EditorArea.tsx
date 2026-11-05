@@ -34,6 +34,13 @@ export default function EditorArea({file,dark,editorRef,tick,onAction,onReviewRe
     let zones:string[]=[];
     let toolbarNodes:HTMLElement[]=[];
     const decorations=editor.createDecorationsCollection();
+    const selectionDecorations=editor.createDecorationsCollection();
+    const renderSelection=()=>{
+      if(editor.getModel()!==file.model){selectionDecorations.clear();return;}
+      selectionDecorations.set((editor.getSelections()??[]).filter(selection=>!selection.isEmpty()).map(range=>({
+        range,options:{inlineClassName:'review-selected-text'},
+      })));
+    };
     const layoutToolbars=()=>{
       const width=editor.getLayoutInfo().contentWidth;
       const offset=editor.getScrollLeft();
@@ -104,12 +111,14 @@ export default function EditorArea({file,dark,editorRef,tick,onAction,onReviewRe
       layoutToolbars();
       setPortals(nextPortals);
     };
-    render();
-    const subscription=editor.onDidChangeModel(render);
+    render();renderSelection();
+    const subscription=editor.onDidChangeModel(()=>{render();renderSelection();});
+    const selectionSubscription=editor.onDidChangeCursorSelection(renderSelection);
     const scrollSubscription=editor.onDidScrollChange(event=>{if(event.scrollLeftChanged)layoutToolbars();});
     const layoutSubscription=editor.onDidLayoutChange(layoutToolbars);
     return ()=>{
-      subscription.dispose();scrollSubscription.dispose();layoutSubscription.dispose();decorations.clear();
+      subscription.dispose();selectionSubscription.dispose();scrollSubscription.dispose();layoutSubscription.dispose();
+      decorations.clear();selectionDecorations.clear();
       editor.changeViewZones(accessor=>zones.forEach(id=>accessor.removeZone(id)));
     };
   },[editor,file.id,tick,expandedRecords,editorLineHeight]);  return <><Editor path={file.model.uri.toString()} theme={dark?'revu-dark':'revu-light'}

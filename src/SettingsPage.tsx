@@ -1,6 +1,7 @@
 import ResizeHandle from './ResizeHandle';
+import type { FileTabOverflow } from './tabLayout';
 
-export type SettingsCategory='interaction'|'editor';
+export type SettingsCategory='interaction'|'editor'|'appearance'|'activity-bar';
 
 export function SettingsSidebar({width,onResize,category,onCategoryChange}:{
   width:number;onResize:(width:number)=>void;category:SettingsCategory;
@@ -11,17 +12,22 @@ export function SettingsSidebar({width,onResize,category,onCategoryChange}:{
     <nav className="settings-categories" aria-label="Settings categories">
       <button className={category==='interaction'?'active':''} onClick={()=>onCategoryChange('interaction')}>Interaction</button>
       <button className={category==='editor'?'active':''} onClick={()=>onCategoryChange('editor')}>Editor</button>
+      <button className={category==='appearance'?'active':''} onClick={()=>onCategoryChange('appearance')}>Appearance</button>
+      <button className={category==='activity-bar'?'active':''} onClick={()=>onCategoryChange('activity-bar')}>Activity Bar</button>
     </nav>
     <ResizeHandle width={width} onResize={onResize}/>
   </aside>;
 }
 
 export default function SettingsPage({category,syncWidths,onChange,mixed,onModeChange,hideSingleProjectTabs,onHideSingleProjectTabsChange,fontFamily,fontSize,
-  onFontFamilyChange,onFontSizeChange,onResetEditor}:{
+  onFontFamilyChange,onFontSizeChange,onResetEditor,fileTabOverflow,onFileTabOverflowChange,dark,onThemeChange,
+  showThemeSwitcher,onShowThemeSwitcherChange}:{
   category:SettingsCategory;syncWidths:boolean;onChange:(value:boolean)=>void;
   mixed:boolean;onModeChange:(mixed:boolean)=>void;hideSingleProjectTabs:boolean;
   onHideSingleProjectTabsChange:(value:boolean)=>void;fontFamily:string;fontSize:number;
   onFontFamilyChange:(value:string)=>void;onFontSizeChange:(value:number)=>void;onResetEditor:()=>void;
+  fileTabOverflow:FileTabOverflow;onFileTabOverflowChange:(value:FileTabOverflow)=>void;
+  dark:boolean;onThemeChange:(dark:boolean)=>void;showThemeSwitcher:boolean;onShowThemeSwitcherChange:(value:boolean)=>void;
 }){
   return <main className="main settings-main">
     <div className="settings-content">
@@ -45,7 +51,14 @@ export default function SettingsPage({category,syncWidths,onChange,mixed,onModeC
           <input type="checkbox" checked={hideSingleProjectTabs} disabled={mixed}
             onChange={event=>onHideSingleProjectTabsChange(event.target.checked)}/>
         </label>
-      </>:<>
+        <div className="setting-row">
+          <span><strong>File tab overflow</strong><small>Choose how file tabs behave when they no longer fit.</small></span>
+          <div className="setting-options" role="group" aria-label="File tab overflow">
+            <button className={fileTabOverflow==='scroll'?'active':''} onClick={()=>onFileTabOverflowChange('scroll')}>Scroll</button>
+            <button className={fileTabOverflow==='wrap'?'active':''} onClick={()=>onFileTabOverflowChange('wrap')}>Wrap automatically</button>
+          </div>
+        </div>
+      </>:category==='editor'?<>
         <div className="settings-title-row"><h1>Editor</h1><button onClick={onResetEditor}>Reset</button></div>
         <label className="setting-row">
           <span><strong>Font family</strong><small>Use a CSS font family or fallback list for code.</small></span>
@@ -58,6 +71,22 @@ export default function SettingsPage({category,syncWidths,onChange,mixed,onModeC
             onChange={event=>{const value=Number(event.target.value);if(Number.isFinite(value))onFontSizeChange(value);}}/>
         </label>
         <div className="font-preview" style={{fontFamily,fontSize}}>const preview = 'Revu';</div>
+      </>:category==='appearance'?<>
+        <h1>Appearance</h1>
+        <div className="setting-row">
+          <span><strong>Color theme</strong><small>Choose the application color theme.</small></span>
+          <div className="setting-options" role="group" aria-label="Color theme">
+            <button className={!dark?'active':''} onClick={()=>onThemeChange(false)}>Light</button>
+            <button className={dark?'active':''} onClick={()=>onThemeChange(true)}>Dark</button>
+          </div>
+        </div>
+      </>:<>
+        <h1>Activity Bar</h1>
+        <label className="setting-row">
+          <span><strong>Theme switcher</strong><small>Show the theme switcher in the Activity Bar.</small></span>
+          <input type="checkbox" checked={showThemeSwitcher}
+            onChange={event=>onShowThemeSwitcherChange(event.target.checked)}/>
+        </label>
       </>}
     </div>
   </main>;

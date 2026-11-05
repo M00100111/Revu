@@ -11,6 +11,7 @@ import ReviewDashboard from './ReviewDashboard';
 import SettingsPage, { SettingsSidebar, type SettingsCategory } from './SettingsPage';
 import WindowControls from './WindowControls';
 import NotificationCenter, { type AppNotification, type NotificationLevel } from './NotificationCenter';
+import { defaultTabExpansion, type FileTabExpansion, type FileTabOverflow } from './tabLayout';
 
 const savedWidth=(key:string,fallback:number)=>{
   const value=Number(localStorage.getItem(key));
@@ -30,6 +31,7 @@ const savedFontSize=()=>{
 
 export default function App(){
   const [dark,setDark]=useState(()=>localStorage.getItem('revu-theme')==='dark');
+  const [showThemeSwitcher,setShowThemeSwitcher]=useState(()=>localStorage.getItem('revu-show-theme-switcher')!=='false');
   const [panel,setPanel]=useState<Panel>('files');
   const [syncWidths,setSyncWidths]=useState(()=>localStorage.getItem('revu-sync-sidebar-widths')!=='false');
   const [widths,setWidths]=useState(()=>({
@@ -42,6 +44,10 @@ export default function App(){
   const [activeId,setActiveId]=useState<string|null>(null);
   const [projectId,setProjectId]=useState<string|null>(null);
   const [mixed,setMixed]=useState(()=>localStorage.getItem('revu-editor-tab-mode')==='mixed');
+  const [fileTabOverflow,setFileTabOverflow]=useState<FileTabOverflow>(()=>
+    localStorage.getItem('revu-file-tab-overflow')==='wrap'?'wrap':'scroll');
+  const [fileTabExpansion,setFileTabExpansion]=useState<FileTabExpansion>(()=>defaultTabExpansion(
+    localStorage.getItem('revu-file-tab-overflow')==='wrap'?'wrap':'scroll'));
   const [hideSingleProjectTabs,setHideSingleProjectTabs]=useState(()=>localStorage.getItem('revu-hide-single-project-tabs')==='true');
   const [settingsCategory,setSettingsCategory]=useState<SettingsCategory>('interaction');
   const [fontFamily,setFontFamily]=useState(()=>localStorage.getItem('revu-editor-font-family')||DEFAULT_EDITOR_FONT);
@@ -86,6 +92,7 @@ export default function App(){
   const openFiles=tabs.map(id=>documents.find(file=>file.id===id)).filter((f):f is OpenFile=>!!f);
   const activeFile=openFiles.find(file=>file.id===activeId);
   const visibleFiles=mixed?openFiles:openFiles.filter(file=>file.project.id===projectId);
+  const tabScope=mixed?'mixed':projectId;
   useEffect(()=>{
     if(!projectId&&projects.length)setProjectId(projects[0].id);
   },[projects,projectId]);
@@ -105,6 +112,7 @@ export default function App(){
     document.documentElement.dataset.theme=dark?'dark':'light';
     localStorage.setItem('revu-theme',dark?'dark':'light');
   },[dark]);
+  useEffect(()=>localStorage.setItem('revu-show-theme-switcher',String(showThemeSwitcher)),[showThemeSwitcher]);
   useEffect(()=>{
     localStorage.setItem('revu-sync-sidebar-widths',String(syncWidths));
     localStorage.setItem('revu-sidebar-width',String(widths.shared));
@@ -113,6 +121,8 @@ export default function App(){
     localStorage.setItem('revu-settings-sidebar-width',String(widths.settings));
   },[syncWidths,widths]);
   useEffect(()=>localStorage.setItem('revu-editor-tab-mode',mixed?'mixed':'isolated'),[mixed]);
+  useEffect(()=>localStorage.setItem('revu-file-tab-overflow',fileTabOverflow),[fileTabOverflow]);
+  useEffect(()=>setFileTabExpansion(defaultTabExpansion(fileTabOverflow)),[fileTabOverflow,tabScope]);
   useEffect(()=>localStorage.setItem('revu-hide-single-project-tabs',String(hideSingleProjectTabs)),[hideSingleProjectTabs]);
   useEffect(()=>{
     localStorage.setItem('revu-review-split',String(reviewSplit));
@@ -259,6 +269,7 @@ export default function App(){
       saveDisabled={!activeFile||!activeFile.dirty||!!(activeFile.saving||activeFile.syncing||activeFile.reason)}
       saving={!!activeFile?.saving}/>
     <Sidebar panel={panel} setPanel={setPanel} dark={dark} toggleTheme={()=>setDark(!dark)}
+      showThemeSwitcher={showThemeSwitcher}
       notificationCount={notifications.filter(item=>!item.read).length} notificationsOpen={notificationsOpen}
       toggleNotifications={()=>setNotificationsOpen(open=>!open)}/>
     <NotificationCenter notifications={notifications} open={notificationsOpen}
@@ -286,7 +297,10 @@ export default function App(){
       mixed={mixed} onModeChange={setMixed} hideSingleProjectTabs={hideSingleProjectTabs}
       onHideSingleProjectTabsChange={setHideSingleProjectTabs} fontFamily={fontFamily} fontSize={fontSize}
       onFontFamilyChange={setFontFamily} onFontSizeChange={value=>setFontSize(Math.max(10,Math.min(24,value)))}
-      onResetEditor={()=>{setFontFamily(DEFAULT_EDITOR_FONT);setFontSize(14);}}/>:<>
+      onResetEditor={()=>{setFontFamily(DEFAULT_EDITOR_FONT);setFontSize(14);}}
+      fileTabOverflow={fileTabOverflow} onFileTabOverflowChange={setFileTabOverflow}
+      dark={dark} onThemeChange={setDark} showThemeSwitcher={showThemeSwitcher}
+      onShowThemeSwitcherChange={setShowThemeSwitcher}/>:<>
     <main className="main">
       {projects.length>0&&<>
         {!mixed&&!(hideSingleProjectTabs&&projects.length===1)&&<div className="project-bar"><div className="project-tabs" aria-label="Project tabs">
@@ -297,7 +311,9 @@ export default function App(){
           </button>)}</div></div>}
         <TabBar files={visibleFiles} activeId={activeId} onSelect={selectFile} onClose={closeFile}
           onContextAction={tabContext}
-          mixed={mixed}/>
+          mixed={mixed} overflowMode={fileTabOverflow} expansion={fileTabExpansion}
+          onExpansionChange={setFileTabExpansion}
+          underWindowControls={mixed||(!mixed&&hideSingleProjectTabs&&projects.length===1)}/>
       </>}
       {activeFile?<>
         <div className="breadcrumb"><span>{activeFile.project.name}</span><span>/</span><span>{activeFile.path}</span></div>
