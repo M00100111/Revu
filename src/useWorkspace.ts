@@ -281,7 +281,37 @@ export function useWorkspace(onError: (message: string) => void) {
       do {
         refreshAgain.current.delete(project.id);
         window.dispatchEvent(new CustomEvent('revu-project-changed',{detail:project.id}));
-        const status = await api<ProjectStatus>('status',{projectId:project.id});
+        let status = await api<ProjectStatus>('status',{projectId:project.id});
+        const affected=[...docs.current.values()].filter(file=>file.project.id===project.id);
+        if(status.changedHead){
+          if(affected.some(file=>file.saving||file.syncing)){
+            setStatuses(current=>({...current,[project.id]:status}));
+            continue;
+          }
+          affected.forEach(file=>{
+            file.version++;file.computing=true;
+            clearTimeout(timers.current.get(file.id));timers.current.delete(file.id);
+          });
+          emit();
+          try{
+            const updated=await api<Project>('refreshBase',{projectId:project.id});
+            Object.assign(project,updated);
+            for(const file of affected){
+              const base=await api<{text:string;exists:boolean;reason?:string}>('baseline',{
+                projectId:project.id,path:file.path,
+              });
+              file.baseline=base.text;file.baselineExists=base.exists;file.reason=base.reason;
+              file.records=[];file.chunks=[];file.reviewText=file.model.getValue();schedule(file);
+            }
+            setProjects([...projectRef.current]);
+            status=await api<ProjectStatus>('status',{projectId:project.id});
+          }catch(error){
+            const message=errorMessage(error);
+            affected.forEach(file=>{file.computing=false;file.diffError=message;});
+            emit();
+            throw error;
+          }
+        }
         setStatuses(current => ({...current,[project.id]:status}));
         for(const file of docs.current.values()) {
           if(file.project.id !== project.id || file.saving) continue;
@@ -327,24 +357,6 @@ export function useWorkspace(onError: (message: string) => void) {
     emit();
   }
 
-  async function refreshBase(project: Project) {
-    if(!window.confirm('Refreshing the base clears this project’s review decisions and keeps the current drafts. Continue?')) return;
-    const affected = [...docs.current.values()].filter(file=>file.project.id===project.id);
-    if(affected.some(file=>file.syncing || file.saving)) return;
-    affected.forEach(file=>{file.version++;file.computing=true;clearTimeout(timers.current.get(file.id));});
-    emit();
-    try {
-      const updated = await api<Project>('refreshBase',{projectId:project.id});
-      Object.assign(project,updated);
-      for(const file of affected) {
-        const base = await api<{text:string;exists:boolean;reason?:string}>('baseline',{projectId:project.id,path:file.path});
-        file.baseline = base.text;file.baselineExists=base.exists;file.records = [];file.chunks=[];file.reason=base.reason;
-        file.reviewText=file.model.getValue(); schedule(file);
-      }
-      setProjects([...projectRef.current]);
-      await refresh(project);
-    } catch(error) { onError(errorMessage(error)); affected.forEach(file=>{file.diffError=errorMessage(error);file.computing=false;});emit(); }
-  }
 
   useEffect(() => {
     let live=true;
@@ -362,5 +374,5 @@ export function useWorkspace(onError: (message: string) => void) {
     return ()=>{live=false;unsubscribe();window.removeEventListener('focus',refreshAll);};
   },[onError]);
 
-  return { projects, documents, statuses, tick, load, addProject, removeProject, save, act, bulk, bulkFile, refreshBase, refresh };
+  return { projects, documents, statuses, tick, load, addProject, removeProject, save, act, bulk, bulkFile, refresh };
 }

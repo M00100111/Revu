@@ -231,7 +231,7 @@ export default function App(){
       filter={reviewFilter} selected={reviewSelected} onFilterChange={setReviewFilter} onSelectedChange={setReviewSelected}
       revealTarget={reviewReveal}
       width={sidebarWidth} onResize={resizeSidebar} onOpen={openFile} onAction={workspace.act}
-      onBulk={workspace.bulk} onFileBulk={workspace.bulkFile} onRefreshBase={workspace.refreshBase}
+      onBulk={workspace.bulk} onFileBulk={workspace.bulkFile}
       split={reviewSplit} onSplitChange={setReviewSplit}
       chunkWidth={reviewChunkWidth} onChunkResize={setReviewChunkWidth}/>}
     {panel==='settings'&&<SettingsSidebar width={sidebarWidth} onResize={resizeSidebar}

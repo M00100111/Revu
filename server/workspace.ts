@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { readFile, readdir, realpath, stat, open, unlink } from 'node:fs/promises';
+import { readFile, readdir, realpath, stat, open, unlink, mkdir } from 'node:fs/promises';
 import { watch, type FSWatcher } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import type { Project, Snapshot, ProjectStatus, ChangeFile } from '../shared/types';
@@ -38,7 +38,19 @@ export class Workspace {
     try { actual = await realpath(target); }
     catch (error) {
       if (!missing || (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      actual = resolve(await realpath(dirname(target)), basename(target));
+      let ancestor=dirname(target);
+      while(true){
+        try{
+          const existing=await realpath(ancestor);
+          actual=resolve(existing,relative(ancestor,target));
+          break;
+        }catch(parentError){
+          if((parentError as NodeJS.ErrnoException).code!=='ENOENT')throw parentError;
+          const parent=dirname(ancestor);
+          if(parent===ancestor||!this.inside(project.root,parent))throw parentError;
+          ancestor=parent;
+        }
+      }
     }
     if (!this.inside(project.root, actual)) throw new HttpError(403, 'Link points outside the project');
     return actual;
@@ -154,7 +166,7 @@ export class Workspace {
         throw new HttpError(409, 'Disk content changed. Sync first.');
       }
       if (current.reason) throw new HttpError(409, current.reason);
-      const target = await this.path(p, path, !current.exists);
+      let target = await this.path(p, path, !current.exists);
       if(!exists){
         if(!current.exists)return current;
         if(hash(await readFile(target))!==expected)throw new HttpError(409, 'Disk content changed. Sync first.');
@@ -164,6 +176,12 @@ export class Workspace {
         this.notify(p.id);return result;
       }
       const bytes = Buffer.from((bom ? '\uFEFF' : '') + text, 'utf8');
+      if(!current.exists){
+        await mkdir(dirname(target),{recursive:true});
+        const parent=await realpath(dirname(target));
+        if(!this.inside(p.root,parent))throw new HttpError(403,'Link points outside the project');
+        target=resolve(parent,basename(target));
+      }
       let handle:Awaited<ReturnType<typeof open>>;
       try { handle = await open(target, current.exists ? 'r+' : 'wx'); }
       catch(error) {

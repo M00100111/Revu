@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, readFile, rm, rename, unlink } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, rm, rename, unlink, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Workspace, decode } from '../server/workspace';
@@ -68,12 +68,41 @@ test('deleted tracked file is reviewable and can be recreated from a missing sna
   const deleted=await w.save(p,'file.txt',restored.hash,'',false,false);
   assert.equal(deleted.exists,false);
 }));
-test('HEAD change does not silently replace baseline',()=>fixture(async(root,w)=>{
+test('deleted tracked file remains reviewable when all empty parent directories are removed',()=>fixture(async(root,w)=>{
+  const nested=join(root,'src','storage','migrations','versions','0002.py');
+  await mkdir(join(root,'src','storage','migrations','versions'),{recursive:true});
+  await writeFile(nested,'migration\n');
+  await git(root,['add','.']);await git(root,['commit','-qm','nested base']);
+  const p=w.get((await w.add(root)).id);
+  await rm(join(root,'src','storage','migrations'),{recursive:true,force:true});
+  await writeFile(join(root,'added.py'),'added\n');
+  await writeFile(join(root,'file.txt'),'modified\n');
+
+  const status=await w.status(p);
+  assert.deepEqual(status.files.map(file=>file.path),[
+    'added.py','file.txt','src/storage/migrations/versions/0002.py',
+  ]);
+  const deleted=status.files.find(file=>file.path.endsWith('0002.py'))!;
+  assert.equal(deleted.status,'D');assert.equal(deleted.reason,undefined);
+  assert.equal((await w.read(p,deleted.path)).exists,false);
+
+  const restored=await w.save(p,deleted.path,'missing','migration\n',false);
+  assert.equal(restored.exists,true);
+  assert.equal(await readFile(nested,'utf8'),'migration\n');
+}));
+test('adopting the latest HEAD removes committed changes and keeps remaining worktree changes',()=>fixture(async(root,w)=>{
   const p=w.get((await w.add(root)).id),base=p.base;
-  await writeFile(join(root,'file.txt'),'new\n');await git(root,['add','.']);await git(root,['commit','-qm','next']);
+  await writeFile(join(root,'file.txt'),'committed\n');await git(root,['add','.']);await git(root,['commit','-qm','next']);
   const status=await w.status(p);
   assert.equal(status.changedHead,true);assert.equal(p.base,base);
   assert.equal((await w.baseline(p,'file.txt')).text,'one\ntwo\nthree\n');
+  p.base=await w.head(p.repo!);
+  assert.equal((await w.status(p)).changedHead,false);
+  assert.equal((await w.baseline(p,'file.txt')).text,'committed\n');
+  await writeFile(join(root,'file.txt'),'remaining\n');
+  const remaining=await w.status(p);
+  assert.equal(remaining.changedHead,false);
+  assert.deepEqual(remaining.files.map(file=>file.path),['file.txt']);
 }));
 test('empty repository and non Git folder',async()=>{
   const root=await mkdtemp(join(tmpdir(),'revu-empty-'));const w=new Workspace();

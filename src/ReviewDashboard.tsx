@@ -18,12 +18,12 @@ const savedChangesHeight=()=>{
   return Number.isFinite(value)&&value>=MIN_CHANGES_HEIGHT?value:null;
 };
 
-export default function ReviewDashboard({projects,documents,statuses,filter,selected,revealTarget,width,onResize,onOpen,onAction,onBulk,onFileBulk,onRefreshBase,onFilterChange,onSelectedChange,split,onSplitChange,chunkWidth,onChunkResize}:{
+export default function ReviewDashboard({projects,documents,statuses,filter,selected,revealTarget,width,onResize,onOpen,onAction,onBulk,onFileBulk,onFilterChange,onSelectedChange,split,onSplitChange,chunkWidth,onChunkResize}:{
   projects:Project[];documents:OpenFile[];statuses:Record<string,ProjectStatus>;
   filter:string;selected:string;
   revealTarget:{fileId:string;itemId:string;token:number}|null;
   width:number;onResize:(width:number)=>void;onOpen:(project:Project,path:string,line?:number)=>void;
-  onAction:ActionHandler;onBulk:(projectIds:string[],action:ReviewBulkAction)=>void;onRefreshBase:(project:Project)=>void;
+  onAction:ActionHandler;onBulk:(projectIds:string[],action:ReviewBulkAction)=>void;
   onFileBulk:(file:OpenFile,action:ReviewBulkAction)=>void;
   onFilterChange:(filter:string)=>void;onSelectedChange:(selected:string)=>void;
   split:boolean;onSplitChange:(split:boolean)=>void;chunkWidth:number;onChunkResize:(width:number)=>void;
@@ -99,8 +99,6 @@ export default function ReviewDashboard({projects,documents,statuses,filter,sele
         {!current?<p className="sidebar-empty">Select a changed file</p>:<>
           <div className="review-detail-heading"><strong title={current.path}>{current.path}</strong>
             <span>{currentItems.length} chunk{currentItems.length===1?'':'s'}</span></div>
-          {statuses[current.project.id]?.changedHead&&<div className="review-warning">HEAD changed.
-            <button onClick={()=>onRefreshBase(current.project)}>Refresh base</button></div>}
           {(current.status?.reason||current.file?.reason)&&
             <p className="review-warning">{current.status?.reason||current.file?.reason}</p>}
           {current.file?.computing&&<p className="tree-note">Updating diff…</p>}
