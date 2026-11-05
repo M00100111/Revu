@@ -7,14 +7,14 @@ import { monaco, type OpenFile } from './editor';
 import { reviewItems, ReviewActions, type ActionHandler } from './ReviewActions';
 import DiffPreview from './DiffPreview';
 
-export default function EditorArea({file,dark,editorRef,tick,onAction,onReviewReveal,revealLine,fontFamily,fontSize}:{
+export default function EditorArea({file,dark,editorRef,tick,onAction,onReviewReveal,expandedRecords,onToggleReviewPreview,revealLine,fontFamily,fontSize}:{
   file:OpenFile;dark:boolean;editorRef:MutableRefObject<monaco.editor.IStandaloneCodeEditor|null>;
   tick:number;onAction:ActionHandler;onReviewReveal:(itemId:string)=>void;
+  expandedRecords:ReadonlySet<string>;onToggleReviewPreview:(itemId:string)=>void;
   revealLine?:number;fontFamily:string;fontSize:number;
 }){
   const [editor,setEditor]=useState<monaco.editor.IStandaloneCodeEditor|null>(null);
   const [portals,setPortals]=useState<{toolbarNode:HTMLElement;previewNode?:HTMLElement;item:Chunk|ReviewRecord}[]>([]);
-  const [expandedRecords,setExpandedRecords]=useState<Set<string>>(()=>new Set());
   const actionRef=useRef(onAction); actionRef.current=onAction;
   const editorLineHeight=Math.round(fontSize*12/7);
   useEffect(()=>()=>{editorRef.current=null;},[editorRef]);
@@ -131,9 +131,7 @@ export default function EditorArea({file,dark,editorRef,tick,onAction,onReviewRe
           onReviewReveal(item.id);
         }}
         detailsExpanded={'decision' in item&&expandedRecords.has(item.id)}
-        onToggleDetails={'decision' in item?()=>setExpandedRecords(current=>{
-          const next=new Set(current);if(next.has(item.id))next.delete(item.id);else next.add(item.id);return next;
-        }):undefined}
+        onToggleDetails={'decision' in item?()=>onToggleReviewPreview(item.id):undefined}
         navigationDisabled={portals.length<=1} onNavigate={direction=>{
           if(!editor)return;const items=reviewItems(file);const index=items.findIndex(entry=>entry.id===item.id);
           const target=items[(index+direction+items.length)%items.length];if(!target)return;

@@ -16,10 +16,11 @@ export function SettingsSidebar({width,onResize,category,onCategoryChange}:{
   </aside>;
 }
 
-export default function SettingsPage({category,syncWidths,onChange,mixed,onModeChange,fontFamily,fontSize,
+export default function SettingsPage({category,syncWidths,onChange,mixed,onModeChange,hideSingleProjectTabs,onHideSingleProjectTabsChange,fontFamily,fontSize,
   onFontFamilyChange,onFontSizeChange,onResetEditor}:{
   category:SettingsCategory;syncWidths:boolean;onChange:(value:boolean)=>void;
-  mixed:boolean;onModeChange:(mixed:boolean)=>void;fontFamily:string;fontSize:number;
+  mixed:boolean;onModeChange:(mixed:boolean)=>void;hideSingleProjectTabs:boolean;
+  onHideSingleProjectTabsChange:(value:boolean)=>void;fontFamily:string;fontSize:number;
   onFontFamilyChange:(value:string)=>void;onFontSizeChange:(value:number)=>void;onResetEditor:()=>void;
 }){
   return <main className="main settings-main">
@@ -37,6 +38,13 @@ export default function SettingsPage({category,syncWidths,onChange,mixed,onModeC
             <button className={mixed?'active':''} onClick={()=>onModeChange(true)}>Mixed</button>
           </div>
         </div>
+        <label className={'setting-row '+(mixed?'disabled':'')}>
+          <span><strong>Hide project tabs for single project</strong><small>{mixed
+            ? 'Available only in Isolated mode.'
+            : 'Hide the project tab row when only one project is open.'}</small></span>
+          <input type="checkbox" checked={hideSingleProjectTabs} disabled={mixed}
+            onChange={event=>onHideSingleProjectTabsChange(event.target.checked)}/>
+        </label>
       </>:<>
         <div className="settings-title-row"><h1>Editor</h1><button onClick={onResetEditor}>Reset</button></div>
         <label className="setting-row">

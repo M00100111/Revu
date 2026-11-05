@@ -3,12 +3,11 @@ import { monaco, type OpenFile, type Project } from './editor';
 import { errorMessage } from './files';
 import { useWorkspace } from './useWorkspace';
 import EditorArea from './EditorArea';
-import FileTree from './FileTree';
+import FileSidebar from './FileSidebar';
 import Icon from './Icon';
 import Sidebar, { type Panel } from './Sidebar';
 import TabBar, { type TabContextAction } from './TabBar';
 import ReviewDashboard from './ReviewDashboard';
-import ResizeHandle from './ResizeHandle';
 import SettingsPage, { SettingsSidebar, type SettingsCategory } from './SettingsPage';
 import WindowControls from './WindowControls';
 
@@ -42,6 +41,7 @@ export default function App(){
   const [activeId,setActiveId]=useState<string|null>(null);
   const [projectId,setProjectId]=useState<string|null>(null);
   const [mixed,setMixed]=useState(()=>localStorage.getItem('revu-editor-tab-mode')==='mixed');
+  const [hideSingleProjectTabs,setHideSingleProjectTabs]=useState(()=>localStorage.getItem('revu-hide-single-project-tabs')==='true');
   const [settingsCategory,setSettingsCategory]=useState<SettingsCategory>('interaction');
   const [fontFamily,setFontFamily]=useState(()=>localStorage.getItem('revu-editor-font-family')||DEFAULT_EDITOR_FONT);
   const [fontSize,setFontSize]=useState(savedFontSize);
@@ -51,12 +51,13 @@ export default function App(){
   const [reviewFilter,setReviewFilter]=useState('all');
   const [reviewSelected,setReviewSelected]=useState('');
   const [reviewReveal,setReviewReveal]=useState<{fileId:string;itemId:string;token:number}|null>(null);
+  const [expandedReviewRecords,setExpandedReviewRecords]=useState<Set<string>>(()=>new Set());
   const [reviewSplit,setReviewSplit]=useState(()=>localStorage.getItem('revu-review-split')==='true');
   const [reviewChunkWidth,setReviewChunkWidth]=useState(()=>savedWidth('revu-review-chunk-width',320));
   const [collapsedProjects,setCollapsedProjects]=useState(()=>savedStringSet('revu-collapsed-projects'));
   const [expandedDirectories,setExpandedDirectories]=useState(()=>savedStringSet('revu-expanded-directories'));
   const workspace=useWorkspace(setError);
-  const {projects,documents,statuses,tick}=workspace;
+  const {projects,projectsLoaded,documents,statuses,tick}=workspace;
   const editorRef=useRef<monaco.editor.IStandaloneCodeEditor|null>(null);
   const lastFile=useRef(new Map<string,string>());
   const openFiles=tabs.map(id=>documents.find(file=>file.id===id)).filter((f):f is OpenFile=>!!f);
@@ -89,6 +90,7 @@ export default function App(){
     localStorage.setItem('revu-settings-sidebar-width',String(widths.settings));
   },[syncWidths,widths]);
   useEffect(()=>localStorage.setItem('revu-editor-tab-mode',mixed?'mixed':'isolated'),[mixed]);
+  useEffect(()=>localStorage.setItem('revu-hide-single-project-tabs',String(hideSingleProjectTabs)),[hideSingleProjectTabs]);
   useEffect(()=>{
     localStorage.setItem('revu-review-split',String(reviewSplit));
     localStorage.setItem('revu-review-chunk-width',String(reviewChunkWidth));
@@ -110,6 +112,13 @@ export default function App(){
     document.documentElement.style.setProperty('--editor-line-height',lineHeight+'px');
   },[fontFamily,fontSize]);
   useEffect(()=>{window.revu.setDirty(documents.some(file=>file.dirty));},[documents]);
+  useEffect(()=>{
+    const valid=new Set(documents.flatMap(file=>file.records.map(record=>record.id)));
+    setExpandedReviewRecords(current=>{
+      const next=new Set([...current].filter(id=>valid.has(id)));
+      return next.size===current.size?current:next;
+    });
+  },[documents,tick]);
   useEffect(()=>{
     const onKeyDown=(event:KeyboardEvent)=>{
       if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'){
@@ -133,6 +142,17 @@ export default function App(){
       const next=new Set(current);
       if(next.has(key))next.delete(key);else next.add(key);
       return next;
+    });
+  }
+  function toggleProject(root:string,open:boolean){
+    setCollapsedProjects(current=>{
+      if(open===!current.has(root))return current;
+      const next=new Set(current);if(open)next.delete(root);else next.add(root);return next;
+    });
+  }
+  function toggleReviewPreview(id:string){
+    setExpandedReviewRecords(current=>{
+      const next=new Set(current);if(next.has(id))next.delete(id);else next.add(id);return next;
     });
   }
   async function addFolder(){
@@ -206,30 +226,18 @@ export default function App(){
       saveDisabled={!activeFile||!activeFile.dirty||!!(activeFile.saving||activeFile.syncing||activeFile.reason)}
       saving={!!activeFile?.saving}/>
     <Sidebar panel={panel} setPanel={setPanel} dark={dark} toggleTheme={()=>setDark(!dark)}/>
-    {panel==='files'&&<aside className="explorer" style={{width:sidebarWidth}}>
-      <header className="explorer-header"><span>File</span><button className="icon-button" onClick={addFolder}
-        disabled={picking} title="Open folder" aria-label="Open folder"><Icon name="folder" size={17}/></button></header>
-      {projects.length?<div className="tree-scroll">{projects.map(project=><details className="project-tree" key={project.id}
-        open={!collapsedProjects.has(project.root)} onToggle={event=>{
-          const open=event.currentTarget.open;
-          setCollapsedProjects(current=>{
-            if(open===!current.has(project.root))return current;
-            const next=new Set(current);if(open)next.delete(project.root);else next.add(project.root);return next;
-          });
-        }}>
-        <summary className="workspace-name" title={project.root} onContextMenu={async event=>{
-          event.preventDefault();if(await window.revu.contextMenu('project')==='close')void closeProject(project);
-        }}><Icon name="chevron" size={12}/><Icon name="folder" size={15}/><span>{project.name}</span></summary>
-        <FileTree projectId={project.id} projectRoot={project.root}
-          activePath={activeFile?.project.id===project.id?activeFile.path:null}
-          onOpen={path=>void openFile(project,path)} onError={setError}
-          expandedDirectories={expandedDirectories} onDirectoryToggle={toggleDirectory}/>
-      </details>)}</div>:<p className="sidebar-empty">No folders open</p>}
-      <ResizeHandle width={sidebarWidth} onResize={resizeSidebar}/>
-    </aside>}
+    {panel==='files'&&<FileSidebar width={sidebarWidth} projects={projects} projectsLoaded={projectsLoaded}
+      openFiles={openFiles} activeFile={activeFile}
+      mixed={mixed} picking={picking} collapsedProjects={collapsedProjects} expandedDirectories={expandedDirectories}
+      onResize={resizeSidebar} onAddFolder={()=>void addFolder()} onSelectFile={selectFile}
+      onOpenFile={(project,path)=>void openFile(project,path)} onCloseProject={project=>void closeProject(project)}
+      onProjectToggle={toggleProject} onDirectoryToggle={toggleDirectory} onError={setError}/>}
     {panel==='review'&&<ReviewDashboard projects={projects} documents={documents} statuses={statuses}
       filter={reviewFilter} selected={reviewSelected} onFilterChange={setReviewFilter} onSelectedChange={setReviewSelected}
       revealTarget={reviewReveal}
+      expandedRecords={expandedReviewRecords} onToggleReviewPreview={(file,itemId,line)=>{
+        void openFile(file.project,file.path,line);toggleReviewPreview(itemId);
+      }}
       width={sidebarWidth} onResize={resizeSidebar} onOpen={openFile} onAction={workspace.act}
       onBulk={workspace.bulk} onFileBulk={workspace.bulkFile}
       split={reviewSplit} onSplitChange={setReviewSplit}
@@ -237,14 +245,15 @@ export default function App(){
     {panel==='settings'&&<SettingsSidebar width={sidebarWidth} onResize={resizeSidebar}
       category={settingsCategory} onCategoryChange={setSettingsCategory}/>}
     {panel==='settings'?<SettingsPage category={settingsCategory} syncWidths={syncWidths} onChange={changeWidthSync}
-      mixed={mixed} onModeChange={setMixed} fontFamily={fontFamily} fontSize={fontSize}
+      mixed={mixed} onModeChange={setMixed} hideSingleProjectTabs={hideSingleProjectTabs}
+      onHideSingleProjectTabsChange={setHideSingleProjectTabs} fontFamily={fontFamily} fontSize={fontSize}
       onFontFamilyChange={setFontFamily} onFontSizeChange={value=>setFontSize(Math.max(10,Math.min(24,value)))}
       onResetEditor={()=>{setFontFamily(DEFAULT_EDITOR_FONT);setFontSize(14);}}/>:<>
     <main className="main">
       {error&&<div className="error-banner" role="alert"><span>{error}</span><button className="icon-button"
         aria-label="Dismiss error" onClick={()=>setError('')}><Icon name="close" size={14}/></button></div>}
       {projects.length>0&&<>
-        {!mixed&&<div className="project-bar"><div className="project-tabs" aria-label="Project tabs">
+        {!mixed&&!(hideSingleProjectTabs&&projects.length===1)&&<div className="project-bar"><div className="project-tabs" aria-label="Project tabs">
           {projects.map(project=><button key={project.id} className={'project-tab '+(project.id===projectId?'active':'')}
             aria-pressed={project.id===projectId} onClick={()=>selectProject(project.id)}>
             <Icon name="folder" size={14}/><span>{project.name}</span>
@@ -264,7 +273,8 @@ export default function App(){
             setReviewFilter(current=>current==='all'||current===activeFile.project.id?current:activeFile.project.id);
             setReviewSelected(activeFile.id);
             setReviewReveal(current=>({fileId:activeFile.id,itemId,token:(current?.token??0)+1}));
-          }} revealLine={reveal?.id===activeFile.id?reveal.line:undefined}
+          }} expandedRecords={expandedReviewRecords} onToggleReviewPreview={toggleReviewPreview}
+          revealLine={reveal?.id===activeFile.id?reveal.line:undefined}
           fontFamily={fontFamily.trim()||DEFAULT_EDITOR_FONT} fontSize={fontSize}/></div>
         <footer className="status-bar"><span>{activeFile.dirty?'Unsaved':'Saved'}
           {activeFile.computing?' · Updating diff…':''}</span>

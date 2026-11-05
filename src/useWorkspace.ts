@@ -15,6 +15,7 @@ export function useWorkspace(onError: (message: string) => void) {
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const [documents, setDocuments] = useState<OpenFile[]>([]);
   const [statuses, setStatuses] = useState<Record<string, ProjectStatus>>({});
+  const [projectsLoaded,setProjectsLoaded]=useState(false);
   const [tick, setTick] = useState(0);
   const refreshTasks = useRef(new Map<string, Promise<void>>());
   const refreshAgain = useRef(new Set<string>());
@@ -364,7 +365,7 @@ export function useWorkspace(onError: (message: string) => void) {
       if(!live) return;
       projectRef.current=items;setProjects(items);
       items.forEach(project=>void refreshRef.current(project));
-    }).catch(error=>onError(errorMessage(error)));
+    }).catch(error=>onError(errorMessage(error))).finally(()=>{if(live)setProjectsLoaded(true);});
     const refreshAll = () => projectRef.current.forEach(project=>void refreshRef.current(project));
     const unsubscribe=window.revu.onProjectChanged(projectId=>{
       const project=projectRef.current.find(p=>p.id===projectId);
@@ -374,5 +375,5 @@ export function useWorkspace(onError: (message: string) => void) {
     return ()=>{live=false;unsubscribe();window.removeEventListener('focus',refreshAll);};
   },[onError]);
 
-  return { projects, documents, statuses, tick, load, addProject, removeProject, save, act, bulk, bulkFile, refresh };
+  return { projects, projectsLoaded, documents, statuses, tick, load, addProject, removeProject, save, act, bulk, bulkFile, refresh };
 }

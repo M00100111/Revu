@@ -5,7 +5,6 @@ import { reviewItems, ReviewActions, type ActionHandler } from './ReviewActions'
 import ResizeHandle from './ResizeHandle';
 import ProjectDropdown from './ProjectDropdown';
 import Icon from './Icon';
-import DiffPreview from './DiffPreview';
 
 interface ReviewFileRow {project:Project;status?:ChangeFile;file?:OpenFile;path:string}
 const MIN_DETAIL_HEIGHT=120;
@@ -18,10 +17,11 @@ const savedChangesHeight=()=>{
   return Number.isFinite(value)&&value>=MIN_CHANGES_HEIGHT?value:null;
 };
 
-export default function ReviewDashboard({projects,documents,statuses,filter,selected,revealTarget,width,onResize,onOpen,onAction,onBulk,onFileBulk,onFilterChange,onSelectedChange,split,onSplitChange,chunkWidth,onChunkResize}:{
+export default function ReviewDashboard({projects,documents,statuses,filter,selected,revealTarget,expandedRecords,onToggleReviewPreview,width,onResize,onOpen,onAction,onBulk,onFileBulk,onFilterChange,onSelectedChange,split,onSplitChange,chunkWidth,onChunkResize}:{
   projects:Project[];documents:OpenFile[];statuses:Record<string,ProjectStatus>;
   filter:string;selected:string;
   revealTarget:{fileId:string;itemId:string;token:number}|null;
+  expandedRecords:ReadonlySet<string>;onToggleReviewPreview:(file:OpenFile,itemId:string,line:number)=>void;
   width:number;onResize:(width:number)=>void;onOpen:(project:Project,path:string,line?:number)=>void;
   onAction:ActionHandler;onBulk:(projectIds:string[],action:ReviewBulkAction)=>void;
   onFileBulk:(file:OpenFile,action:ReviewBulkAction)=>void;
@@ -29,7 +29,6 @@ export default function ReviewDashboard({projects,documents,statuses,filter,sele
   split:boolean;onSplitChange:(split:boolean)=>void;chunkWidth:number;onChunkResize:(width:number)=>void;
 }){
   const [changesHeight,setChangesHeight]=useState<number|null>(savedChangesHeight);
-  const [expandedRecords,setExpandedRecords]=useState<Set<string>>(()=>new Set());
   const dashboardRef=useRef<HTMLElement|null>(null);
   const changesRef=useRef<HTMLElement|null>(null);
   const chunkRefs=useRef(new Map<string,HTMLDivElement>());
@@ -110,18 +109,13 @@ export default function ReviewDashboard({projects,documents,statuses,filter,sele
             return <div className={'dashboard-chunk '+(active?'active':'')} key={item.id}
               ref={node=>{if(node)chunkRefs.current.set(item.id,node);else chunkRefs.current.delete(item.id);}}>
               <ReviewActions file={current.file!} item={item} onAction={onAction}
-                detailsExpanded={expanded} onToggleDetails={record?()=>setExpandedRecords(current=>{
-                  const next=new Set(current);if(next.has(item.id))next.delete(item.id);else next.add(item.id);return next;
-                }):undefined}
+                detailsExpanded={expanded} onToggleDetails={record?()=>onToggleReviewPreview(current.file!,item.id,item.line):undefined}
                 onReveal={()=>onOpen(current.project,current.path,item.line)}/>
-              {expanded?<div className="dashboard-expanded-preview">
-                <DiffPreview oldText={item.oldText} newText={item.newText}
-                  highlightChanges={item.kind==='modify'}/>
-              </div>:<button className="chunk-preview" title="Go to code"
+              <button className="chunk-preview" title="Go to code"
                 onClick={()=>onOpen(current.project,current.path,item.line)}>
                 <span className="removed">{item.oldText?'- '+item.oldText.split(/\r?\n/)[0]:''}</span>
                 <span className="added">{item.newText?'+ '+item.newText.split(/\r?\n/)[0]:''}</span>
-              </button>}
+              </button>
             </div>;
           })}
         </>}
