@@ -7,11 +7,13 @@ import { monaco, type OpenFile } from './editor';
 import { reviewItems, ReviewActions, type ActionHandler } from './ReviewActions';
 import DiffPreview from './DiffPreview';
 
-export default function EditorArea({file,dark,editorRef,tick,onAction,onReviewReveal,expandedRecords,onToggleReviewPreview,revealLine,fontFamily,fontSize}:{
+const EDITOR_FONT="'Cascadia Code', Consolas, 'Courier New', monospace";
+
+export default function EditorArea({file,dark,editorRef,tick,onAction,onReviewReveal,expandedRecords,onToggleReviewPreview,revealLine,fontSize}:{
   file:OpenFile;dark:boolean;editorRef:MutableRefObject<monaco.editor.IStandaloneCodeEditor|null>;
   tick:number;onAction:ActionHandler;onReviewReveal:(itemId:string)=>void;
   expandedRecords:ReadonlySet<string>;onToggleReviewPreview:(itemId:string)=>void;
-  revealLine?:number;fontFamily:string;fontSize:number;
+  revealLine?:number;fontSize:number;
 }){
   const [editor,setEditor]=useState<monaco.editor.IStandaloneCodeEditor|null>(null);
   const [portals,setPortals]=useState<{toolbarNode:HTMLElement;previewNode?:HTMLElement;item:Chunk|ReviewRecord}[]>([]);
@@ -126,7 +128,7 @@ export default function EditorArea({file,dark,editorRef,tick,onAction,onReviewRe
     onMount={instance=>{editorRef.current=instance;setEditor(instance);}}
     loading={<div className="editor-loading">Opening editor…</div>}
     options={{
-      automaticLayout:true,fontFamily,fontSize,lineHeight:editorLineHeight,padding:{top:0,bottom:24},minimap:{enabled:false},
+      automaticLayout:true,fontFamily:EDITOR_FONT,fontSize,lineHeight:editorLineHeight,padding:{top:0,bottom:24},minimap:{enabled:false},
       scrollBeyondLastLine:false,smoothScrolling:true,renderLineHighlight:'line',
       overviewRulerLanes:0,hideCursorInOverviewRuler:true,lineNumbersMinChars:4,
       glyphMargin:false,folding:true,tabSize:2,stickyScroll:{enabled:false},

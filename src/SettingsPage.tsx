@@ -1,7 +1,26 @@
+import { useEffect, useState } from 'react';
 import ResizeHandle from './ResizeHandle';
 import type { FileTabOverflow } from './tabLayout';
 
-export type SettingsCategory='interaction'|'editor'|'appearance'|'activity-bar';
+export type SettingsCategory='interaction'|'editor'|'review'|'appearance'|'activity-bar';
+export type ReviewFileLabels='name'|'path';
+
+function FontSizeSetting({fontSize,onChange}:{fontSize:number;onChange:(value:number)=>void}){
+  const [draft,setDraft]=useState(String(fontSize));
+  useEffect(()=>setDraft(String(fontSize)),[fontSize]);
+  const commit=()=>{
+    const value=Number(draft);
+    if(!/^\d+$/.test(draft)||!Number.isInteger(value)||value<10||value>24){
+      setDraft(String(fontSize));return;
+    }
+    onChange(value);setDraft(String(value));
+  };
+  return <input className="setting-number-input" type="text" inputMode="numeric" value={draft}
+    aria-label="Font size" onChange={event=>{if(/^\d{0,2}$/.test(event.target.value))setDraft(event.target.value);}}
+    onBlur={commit} onKeyDown={event=>{
+      if(event.key==='Enter'){event.preventDefault();event.currentTarget.blur();}
+    }}/>;
+}
 
 export function SettingsSidebar({width,onResize,category,onCategoryChange}:{
   width:number;onResize:(width:number)=>void;category:SettingsCategory;
@@ -12,6 +31,7 @@ export function SettingsSidebar({width,onResize,category,onCategoryChange}:{
     <nav className="settings-categories" aria-label="Settings categories">
       <button className={category==='interaction'?'active':''} onClick={()=>onCategoryChange('interaction')}>Interaction</button>
       <button className={category==='editor'?'active':''} onClick={()=>onCategoryChange('editor')}>Editor</button>
+      <button className={category==='review'?'active':''} onClick={()=>onCategoryChange('review')}>Review</button>
       <button className={category==='appearance'?'active':''} onClick={()=>onCategoryChange('appearance')}>Appearance</button>
       <button className={category==='activity-bar'?'active':''} onClick={()=>onCategoryChange('activity-bar')}>Activity Bar</button>
     </nav>
@@ -19,14 +39,15 @@ export function SettingsSidebar({width,onResize,category,onCategoryChange}:{
   </aside>;
 }
 
-export default function SettingsPage({category,syncWidths,onChange,mixed,onModeChange,hideSingleProjectTabs,onHideSingleProjectTabsChange,fontFamily,fontSize,
-  onFontFamilyChange,onFontSizeChange,onResetEditor,fileTabOverflow,onFileTabOverflowChange,dark,onThemeChange,
+export default function SettingsPage({category,syncWidths,onChange,mixed,onModeChange,hideSingleProjectTabs,onHideSingleProjectTabsChange,fontSize,
+  onFontSizeChange,onResetEditor,fileTabOverflow,onFileTabOverflowChange,reviewFileLabels,onReviewFileLabelsChange,dark,onThemeChange,
   showThemeSwitcher,onShowThemeSwitcherChange}:{
   category:SettingsCategory;syncWidths:boolean;onChange:(value:boolean)=>void;
   mixed:boolean;onModeChange:(mixed:boolean)=>void;hideSingleProjectTabs:boolean;
-  onHideSingleProjectTabsChange:(value:boolean)=>void;fontFamily:string;fontSize:number;
-  onFontFamilyChange:(value:string)=>void;onFontSizeChange:(value:number)=>void;onResetEditor:()=>void;
+  onHideSingleProjectTabsChange:(value:boolean)=>void;fontSize:number;
+  onFontSizeChange:(value:number)=>void;onResetEditor:()=>void;
   fileTabOverflow:FileTabOverflow;onFileTabOverflowChange:(value:FileTabOverflow)=>void;
+  reviewFileLabels:ReviewFileLabels;onReviewFileLabelsChange:(value:ReviewFileLabels)=>void;
   dark:boolean;onThemeChange:(dark:boolean)=>void;showThemeSwitcher:boolean;onShowThemeSwitcherChange:(value:boolean)=>void;
 }){
   return <main className="main settings-main">
@@ -61,16 +82,21 @@ export default function SettingsPage({category,syncWidths,onChange,mixed,onModeC
       </>:category==='editor'?<>
         <div className="settings-title-row"><h1>Editor</h1><button onClick={onResetEditor}>Reset</button></div>
         <label className="setting-row">
-          <span><strong>Font family</strong><small>Use a CSS font family or fallback list for code.</small></span>
-          <input className="setting-text-input" value={fontFamily}
-            onChange={event=>onFontFamilyChange(event.target.value)} spellCheck={false}/>
-        </label>
-        <label className="setting-row">
           <span><strong>Font size</strong><small>Set the editor font size from 10 to 24 pixels.</small></span>
-          <input className="setting-number-input" type="number" min={10} max={24} step={1} value={fontSize}
-            onChange={event=>{const value=Number(event.target.value);if(Number.isFinite(value))onFontSizeChange(value);}}/>
+          <FontSizeSetting fontSize={fontSize} onChange={onFontSizeChange}/>
         </label>
-        <div className="font-preview" style={{fontFamily,fontSize}}>const preview = 'Revu';</div>
+        <div className="font-preview" style={{fontSize}}>const preview = 'Revu';</div>
+      </>:category==='review'?<>
+        <h1>Review</h1>
+        <div className="setting-row">
+          <span><strong>Changed file labels</strong><small>Choose how changed files are labeled in Review.</small></span>
+          <div className="setting-options" role="group" aria-label="Changed file labels">
+            <button className={reviewFileLabels==='name'?'active':''}
+              onClick={()=>onReviewFileLabelsChange('name')}>File name only</button>
+            <button className={reviewFileLabels==='path'?'active':''}
+              onClick={()=>onReviewFileLabelsChange('path')}>Relative path</button>
+          </div>
+        </div>
       </>:category==='appearance'?<>
         <h1>Appearance</h1>
         <div className="setting-row">

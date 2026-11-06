@@ -5,6 +5,7 @@ import { reviewItems, ReviewActions, type ActionHandler } from './ReviewActions'
 import ResizeHandle from './ResizeHandle';
 import ProjectDropdown from './ProjectDropdown';
 import Icon from './Icon';
+import type { ReviewFileLabels } from './SettingsPage';
 
 interface ReviewFileRow {project:Project;status?:ChangeFile;file?:OpenFile;path:string}
 const MIN_DETAIL_HEIGHT=120;
@@ -12,13 +13,14 @@ const MIN_CHANGES_HEIGHT=160;
 const REVIEW_HEADER_HEIGHT=54;
 const REVIEW_RESIZE_HEIGHT=6;
 const firstPreviewLine=(text:string)=>text.split(/\r?\n/).find(line=>line.trim().length>0)??'';
+const displayPath=(path:string,labels:ReviewFileLabels)=>labels==='name'?path.split(/[\\/]/).pop()??path:path;
 
 const savedChangesHeight=()=>{
   const value=Number(localStorage.getItem('revu-review-changes-height'));
   return Number.isFinite(value)&&value>=MIN_CHANGES_HEIGHT?value:null;
 };
 
-export default function ReviewDashboard({projects,documents,statuses,filter,selected,revealTarget,expandedRecords,onToggleReviewPreview,width,onResize,onOpen,onAction,onBulk,onFileBulk,onFilterChange,onSelectedChange,split,onSplitChange,chunkWidth,onChunkResize}:{
+export default function ReviewDashboard({projects,documents,statuses,filter,selected,revealTarget,expandedRecords,onToggleReviewPreview,width,onResize,onOpen,onAction,onBulk,onFileBulk,onFilterChange,onSelectedChange,split,onSplitChange,chunkWidth,onChunkResize,fileLabels}:{
   projects:Project[];documents:OpenFile[];statuses:Record<string,ProjectStatus>;
   filter:string;selected:string;
   revealTarget:{fileId:string;itemId:string;token:number}|null;
@@ -28,6 +30,7 @@ export default function ReviewDashboard({projects,documents,statuses,filter,sele
   onFileBulk:(file:OpenFile,action:ReviewBulkAction)=>void;
   onFilterChange:(filter:string)=>void;onSelectedChange:(selected:string)=>void;
   split:boolean;onSplitChange:(split:boolean)=>void;chunkWidth:number;onChunkResize:(width:number)=>void;
+  fileLabels:ReviewFileLabels;
 }){
   const [changesHeight,setChangesHeight]=useState<number|null>(savedChangesHeight);
   const dashboardRef=useRef<HTMLElement|null>(null);
@@ -80,7 +83,7 @@ export default function ReviewDashboard({projects,documents,statuses,filter,sele
     const unavailable=!file||file.computing||file.syncing||file.saving||!!(file.syncError||file.diffError||file.reason);
     const open=()=>{onSelectedChange(key);if(!(row.status?.reason&&!row.file))onOpen(row.project,row.path);};
     return <div key={key} className={'review-file-row '+(selected===key?'active':'')}>
-      <button className={'review-file-name '+nameClass} title={row.path} onClick={open}>{row.path}</button>
+      <button className={'review-file-name '+nameClass} title={row.path} onClick={open}>{displayPath(row.path,fileLabels)}</button>
       <div className="review-file-actions">
         <button className="action-accept" disabled={unavailable||!file?.chunks.length}
           onClick={()=>file&&onFileBulk(file,'accept')}>Accept</button>
@@ -97,7 +100,7 @@ export default function ReviewDashboard({projects,documents,statuses,filter,sele
   };
   const detail=<section className="review-detail">
         {!current?<p className="sidebar-empty">Select a changed file</p>:<>
-          <div className="review-detail-heading"><strong title={current.path}>{current.path}</strong>
+          <div className="review-detail-heading"><strong title={current.path}>{displayPath(current.path,fileLabels)}</strong>
             <span>{currentItems.length} chunk{currentItems.length===1?'':'s'}</span></div>
           {(current.status?.reason||current.file?.reason)&&
             <p className="review-warning">{current.status?.reason||current.file?.reason}</p>}

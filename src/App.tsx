@@ -8,7 +8,7 @@ import Icon from './Icon';
 import Sidebar, { type Panel } from './Sidebar';
 import TabBar, { type TabContextAction } from './TabBar';
 import ReviewDashboard from './ReviewDashboard';
-import SettingsPage, { SettingsSidebar, type SettingsCategory } from './SettingsPage';
+import SettingsPage, { SettingsSidebar, type ReviewFileLabels, type SettingsCategory } from './SettingsPage';
 import WindowControls from './WindowControls';
 import NotificationCenter, { type AppNotification, type NotificationLevel } from './NotificationCenter';
 import { defaultTabExpansion, type FileTabExpansion, type FileTabOverflow } from './tabLayout';
@@ -23,7 +23,6 @@ const savedStringSet=(key:string)=>{
     return new Set<string>(Array.isArray(value)?value.filter((item:unknown)=>typeof item==='string'):[]);
   }catch{return new Set<string>();}
 };
-const DEFAULT_EDITOR_FONT="'Cascadia Code', Consolas, 'Courier New', monospace";
 const savedFontSize=()=>{
   const value=Number(localStorage.getItem('revu-editor-font-size'));
   return Number.isFinite(value)&&value>=10&&value<=24?value:14;
@@ -50,8 +49,9 @@ export default function App(){
     localStorage.getItem('revu-file-tab-overflow')==='wrap'?'wrap':'scroll'));
   const [hideSingleProjectTabs,setHideSingleProjectTabs]=useState(()=>localStorage.getItem('revu-hide-single-project-tabs')==='true');
   const [settingsCategory,setSettingsCategory]=useState<SettingsCategory>('interaction');
-  const [fontFamily,setFontFamily]=useState(()=>localStorage.getItem('revu-editor-font-family')||DEFAULT_EDITOR_FONT);
   const [fontSize,setFontSize]=useState(savedFontSize);
+  const [reviewFileLabels,setReviewFileLabels]=useState<ReviewFileLabels>(()=>
+    localStorage.getItem('revu-review-file-labels')==='name'?'name':'path');
   const [notifications,setNotifications]=useState<AppNotification[]>([]);
   const [notificationsOpen,setNotificationsOpen]=useState(false);
   const [picking,setPicking]=useState(false);
@@ -135,15 +135,14 @@ export default function App(){
     localStorage.setItem('revu-expanded-directories',JSON.stringify([...expandedDirectories]));
   },[expandedDirectories]);
   useEffect(()=>{
-    const family=fontFamily.trim()||DEFAULT_EDITOR_FONT;
     const size=Math.max(10,Math.min(24,fontSize));
     const lineHeight=Math.round(size*12/7);
-    localStorage.setItem('revu-editor-font-family',fontFamily);
+    localStorage.removeItem('revu-editor-font-family');
     localStorage.setItem('revu-editor-font-size',String(size));
-    document.documentElement.style.setProperty('--editor-font-family',family);
     document.documentElement.style.setProperty('--editor-font-size',size+'px');
     document.documentElement.style.setProperty('--editor-line-height',lineHeight+'px');
-  },[fontFamily,fontSize]);
+  },[fontSize]);
+  useEffect(()=>localStorage.setItem('revu-review-file-labels',reviewFileLabels),[reviewFileLabels]);
   useEffect(()=>{window.revu.setDirty(documents.some(file=>file.dirty));},[documents]);
   useEffect(()=>{
     const live=new Set(documents.map(file=>file.id));
@@ -290,15 +289,15 @@ export default function App(){
       width={sidebarWidth} onResize={resizeSidebar} onOpen={openFile} onAction={workspace.act}
       onBulk={workspace.bulk} onFileBulk={workspace.bulkFile}
       split={reviewSplit} onSplitChange={setReviewSplit}
-      chunkWidth={reviewChunkWidth} onChunkResize={setReviewChunkWidth}/>}
+      chunkWidth={reviewChunkWidth} onChunkResize={setReviewChunkWidth} fileLabels={reviewFileLabels}/>}
     {panel==='settings'&&<SettingsSidebar width={sidebarWidth} onResize={resizeSidebar}
       category={settingsCategory} onCategoryChange={setSettingsCategory}/>}
     {panel==='settings'?<SettingsPage category={settingsCategory} syncWidths={syncWidths} onChange={changeWidthSync}
       mixed={mixed} onModeChange={setMixed} hideSingleProjectTabs={hideSingleProjectTabs}
-      onHideSingleProjectTabsChange={setHideSingleProjectTabs} fontFamily={fontFamily} fontSize={fontSize}
-      onFontFamilyChange={setFontFamily} onFontSizeChange={value=>setFontSize(Math.max(10,Math.min(24,value)))}
-      onResetEditor={()=>{setFontFamily(DEFAULT_EDITOR_FONT);setFontSize(14);}}
+      onHideSingleProjectTabsChange={setHideSingleProjectTabs} fontSize={fontSize}
+      onFontSizeChange={setFontSize} onResetEditor={()=>setFontSize(14)}
       fileTabOverflow={fileTabOverflow} onFileTabOverflowChange={setFileTabOverflow}
+      reviewFileLabels={reviewFileLabels} onReviewFileLabelsChange={setReviewFileLabels}
       dark={dark} onThemeChange={setDark} showThemeSwitcher={showThemeSwitcher}
       onShowThemeSwitcherChange={setShowThemeSwitcher}/>:<>
     <main className="main">
@@ -326,7 +325,7 @@ export default function App(){
             setReviewReveal(current=>({fileId:activeFile.id,itemId,token:(current?.token??0)+1}));
           }} expandedRecords={expandedReviewRecords} onToggleReviewPreview={toggleReviewPreview}
           revealLine={reveal?.id===activeFile.id?reveal.line:undefined}
-          fontFamily={fontFamily.trim()||DEFAULT_EDITOR_FONT} fontSize={fontSize}/></div>
+          fontSize={fontSize}/></div>
         <footer className="status-bar"><span>{activeFile.dirty?'Unsaved':'Saved'}
           {activeFile.computing?' · Updating diff…':''}</span>
           <span>{activeFile.model.getLanguageId()}<span className="status-divider">UTF-8{activeFile.synced.bom?' BOM':''}</span></span></footer>
