@@ -79,7 +79,7 @@ export default function FileSidebar({width,projects,projectsLoaded,openFiles,act
     <summary className="workspace-name" draggable onDragStart={event=>beginDrag(event,OPEN_EDITORS_KEY)}
       onDragOver={event=>dragOver(event,OPEN_EDITORS_KEY)} onDrop={event=>finishDrop(event,OPEN_EDITORS_KEY)}
       onDragEnd={()=>{setDragged(null);setDrop(null);}}>
-      <Icon name="chevron" size={12}/><Icon name="file" size={15}/><span>Open Editors</span>
+      <Icon name="down" size={12}/><Icon name="file" size={15}/><span>Open Editors</span>
     </summary>{openEditorsContent()}
   </details>;
   const projectEntry=(project:Project)=><details className={dragClass(project.root)+' project-tree'} key={project.root}
@@ -90,7 +90,7 @@ export default function FileSidebar({width,projects,projectsLoaded,openFiles,act
       onDragOver={event=>dragOver(event,project.root)} onDrop={event=>finishDrop(event,project.root)}
       onContextMenu={async event=>{
         event.preventDefault();if(await window.revu.contextMenu('project')==='close')onCloseProject(project);
-      }}><Icon name="chevron" size={12}/><Icon name="folder" size={15}/><span>{project.name}</span></summary>
+      }}><Icon name="down" size={12}/><Icon name="folder" size={15}/><span>{project.name}</span></summary>
     <FileTree projectId={project.id} projectRoot={project.root}
       activePath={activeFile?.project.id===project.id?activeFile.path:null}
       onOpen={path=>onOpenFile(project,path)} onError={onError}

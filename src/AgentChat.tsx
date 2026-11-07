@@ -116,7 +116,7 @@ function AgentSelect({value,groups,placeholder,onChange,disabled=false,placement
     onBlur={event=>{const next=event.relatedTarget as Node|null;if(!root.current?.contains(next)&&!menu.current?.contains(next))setOpen(false);}}
     onKeyDownCapture={event=>{if(event.key==='Escape')setOpen(false);}}><button type="button" className="agent-select-trigger" disabled={disabled}
     aria-haspopup="listbox" aria-expanded={open} onClick={()=>setOpen(current=>!current)} onKeyDown={keyDown}>
-    <span className={selected?'':'placeholder'}>{selected?.label??placeholder}</span><Icon name="chevron" size={12}/></button>
+    <span className={selected?'':'placeholder'}>{selected?.label??placeholder}</span><Icon name="down" size={12}/></button>
     {open&&createPortal(<div ref={menu} style={menuStyle} className="agent-select-menu" role="listbox">{groups.map((group,index)=><section key={group.label??index}>
       {group.label&&<strong>{group.label}</strong>}{group.options.map(option=><button type="button" role="option" aria-selected={option.value===value}
         className={option.value===value?'selected':''} key={option.value} onClick={()=>choose(option.value)}><span>{option.label}</span>{option.value===value&&<i>✓</i>}</button>)}</section>)}</div>,document.body)}
@@ -448,7 +448,7 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
     <aside className={'agent-chat '+(open?'open':'')} style={{width:open?width:0}} aria-hidden={!open}>
       <div className="agent-resize-handle" onPointerDown={beginResize}/>
       <header className="agent-chat-header"><button className="agent-project-trigger" disabled={!projects.length} onClick={()=>setSessionDialog(true)}>
-        <span>{selectedProject?.name??'No Project'}</span><Icon name="chevron" size={11}/></button>
+        <span>{selectedProject?.name??'No Project'}</span><Icon name="down" size={11}/></button>
         <div className="agent-session-tabs" role="tablist" aria-label="Open chats">{sessionTabs.map(sessionId=>{
           const summary=(sessions[selectedProjectId]??[]).find(item=>item.id===sessionId);const chat=chats[sessionId];const active=selectedSessionId===sessionId;return <div ref={active?activeSessionTabRef:undefined} className={'agent-session-tab '+(active?'active':'')} key={sessionId}>
             <button role="tab" aria-selected={selectedSessionId===sessionId} title={titleFor(summary,chat)} onClick={()=>void openSessionById(selectedProjectId,sessionId)}>{titleFor(summary,chat)}</button>
@@ -457,7 +457,7 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
           {!selectedSessionId&&selectedProjectId&&<div ref={activeSessionTabRef} className="agent-session-tab active new"><button role="tab" aria-selected="true">New Chat</button>
             {!!sessionTabs.length&&<button className="agent-session-tab-close" title="Close Chat" aria-label="Close New Chat" onClick={closeNewChatTab}><Icon name="close" size={10}/></button>}</div>}
         </div>
-        <button className="agent-icon-button agent-new-chat" title="New Chat" disabled={!selectedProjectId||loading} onClick={startNewChat}><Icon name="plus" size={15}/></button></header>
+        <button className="agent-icon-button agent-new-chat" title="New Chat" disabled={!selectedProjectId||loading} onClick={startNewChat}><Icon name="add" size={15}/></button></header>
       <div className="agent-chat-content" ref={chatContentRef}>
         <nav className="agent-run-rail" aria-label="Runs"><div>{runs.map((run,index)=><button key={run.key}
           className={run.key===activeRunKey?'active':''} aria-label={`Go to run ${index+1}`}
@@ -468,7 +468,7 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
         :!current?null
         :<>{runs.map(run=><section className="agent-run" key={run.key} ref={element=>{if(element)runRefs.current.set(run.key,element);else runRefs.current.delete(run.key);}}>
           {run.user&&<article className="agent-message user"><div>{run.user}</div></article>}
-          {!!run.items.length&&<div className="agent-response"><span className="agent-role">Pi</span>{run.items.map(part=>part.type==='answer'
+          {!!run.items.length&&<div className="agent-response"><span className="agent-role" role="img" aria-label="Pi"><Icon name="pi" size={16}/></span>{run.items.map(part=>part.type==='answer'
             ?<div className={'agent-answer '+(part.streaming?'streaming':'')} key={part.key}>{part.text}</div>
             :part.type==='thinking'?<details className="agent-thinking" key={part.key} open={part.streaming||undefined} onToggle={()=>requestAnimationFrame(updateRunRail)}><summary title="Toggle thought process"><Icon name="think" size={14}/><span>Thought process</span></summary><div>{part.text}</div></details>
             :part.tool&&<details className={`agent-tool ${part.tool.status}`} key={part.key} onToggle={()=>requestAnimationFrame(updateRunRail)}><summary><span>{part.tool.name}</span><small>{part.tool.status}</small></summary>
@@ -477,6 +477,7 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
               <button type="button" disabled title="Copy · Coming soon" aria-label="Copy · Coming soon"><Icon name="copy" size={14}/></button>
               <button type="button" disabled title="Fork · Coming soon" aria-label="Fork · Coming soon"><Icon name="fork" size={14}/></button>
               <button type="button" disabled title="Format · Coming soon" aria-label="Format · Coming soon"><Icon name="format" size={14}/></button>
+              <button type="button" disabled title="More · Coming soon" aria-label="More · Coming soon"><Icon name="more" size={14}/></button>
             </div></div>}
         </section>)}
           {current.error&&<div className="agent-inline-error">{current.error}</div>}</>}
@@ -490,7 +491,7 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
         <footer><div className="agent-model-control" ref={modelControlRef}
             onBlur={event=>{const next=event.relatedTarget as Node|null;if(!event.currentTarget.contains(next)&&!modelMenuRef.current?.contains(next))setModelMenu(false);}}><button className="agent-footer-select-trigger"
               aria-haspopup="listbox" aria-expanded={modelMenu} disabled={!selectedProjectId||current?.status==='running'} onClick={()=>modelMenu?setModelMenu(false):void loadModels()}>
-          {selectedModel?`${selectedModel.id} · ${selectedThinking}`:'Select Model'}<Icon name="chevron" size={11}/></button></div>
+          {selectedModel?`${selectedModel.id} · ${selectedThinking}`:'Select Model'}<Icon name="down" size={11}/></button></div>
           {current?.status==='running'||current?.status==='stopping'?<button className="agent-send stop" onClick={()=>void stop()}><Icon name="stop" size={14}/>Stop</button>
             :<button className="agent-send" disabled={!selectedProjectId||!selectedModel||!draft.trim()||dirty} onClick={()=>void send()}><Icon name="send" size={14}/>Send</button>}</footer>
       </div>

@@ -49,7 +49,7 @@ export default function TabBar({ files, activeId, onSelect, onClose, onContextAc
         onContextMenu={async event=>{event.preventDefault();const action=await window.revu.contextMenu('tab');if(action)onContextAction(file,action);}}>
         <button className="tab-select" title={file.project.name + '/' + file.path}
           aria-pressed={file.id === activeId} onClick={() => onSelect(file)}>
-          <Icon name="file" size={14} /><span>{file.name}</span>
+          <Icon name="editorDocument" size={14} /><span>{file.name}</span>
           {mixed && <small className="tab-project">{file.project.name}</small>}
         </button>
         <button className={'tab-close ' + (file.dirty ? 'dirty' : '')}
@@ -61,7 +61,7 @@ export default function TabBar({ files, activeId, onSelect, onClose, onContextAc
     </div>
     {showToggle&&<button className="tab-wrap-toggle" title={toggleTitle} aria-label={toggleTitle}
       onClick={()=>onExpansionChange(nextTabExpansion(overflowMode,expansion,metrics.rows))}>
-      <Icon name="chevron" size={14} style={{transform:expansion==='all'?'rotate(-90deg)':'rotate(90deg)'}}/>
+      <Icon name="more" size={14}/>
     </button>}
   </div>;
 }

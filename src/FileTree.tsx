@@ -41,7 +41,7 @@ function Directory(props:Props & {name:string;path:string;depth:number}){
   const expanded=props.expandedDirectories.has(key);
   return <li><button className="tree-row directory-row" style={{paddingLeft:8+props.depth*14}}
     aria-expanded={expanded} onClick={()=>props.onDirectoryToggle(key)}>
-    <Icon name="chevron" size={12} style={{transform:expanded?'rotate(90deg)':undefined}}/>
+    <Icon name="down" size={12} style={{transform:expanded?undefined:'rotate(-90deg)'}}/>
     <Icon name="folder" size={15}/><span>{props.name}</span>
   </button>{expanded&&<FileTree {...props} depth={props.depth+1}/>}</li>;
 }

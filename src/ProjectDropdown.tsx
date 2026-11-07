@@ -18,7 +18,7 @@ export default function ProjectDropdown({projects,value,onChange}:{
   const choose=(next:string)=>{onChange(next);setOpen(false);};
   return <div className="project-dropdown" ref={root}>
     <button className="project-dropdown-trigger" aria-haspopup="listbox" aria-expanded={open} onClick={()=>setOpen(!open)}>
-      <span>{label}</span><Icon name="chevron" size={11}/>
+      <span>{label}</span><Icon name="down" size={11}/>
     </button>
     {open&&<div className="project-dropdown-menu" role="listbox" aria-label="Review project">
       <button className={value==='all'?'selected':''} role="option" aria-selected={value==='all'} onClick={()=>choose('all')}>All Projects</button>
