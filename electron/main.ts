@@ -87,6 +87,8 @@ async function invokeAgent(body:PiAgentRequest){
     case 'closeProject':return piManager.closeProject(body.projectId);
     case 'prompt':return piManager.prompt(body.projectId,body.sessionId,body.text);
     case 'stop':return piManager.stop(body.projectId,body.sessionId);
+    case 'compact':return piManager.compact(body.projectId,body.sessionId);
+    case 'setAutoCompaction':return piManager.setAutoCompaction(body.projectId,body.sessionId,body.enabled);
     case 'listProviders':return piManager.listProviders();
     case 'saveApiKey':return piManager.saveApiKey(body.providerId,body.key);
     case 'removeApiKey':return piManager.removeApiKey(body.providerId);

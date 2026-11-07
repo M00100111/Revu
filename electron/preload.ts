@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { PiAgentRequest, PiModelDefaults, PiModelSummary, PiProviderStatus, PiSessionSnapshot, PiSessionSummary, PiThinkingLevel, RevuPiEvent } from '../shared/piTypes';
+import type { PiAgentRequest, PiCompactionResponse, PiModelDefaults, PiModelSummary, PiProviderStatus, PiSessionSnapshot, PiSessionSummary, PiThinkingLevel, RevuPiEvent } from '../shared/piTypes';
 
 const agentInvoke=<T>(body:PiAgentRequest)=>ipcRenderer.invoke('revu:agent',body) as Promise<{ok:boolean;value?:T;error?:string}>;
 
@@ -26,6 +26,9 @@ contextBridge.exposeInMainWorld('revu',{
     deleteSession:(projectId:string,sessionId:string)=>agentInvoke<void>({action:'deleteSession',projectId,sessionId}),
     prompt:(projectId:string,sessionId:string,text:string)=>agentInvoke<void>({action:'prompt',projectId,sessionId,text}),
     stop:(projectId:string,sessionId:string)=>agentInvoke<void>({action:'stop',projectId,sessionId}),
+    compact:(projectId:string,sessionId:string)=>agentInvoke<PiCompactionResponse>({action:'compact',projectId,sessionId}),
+    setAutoCompaction:(projectId:string,sessionId:string,enabled:boolean)=>
+      agentInvoke<PiSessionSnapshot>({action:'setAutoCompaction',projectId,sessionId,enabled}),
     listProviders:()=>agentInvoke<PiProviderStatus[]>({action:'listProviders'}),
     saveApiKey:(providerId:string,key:string)=>agentInvoke<void>({action:'saveApiKey',providerId,key}),
     removeApiKey:(providerId:string)=>agentInvoke<void>({action:'removeApiKey',providerId}),

@@ -10,9 +10,9 @@ import TabBar, { type TabContextAction } from './TabBar';
 import ReviewDashboard from './ReviewDashboard';
 import SettingsPage, { SettingsSidebar, type ReviewFileLabels, type SettingsCategory } from './SettingsPage';
 import WindowControls from './WindowControls';
-import NotificationCenter, { type AppNotification, type NotificationLevel } from './NotificationCenter';
+import NotificationCenter, { type AppNotification, type NotificationAction, type NotificationLevel } from './NotificationCenter';
 import { defaultTabExpansion, type FileTabExpansion, type FileTabOverflow } from './tabLayout';
-import AgentChat from './AgentChat';
+import AgentChat, { type AgentNavigationRequest, type AgentNotice } from './AgentChat';
 
 const savedWidth=(key:string,fallback:number)=>{
   const value=Number(localStorage.getItem(key));
@@ -56,6 +56,7 @@ export default function App(){
   const [notifications,setNotifications]=useState<AppNotification[]>([]);
   const [notificationsOpen,setNotificationsOpen]=useState(false);
   const [agentOpen,setAgentOpen]=useState(false);
+  const [agentNavigation,setAgentNavigation]=useState<AgentNavigationRequest|null>(null);
   const [agentWidth,setAgentWidth]=useState(()=>savedWidth('revu-agent-width',400));
   const [picking,setPicking]=useState(false);
   const [reveal,setReveal]=useState<{id:string;line:number}|null>(null);
@@ -67,15 +68,15 @@ export default function App(){
   const [reviewChunkWidth,setReviewChunkWidth]=useState(()=>savedWidth('revu-review-chunk-width',320));
   const [collapsedProjects,setCollapsedProjects]=useState(()=>savedStringSet('revu-collapsed-projects'));
   const [expandedDirectories,setExpandedDirectories]=useState(()=>savedStringSet('revu-expanded-directories'));
-  const notify=useCallback((level:NotificationLevel,message:string)=>{
+  const notify=useCallback((level:NotificationLevel,message:string,action?:NotificationAction)=>{
     const createdAt=Date.now();
     setNotifications(current=>{
       const duplicate=current.find(item=>item.level===level&&item.message===message&&createdAt-item.createdAt<3000);
       if(duplicate){
-        const updated={...duplicate,createdAt,read:false,toast:true,count:duplicate.count+1};
+        const updated={...duplicate,createdAt,read:false,toast:true,count:duplicate.count+1,action:action??duplicate.action};
         return [updated,...current.filter(item=>item.id!==duplicate.id)];
       }
-      return [{id:crypto.randomUUID(),level,message,createdAt,read:false,toast:true,count:1},...current];
+      return [{id:crypto.randomUUID(),level,message,createdAt,read:false,toast:true,count:1,action},...current];
     });
   },[]);
   const notifyError=useCallback((message:string)=>notify('error',message),[notify]);
@@ -83,8 +84,18 @@ export default function App(){
   const dismissToast=useCallback((id:string)=>setNotifications(current=>current.map(item=>
     item.id===id?{...item,toast:false}:item)),[]);
   const deleteNotification=useCallback((id:string)=>setNotifications(current=>current.filter(item=>item.id!==id)),[]);
-  const readNotification=useCallback((id:string)=>setNotifications(current=>current.map(item=>
-    item.id===id?{...item,read:true}:item)),[]);
+  const activateNotification=useCallback((id:string)=>{
+    const notification=notifications.find(item=>item.id===id);
+    setNotifications(current=>current.map(item=>item.id===id?{...item,read:true,toast:false}:item));
+    const action=notification?.action;
+    if(action?.type==='open-agent-session'){
+      setAgentOpen(true);setNotificationsOpen(false);
+      setAgentNavigation(current=>({projectId:action.projectId,sessionId:action.sessionId,
+        runKey:action.runKey,token:(current?.token??0)+1}));
+    }
+  },[notifications]);
+  const handleAgentNotice=useCallback((notice:AgentNotice)=>notify(notice.level,notice.message,
+    {type:'open-agent-session',projectId:notice.projectId,sessionId:notice.sessionId,runKey:notice.runKey}),[notify]);
   const readAllNotifications=useCallback(()=>setNotifications(current=>current.map(item=>
     item.read?item:{...item,read:true})),[]);
   const workspace=useWorkspace(notifyError,notifyWarning);
@@ -277,7 +288,7 @@ export default function App(){
       toggleNotifications={()=>setNotificationsOpen(open=>!open)}/>
     <NotificationCenter notifications={notifications} open={notificationsOpen}
       onClose={()=>setNotificationsOpen(false)} onDismissToast={dismissToast}
-      onDelete={deleteNotification} onRead={readNotification} onReadAll={readAllNotifications}/>
+      onDelete={deleteNotification} onActivate={activateNotification} onReadAll={readAllNotifications}/>
     {panel==='files'&&<FileSidebar width={sidebarWidth} projects={projects} projectsLoaded={projectsLoaded}
       openFiles={openFiles} activeFile={activeFile}
       mixed={mixed} picking={picking} collapsedProjects={collapsedProjects} expandedDirectories={expandedDirectories}
@@ -343,6 +354,7 @@ export default function App(){
     <AgentChat open={agentOpen} projects={projects} activeProjectId={projectId}
       dirtyProjectIds={new Set(documents.filter(file=>file.dirty).map(file=>file.project.id))}
       width={agentWidth} onResize={setAgentWidth}
-      onResizeEnd={value=>localStorage.setItem('revu-agent-width',String(value))} notify={notify}/>
+      onResizeEnd={value=>localStorage.setItem('revu-agent-width',String(value))} notify={notify}
+      navigationRequest={agentNavigation} onNotice={handleAgentNotice}/>
   </div>;
 }

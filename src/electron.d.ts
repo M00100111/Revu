@@ -1,4 +1,4 @@
-import type { PiModelDefaults, PiModelSummary, PiProviderStatus, PiSessionSnapshot, PiSessionSummary, PiThinkingLevel, RevuPiEvent } from '../shared/piTypes';
+import type { PiCompactionResponse, PiModelDefaults, PiModelSummary, PiProviderStatus, PiSessionSnapshot, PiSessionSummary, PiThinkingLevel, RevuPiEvent } from '../shared/piTypes';
 interface RevuResponse<T>{ok:boolean;value?:T;status?:number;error?:string}
 interface RevuAgentApi {
   listSessions(projectId:string):Promise<RevuResponse<PiSessionSummary[]>>;
@@ -8,6 +8,8 @@ interface RevuAgentApi {
   deleteSession(projectId:string,sessionId:string):Promise<RevuResponse<void>>;
   prompt(projectId:string,sessionId:string,text:string):Promise<RevuResponse<void>>;
   stop(projectId:string,sessionId:string):Promise<RevuResponse<void>>;
+  compact(projectId:string,sessionId:string):Promise<RevuResponse<PiCompactionResponse>>;
+  setAutoCompaction(projectId:string,sessionId:string,enabled:boolean):Promise<RevuResponse<PiSessionSnapshot>>;
   listProviders():Promise<RevuResponse<PiProviderStatus[]>>;
   saveApiKey(providerId:string,key:string):Promise<RevuResponse<void>>;
   removeApiKey(providerId:string):Promise<RevuResponse<void>>;

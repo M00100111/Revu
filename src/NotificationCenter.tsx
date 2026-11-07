@@ -2,11 +2,13 @@ import { useEffect } from 'react';
 import Icon from './Icon';
 
 export type NotificationLevel='info'|'success'|'warning'|'error';
+export interface NotificationAction {type:'open-agent-session';projectId:string;sessionId:string;runKey?:string}
 export interface AppNotification {
   id:string;level:NotificationLevel;message:string;createdAt:number;read:boolean;toast:boolean;count:number;
+  action?:NotificationAction;
 }
 
-function Toast({notification,onClose}:{notification:AppNotification;onClose:(id:string)=>void}){
+function Toast({notification,onClose,onActivate}:{notification:AppNotification;onClose:(id:string)=>void;onActivate:(id:string)=>void}){
   useEffect(()=>{
     if(notification.level!=='info'&&notification.level!=='success')return;
     const timer=setTimeout(()=>onClose(notification.id),5000);
@@ -14,16 +16,18 @@ function Toast({notification,onClose}:{notification:AppNotification;onClose:(id:
   },[notification.id,notification.createdAt,notification.level,onClose]);
   return <article className={'notification-toast '+notification.level}
     role={notification.level==='error'?'alert':'status'}>
-    <div><strong>{notification.level}</strong>{notification.count>1&&<span>×{notification.count}</span>}</div>
-    <p>{notification.message}</p>
+    <button className="notification-toast-body" onClick={()=>onActivate(notification.id)}>
+      <span><strong>{notification.level}</strong>{notification.count>1&&<i>×{notification.count}</i>}</span>
+      <p>{notification.message}</p>
+    </button>
     <button className="icon-button" title="Dismiss" aria-label="Dismiss notification"
       onClick={()=>onClose(notification.id)}><Icon name="close" size={13}/></button>
   </article>;
 }
 
-export default function NotificationCenter({notifications,open,onClose,onDismissToast,onDelete,onRead,onReadAll}:{
+export default function NotificationCenter({notifications,open,onClose,onDismissToast,onDelete,onActivate,onReadAll}:{
   notifications:AppNotification[];open:boolean;onClose:()=>void;onDismissToast:(id:string)=>void;
-  onDelete:(id:string)=>void;onRead:(id:string)=>void;onReadAll:()=>void;
+  onDelete:(id:string)=>void;onActivate:(id:string)=>void;onReadAll:()=>void;
 }){
   const toasts=notifications.filter(notification=>notification.toast);
   return <>
@@ -38,7 +42,7 @@ export default function NotificationCenter({notifications,open,onClose,onDismiss
       <div className="notification-list">
         {!notifications.length?<p className="notification-empty">No notifications</p>:notifications.map(notification=><article
           key={notification.id} className={'notification-item '+notification.level+(notification.read?' read':' unread')}>
-          <button className="notification-item-body" onClick={()=>onRead(notification.id)}>
+          <button className="notification-item-body" onClick={()=>onActivate(notification.id)}>
             <span><strong>{notification.level}</strong>{notification.count>1&&<i>×{notification.count}</i>}
               <time>{new Date(notification.createdAt).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</time></span>
             <p>{notification.message}</p>
@@ -49,7 +53,7 @@ export default function NotificationCenter({notifications,open,onClose,onDismiss
       </div>
     </section>}
     <div className="notification-toasts" aria-label="New notifications">
-      {toasts.map(notification=><Toast key={notification.id} notification={notification} onClose={onDismissToast}/>) }
+      {toasts.map(notification=><Toast key={notification.id} notification={notification} onClose={onDismissToast} onActivate={onActivate}/>) }
     </div>
   </>;
 }

@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { updateEvent, withSnapshot } from '../src/AgentChat';
+import { formatAgentTokens, formatContextPercent, updateEvent, withSnapshot } from '../src/AgentChat';
 import type { PiSessionSnapshot } from '../shared/piTypes';
+import { calculatePiCacheHitPercent, countPiSessionRuns } from '../shared/piSession';
 
 const snapshot:PiSessionSnapshot={
   sessionId:'session-a',projectId:'project-a',status:'idle',name:'Test',messages:[],
-  thinkingLevel:'medium',availableThinkingLevels:['off','medium','high'],
+  thinkingLevel:'medium',availableThinkingLevels:['off','medium','high'],autoCompactionEnabled:true,isCompacting:false,
 };
 
 test('Pi chat state builds streaming text and accepts the authoritative final message',()=>{
@@ -26,10 +27,10 @@ test('Pi chat state tracks tool execution by tool call id',()=>{
   state=updateEvent(state,{type:'tool_execution_start',toolCallId:'tool-1',toolName:'read',args:{path:'README.md'}});
   state=updateEvent(state,{type:'tool_execution_update',toolCallId:'tool-1',partialResult:{content:'partial'}});
   state=updateEvent(state,{type:'tool_execution_end',toolCallId:'tool-1',result:{content:'done',isError:false}});
-  assert.deepEqual(state.tools,[{id:'tool-1',turnKey:'turn-0',name:'read',status:'done',args:{path:'README.md'},result:{content:'done',isError:false}}]);
+  assert.deepEqual(state.tools,[{id:'tool-1',runKey:'run-0',name:'read',status:'done',args:{path:'README.md'},result:{content:'done',isError:false}}]);
 });
 
-test('Pi chat state keeps thinking separate and restores tools in their user turn',()=>{
+test('Pi chat state keeps thinking separate and restores tools in their run',()=>{
   let state=withSnapshot(snapshot);
   state=updateEvent(state,{type:'message_start',message:{role:'user',content:'Inspect this',timestamp:1}});
   state=updateEvent(state,{type:'message_start',message:{role:'assistant',content:[],timestamp:2}});
@@ -44,9 +45,26 @@ test('Pi chat state keeps thinking separate and restores tools in their user tur
   ]});
   assert.equal(restored.streamThinking,'');
   assert.deepEqual(restored.tools,[{
-    id:'tool-1',turnKey:'turn-0',name:'read',status:'done',args:{path:'README.md'},
+    id:'tool-1',runKey:'run-0',name:'read',status:'done',args:{path:'README.md'},
     result:{role:'toolResult',toolCallId:'tool-1',toolName:'read',content:[{type:'text',text:'done'}],isError:false,timestamp:3},
   }]);
+});
+
+test('Pi usage values use compact tokens and fixed context precision',()=>{
+  assert.equal(formatAgentTokens(12_400),'12.4k');
+  assert.equal(formatAgentTokens(40_000),'40k');
+  assert.equal(formatAgentTokens(2_100_000),'2.1m');
+  assert.equal(formatContextPercent(undefined),'0.00%');
+  assert.equal(formatContextPercent(8.126),'8.13%');
+  assert.equal(calculatePiCacheHitPercent(10,40,0),80);
+  assert.equal(calculatePiCacheHitPercent(0,0,0),0);
+});
+
+test('Pi session Runs count user messages on the active branch only',()=>{
+  assert.equal(countPiSessionRuns([
+    {type:'message',message:{role:'user'}},{type:'message',message:{role:'assistant'}},
+    {type:'message',message:{role:'toolResult'}},{type:'custom'},{type:'message',message:{role:'user'}},
+  ]),2);
 });
 
 test('reloading a snapshot preserves in-flight tool cards but clears stale stream text',()=>{

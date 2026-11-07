@@ -4,9 +4,10 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type {
-  PiModelDefaults,PiModelSummary,PiProviderStatus,PiRuntimeStatus,PiSessionSnapshot,
+  PiCompactionResponse,PiModelDefaults,PiModelSummary,PiProviderStatus,PiRuntimeStatus,PiSessionSnapshot,
   PiSessionSummary,PiThinkingLevel,PiUsageStats,RevuPiEvent,
 } from '../shared/piTypes';
+import { calculatePiCacheHitPercent, countPiSessionRuns } from '../shared/piSession';
 
 type PiModule=typeof import('@earendil-works/pi-coding-agent');
 type RpcClient=InstanceType<PiModule['RpcClient']>;
@@ -37,6 +38,8 @@ interface RuntimeHandle {
   sessionPath?:string;
   error?:string;
   unsubscribe:()=>void;
+  usageRefresh?:Promise<void>;
+  usageRefreshPending?:boolean;
 }
 
 interface PiManagerOptions {
@@ -45,10 +48,10 @@ interface PiManagerOptions {
 }
 
 function errorMessage(error:unknown){return error instanceof Error?error.message:String(error);}
-function asRecord(value:unknown):Record<string,unknown>{return value&&typeof value==='object'?value as Record<string,unknown>:{};}
 
 export class PiManager {
   private readonly runtimes=new Map<string,RuntimeHandle>();
+  private readonly runCountCache=new Map<string,{modifiedAt:number;count:number}>();
   private selectedSessionId:string|null=null;
   private modulePromise:Promise<PiModule>|null=null;
   private readonly agentDir:string;
@@ -158,14 +161,21 @@ export class PiManager {
     const result=listed.map(session=>({
       id:session.id,projectId,name:session.name||session.firstMessage.trim().slice(0,80)||'New Chat',
       firstMessage:session.firstMessage,createdAt:session.created.getTime(),modifiedAt:session.modified.getTime(),
-      messageCount:session.messageCount,status:this.runtimes.get(session.id)?.status??'idle' as PiRuntimeStatus,
+      runCount:this.countRuns(SessionManager,session.path,session.modified.getTime()),status:this.runtimes.get(session.id)?.status??'idle' as PiRuntimeStatus,
     }));
     for(const runtime of this.runtimes.values()){
       if(runtime.projectId!==projectId||result.some(item=>item.id===runtime.sessionId))continue;
       result.unshift({id:runtime.sessionId,projectId,name:'New Chat',firstMessage:'',createdAt:Date.now(),
-        modifiedAt:Date.now(),messageCount:0,status:runtime.status});
+        modifiedAt:Date.now(),runCount:0,status:runtime.status});
     }
     return result.sort((a,b)=>b.modifiedAt-a.modifiedAt);
+  }
+
+  private countRuns(SessionManager:PiModule['SessionManager'],path:string,modifiedAt:number){
+    const cached=this.runCountCache.get(path);if(cached?.modifiedAt===modifiedAt)return cached.count;
+    let count=0;
+    try{count=countPiSessionRuns(SessionManager.open(path).getBranch());}catch{count=0;}
+    this.runCountCache.set(path,{modifiedAt,count});return count;
   }
 
   private async startRuntime(projectId:string,sessionId?:string,sessionPath?:string){
@@ -219,6 +229,7 @@ export class PiManager {
         provider:state.model.provider,id:state.model.id,contextWindow:state.model.contextWindow,
         reasoning:!!state.model.reasoning,
       }:undefined,thinkingLevel:state.thinkingLevel,availableThinkingLevels:levels,
+      autoCompactionEnabled:state.autoCompactionEnabled,isCompacting:state.isCompacting,
       usage:stats?this.mapUsage(stats):undefined,error:handle.error};
   }
 
@@ -240,15 +251,42 @@ export class PiManager {
     catch(error){this.fail(handle,error);throw error;}
   }
 
+  async compact(projectId:string,sessionId:string):Promise<PiCompactionResponse>{
+    const handle=await this.ensureRuntime(projectId,sessionId);
+    if(handle.status==='running'||handle.status==='stopping')throw new Error('Stop the session before compacting context.');
+    const result=await handle.client.compact();
+    const snapshot=await this.snapshot(handle);
+    return {snapshot,result:{tokensBefore:result.tokensBefore,estimatedTokensAfter:result.estimatedTokensAfter,
+      cost:result.usage?.cost.total}};
+  }
+
+  async setAutoCompaction(projectId:string,sessionId:string,enabled:boolean){
+    const handle=await this.ensureRuntime(projectId,sessionId);
+    await handle.client.setAutoCompaction(enabled);
+    return this.snapshot(handle);
+  }
+
   private onEvent(handle:RuntimeHandle,event:JsonEvent){
     this.emit(handle,'event',event);
     if(event.type==='agent_start'){handle.status='running';this.emit(handle,'status','running');}
+    if(event.type==='turn_end')void this.refreshUsage(handle);
     if(event.type==='agent_settled'){
       handle.status='idle';this.emit(handle,'status','idle');
-      void handle.client.getSessionStats().then(stats=>this.emit(handle,'usage',this.mapUsage(stats))).catch(()=>{});
       this.emit(handle,'sessions-changed');
-      if(this.selectedSessionId!==handle.sessionId)void this.disposeRuntime(handle.sessionId);
+      void this.refreshUsage(handle).finally(()=>{
+        if(this.selectedSessionId!==handle.sessionId)return this.disposeRuntime(handle.sessionId);
+      });
     }
+  }
+
+  private refreshUsage(handle:RuntimeHandle):Promise<void>{
+    if(handle.usageRefresh){handle.usageRefreshPending=true;return handle.usageRefresh;}
+    handle.usageRefresh=(async()=>{do{
+      handle.usageRefreshPending=false;
+      try{const stats=await handle.client.getSessionStats();if(this.runtimes.get(handle.sessionId)===handle)this.emit(handle,'usage',this.mapUsage(stats));}
+      catch{}
+    }while(handle.usageRefreshPending&&this.runtimes.get(handle.sessionId)===handle);})().finally(()=>{handle.usageRefresh=undefined;});
+    return handle.usageRefresh;
   }
 
   private fail(handle:RuntimeHandle,error:unknown){
@@ -258,6 +296,8 @@ export class PiManager {
   private mapUsage(stats:Awaited<ReturnType<RpcClient['getSessionStats']>>):PiUsageStats{
     return {input:stats.tokens.input,output:stats.tokens.output,cacheRead:stats.tokens.cacheRead,
       cacheWrite:stats.tokens.cacheWrite,total:stats.tokens.total,cost:stats.cost,
+      runs:stats.userMessages,toolCalls:stats.toolCalls,
+      cacheHitPercent:calculatePiCacheHitPercent(stats.tokens.input,stats.tokens.cacheRead,stats.tokens.cacheWrite),
       contextTokens:stats.contextUsage?.tokens,contextWindow:stats.contextUsage?.contextWindow,
       contextPercent:stats.contextUsage?.percent};
   }
@@ -279,13 +319,14 @@ export class PiManager {
     const runtime=this.runtimes.get(sessionId);let path=runtime?.sessionPath;
     if(!path){try{path=(await this.findSession(projectId,sessionId)).path;}catch{path=undefined;}}
     await this.disposeRuntime(sessionId);
-    if(path)await shell.trashItem(path);
+    if(path){this.runCountCache.delete(path);await shell.trashItem(path);}
     if(this.selectedSessionId===sessionId)this.selectedSessionId=null;
     this.options.emit({sessionId,projectId,type:'sessions-changed'});
   }
 
   async closeProject(projectId:string){
     await Promise.all([...this.runtimes.values()].filter(item=>item.projectId===projectId).map(item=>this.disposeRuntime(item.sessionId)));
+    this.runCountCache.clear();
   }
 
   async listModels(projectId:string,sessionId?:string):Promise<PiModelSummary[]>{

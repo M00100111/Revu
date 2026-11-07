@@ -8,7 +8,7 @@ export interface PiSessionSummary {
   firstMessage:string;
   createdAt:number;
   modifiedAt:number;
-  messageCount:number;
+  runCount:number;
   status:PiRuntimeStatus;
 }
 
@@ -33,6 +33,9 @@ export interface PiUsageStats {
   cacheWrite:number;
   total:number;
   cost:number;
+  runs:number;
+  toolCalls:number;
+  cacheHitPercent:number;
   contextTokens?:number|null;
   contextWindow?:number;
   contextPercent?:number|null;
@@ -47,8 +50,21 @@ export interface PiSessionSnapshot {
   model?:PiModelSummary;
   thinkingLevel:PiThinkingLevel;
   availableThinkingLevels:PiThinkingLevel[];
+  autoCompactionEnabled:boolean;
+  isCompacting:boolean;
   usage?:PiUsageStats;
   error?:string;
+}
+
+export interface PiCompactionResult {
+  tokensBefore:number;
+  estimatedTokensAfter?:number;
+  cost?:number;
+}
+
+export interface PiCompactionResponse {
+  snapshot:PiSessionSnapshot;
+  result:PiCompactionResult;
 }
 
 export interface PiModelDefaults {
@@ -73,6 +89,8 @@ export type PiAgentRequest=
   |{action:'closeProject';projectId:string}
   |{action:'prompt';projectId:string;sessionId:string;text:string}
   |{action:'stop';projectId:string;sessionId:string}
+  |{action:'compact';projectId:string;sessionId:string}
+  |{action:'setAutoCompaction';projectId:string;sessionId:string;enabled:boolean}
   |{action:'listProviders'}
   |{action:'saveApiKey';providerId:string;key:string}
   |{action:'removeApiKey';providerId:string}
