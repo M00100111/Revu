@@ -1,8 +1,9 @@
 import Icon from './Icon';
 export type Panel='files'|'review'|'settings'|null;
-export default function Sidebar({ panel, setPanel, dark, toggleTheme,showThemeSwitcher,notificationCount,notificationsOpen,toggleNotifications }: {
+export default function Sidebar({ panel, setPanel, dark, toggleTheme,showThemeSwitcher,agentOpen,toggleAgent,notificationCount,notificationsOpen,toggleNotifications }: {
   panel:Panel; setPanel:(panel:Panel)=>void;
   dark:boolean;toggleTheme:()=>void;showThemeSwitcher:boolean;
+  agentOpen:boolean;toggleAgent:()=>void;
   notificationCount:number;notificationsOpen:boolean;toggleNotifications:()=>void;
 }) {
   return <nav className="activity-bar" aria-label="Activity bar">
@@ -14,6 +15,9 @@ export default function Sidebar({ panel, setPanel, dark, toggleTheme,showThemeSw
       aria-label="Review Dashboard" aria-pressed={panel==='review'} onClick={()=>setPanel(panel==='review'?null:'review')}>
       <Icon name="review" size={21}/></button>
     <div className="activity-footer">
+      <button className={'activity-button '+(agentOpen?'selected':'')} title="Pi Agent"
+        aria-label="Pi Agent" aria-pressed={agentOpen} onClick={toggleAgent}>
+        <Icon name="agent" size={21}/></button>
       <button className={'activity-button '+(notificationsOpen?'selected':'')} title="Notifications"
         aria-label={`Notifications${notificationCount?` (${notificationCount} unread)`:''}`}
         aria-pressed={notificationsOpen} onClick={toggleNotifications}>

@@ -3,12 +3,16 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { diff } from '../server/git';
 import { HttpError, Workspace } from '../server/workspace';
+import type { PiAgentRequest } from '../shared/piTypes';
+import { PiManager } from './piManager';
 
 let mainWindow:BrowserWindow|null=null;
 let hasDirtyDrafts=false;
 let closeApproved=false;
 let confirmingClose=false;
+let shutdownStarted=false;
 const workspace=new Workspace(projectId=>mainWindow?.webContents.send('revu:project-changed',projectId));
+let piManager:PiManager|null=null;
 
 const openFoldersPath=()=>join(app.getPath('userData'),'open-folders.json');
 async function persistOpenFolders(){
@@ -43,7 +47,9 @@ async function invoke(body:Record<string,any>){
     await persistOpenFolders();
     return project;
   }
-  if(body.action==='removeProject'){workspace.remove(body.projectId);await persistOpenFolders();return null;}
+  if(body.action==='removeProject'){
+    await piManager?.closeProject(body.projectId);workspace.remove(body.projectId);await persistOpenFolders();return null;
+  }
   const project=workspace.get(body.projectId);
   switch(body.action){
     case 'list':return workspace.list(project,body.path??'');
@@ -68,6 +74,33 @@ ipcMain.handle('revu:invoke',async(_event,body)=>{
   try{return {ok:true,value:await invoke(body)};}
   catch(error){return {ok:false,status:error instanceof HttpError?error.status:500,
     error:error instanceof Error?error.message:String(error)};}
+});
+
+async function invokeAgent(body:PiAgentRequest){
+  if(!piManager)throw new Error('Pi Agent is not ready.');
+  switch(body.action){
+    case 'listSessions':return piManager.listSessions(body.projectId);
+    case 'openSession':return piManager.openSession(body.projectId,body.sessionId);
+    case 'newSession':return piManager.newSession(body.projectId);
+    case 'renameSession':return piManager.renameSession(body.projectId,body.sessionId,body.name);
+    case 'deleteSession':return piManager.deleteSession(body.projectId,body.sessionId);
+    case 'closeProject':return piManager.closeProject(body.projectId);
+    case 'prompt':return piManager.prompt(body.projectId,body.sessionId,body.text);
+    case 'stop':return piManager.stop(body.projectId,body.sessionId);
+    case 'listProviders':return piManager.listProviders();
+    case 'saveApiKey':return piManager.saveApiKey(body.providerId,body.key);
+    case 'removeApiKey':return piManager.removeApiKey(body.providerId);
+    case 'listModels':return piManager.listModels(body.projectId,body.sessionId);
+    case 'setModel':return piManager.setModel(body.projectId,body.sessionId,body.provider,body.modelId);
+    case 'setThinkingLevel':return piManager.setThinkingLevel(body.projectId,body.sessionId,body.level);
+    case 'getModelDefaults':return piManager.getModelDefaults(body.projectId);
+    case 'saveModelDefaults':return piManager.saveModelDefaults(body.provider,body.modelId,body.thinkingLevel);
+  }
+}
+
+ipcMain.handle('revu:agent',async(_event,body:PiAgentRequest)=>{
+  try{return {ok:true,value:await invokeAgent(body)};}
+  catch(error){return {ok:false,status:500,error:error instanceof Error?error.message:String(error)};}
 });
 
 ipcMain.handle('revu:context-menu',async(event,kind:'project'|'tab')=>{
@@ -133,9 +166,22 @@ function createWindow(){
 app.whenReady().then(async()=>{
   app.setAppUserModelId('com.revu.editor');
   Menu.setApplicationMenu(null);
+  piManager=new PiManager({
+    resolveProject:projectId=>{
+      const project=workspace.get(projectId);return {id:project.id,root:project.root};
+    },
+    emit:event=>mainWindow?.webContents.send('revu:agent-event',event),
+  });
   await restoreOpenFolders();
   createWindow();
   app.on('activate',()=>{if(BrowserWindow.getAllWindows().length===0)createWindow();});
 });
 app.on('window-all-closed',()=>app.quit());
-app.on('will-quit',()=>workspace.dispose());
+app.on('before-quit',event=>{
+  if(shutdownStarted)return;
+  event.preventDefault();shutdownStarted=true;
+  const stopping=piManager?.dispose()??Promise.resolve();
+  void stopping.catch(error=>console.warn('Failed to stop Pi Agent',error)).finally(()=>{
+    workspace.dispose();app.quit();
+  });
+});

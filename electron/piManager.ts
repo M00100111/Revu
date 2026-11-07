@@ -1,0 +1,339 @@
+import { app, safeStorage, shell } from 'electron';
+import { existsSync } from 'node:fs';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import type {
+  PiModelDefaults,PiModelSummary,PiProviderStatus,PiRuntimeStatus,PiSessionSnapshot,
+  PiSessionSummary,PiThinkingLevel,PiUsageStats,RevuPiEvent,
+} from '../shared/piTypes';
+
+type PiModule=typeof import('@earendil-works/pi-coding-agent');
+type RpcClient=InstanceType<PiModule['RpcClient']>;
+type JsonEvent=Parameters<Parameters<RpcClient['onEvent']>[0]>[0];
+
+interface ProviderDefinition {id:string;name:string;env:string}
+const PROVIDERS:ProviderDefinition[]=[
+  {id:'anthropic',name:'Anthropic',env:'ANTHROPIC_API_KEY'},
+  {id:'openai',name:'OpenAI',env:'OPENAI_API_KEY'},
+  {id:'google',name:'Google Gemini',env:'GEMINI_API_KEY'},
+  {id:'openrouter',name:'OpenRouter',env:'OPENROUTER_API_KEY'},
+  {id:'deepseek',name:'DeepSeek',env:'DEEPSEEK_API_KEY'},
+  {id:'xai',name:'xAI',env:'XAI_API_KEY'},
+  {id:'groq',name:'Groq',env:'GROQ_API_KEY'},
+  {id:'mistral',name:'Mistral',env:'MISTRAL_API_KEY'},
+  {id:'cerebras',name:'Cerebras',env:'CEREBRAS_API_KEY'},
+  {id:'nvidia',name:'NVIDIA NIM',env:'NVIDIA_API_KEY'},
+  {id:'zai',name:'ZAI',env:'ZAI_API_KEY'},
+  {id:'moonshotai',name:'Moonshot AI',env:'MOONSHOT_API_KEY'},
+];
+
+interface RuntimeHandle {
+  sessionId:string;
+  projectId:string;
+  cwd:string;
+  client:RpcClient;
+  status:PiRuntimeStatus;
+  sessionPath?:string;
+  error?:string;
+  unsubscribe:()=>void;
+}
+
+interface PiManagerOptions {
+  resolveProject:(projectId:string)=>{id:string;root:string};
+  emit:(event:RevuPiEvent)=>void;
+}
+
+function errorMessage(error:unknown){return error instanceof Error?error.message:String(error);}
+function asRecord(value:unknown):Record<string,unknown>{return value&&typeof value==='object'?value as Record<string,unknown>:{};}
+
+export class PiManager {
+  private readonly runtimes=new Map<string,RuntimeHandle>();
+  private selectedSessionId:string|null=null;
+  private modulePromise:Promise<PiModule>|null=null;
+  private readonly agentDir:string;
+  private readonly secretsPath:string;
+
+  constructor(private readonly options:PiManagerOptions){
+    this.agentDir=join(app.getPath('userData'),'pi-agent');
+    this.secretsPath=join(app.getPath('userData'),'pi-api-keys.bin');
+    process.env.PI_CODING_AGENT_DIR=this.agentDir;
+    process.env.PI_SKIP_VERSION_CHECK='1';
+  }
+
+  private module(){
+    if(!this.modulePromise){
+      const path=app.isPackaged
+        ?join(process.resourcesPath,'pi','app','bundle','index.js')
+        :join(app.getAppPath(),'node_modules','@earendil-works','pi-coding-agent','dist','bundle','index.js');
+      this.modulePromise=import(pathToFileURL(path).href) as Promise<PiModule>;
+    }
+    return this.modulePromise;
+  }
+  private project(projectId:string){return this.options.resolveProject(projectId);}
+  private emit(handle:Pick<RuntimeHandle,'sessionId'|'projectId'>,type:RevuPiEvent['type'],payload?:unknown){
+    this.options.emit({sessionId:handle.sessionId,projectId:handle.projectId,type,payload});
+  }
+
+  private async readSecrets():Promise<Record<string,string>>{
+    let encrypted:Buffer;
+    try{encrypted=await readFile(this.secretsPath);}catch(error){
+      if((error as NodeJS.ErrnoException).code==='ENOENT')return {};
+      throw error;
+    }
+    if(!safeStorage.isEncryptionAvailable())throw new Error('Secure credential storage is unavailable.');
+    const parsed:unknown=JSON.parse(safeStorage.decryptString(encrypted));
+    if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))return {};
+    return Object.fromEntries(Object.entries(parsed).filter((entry):entry is [string,string]=>typeof entry[1]==='string'));
+  }
+
+  private async writeSecrets(secrets:Record<string,string>){
+    if(!safeStorage.isEncryptionAvailable())throw new Error('Secure credential storage is unavailable.');
+    await mkdir(dirname(this.secretsPath),{recursive:true});
+    await writeFile(this.secretsPath,safeStorage.encryptString(JSON.stringify(secrets)));
+  }
+
+  async listProviders():Promise<PiProviderStatus[]>{
+    const secrets=await this.readSecrets();
+    return PROVIDERS.map(provider=>{
+      const key=secrets[provider.id];
+      const maskedKey=key?(key.length<=4?'•'.repeat(key.length):`${'•'.repeat(key.length-4)}${key.slice(-4)}`):undefined;
+      return {id:provider.id,name:provider.name,configured:!!key,maskedKey};
+    });
+  }
+
+  async saveApiKey(providerId:string,key:string){
+    if(!PROVIDERS.some(provider=>provider.id===providerId))throw new Error('Unknown model provider.');
+    const value=key.trim();if(!value)throw new Error('API key is required.');
+    const secrets=await this.readSecrets();secrets[providerId]=value;await this.writeSecrets(secrets);
+    await this.disposeIdleRuntimes();
+  }
+
+  async removeApiKey(providerId:string){
+    if(!PROVIDERS.some(provider=>provider.id===providerId))throw new Error('Unknown model provider.');
+    const secrets=await this.readSecrets();delete secrets[providerId];await this.writeSecrets(secrets);
+    await this.disposeIdleRuntimes();
+  }
+
+  private runtimeNodeDirectory(){
+    const root=app.isPackaged?join(process.resourcesPath,'pi','node'):join(app.getAppPath(),'.pi-runtime','node');
+    if(!existsSync(join(root,'node.exe')))throw new Error('The bundled Pi runtime is missing. Run npm run prepare:pi.');
+    return root;
+  }
+
+  private cliPath(){
+    if(app.isPackaged)return join(process.resourcesPath,'pi','app','bundle','cli.js');
+    return join(app.getAppPath(),'node_modules','@earendil-works','pi-coding-agent','dist','bundle','cli.js');
+  }
+
+  private async childEnv(){
+    const secrets=await this.readSecrets();
+    const env:Record<string,string>={
+      PI_CODING_AGENT_DIR:this.agentDir,PI_SKIP_VERSION_CHECK:'1',
+      PATH:`${this.runtimeNodeDirectory()};${process.env.PATH??''}`,
+    };
+    for(const provider of PROVIDERS)env[provider.env]=secrets[provider.id]??'';
+    return env;
+  }
+
+  private async createClient(cwd:string,sessionPath?:string,ephemeral=false){
+    const {RpcClient}=await this.module();
+    const args=['--no-extensions','--no-approve'];
+    if(sessionPath)args.push('--session',sessionPath);
+    else if(ephemeral)args.push('--no-session');
+    return new RpcClient({cwd,cliPath:this.cliPath(),env:await this.childEnv(),args});
+  }
+
+  private async findSession(projectId:string,sessionId:string){
+    const project=this.project(projectId);const {SessionManager}=await this.module();
+    const sessions=await SessionManager.list(project.root);
+    const session=sessions.find(item=>item.id===sessionId);
+    if(!session)throw new Error('Session not found.');
+    return session;
+  }
+
+  async listSessions(projectId:string):Promise<PiSessionSummary[]>{
+    const project=this.project(projectId);const {SessionManager}=await this.module();
+    const listed=await SessionManager.list(project.root);
+    const result=listed.map(session=>({
+      id:session.id,projectId,name:session.name||session.firstMessage.trim().slice(0,80)||'New Chat',
+      firstMessage:session.firstMessage,createdAt:session.created.getTime(),modifiedAt:session.modified.getTime(),
+      messageCount:session.messageCount,status:this.runtimes.get(session.id)?.status??'idle' as PiRuntimeStatus,
+    }));
+    for(const runtime of this.runtimes.values()){
+      if(runtime.projectId!==projectId||result.some(item=>item.id===runtime.sessionId))continue;
+      result.unshift({id:runtime.sessionId,projectId,name:'New Chat',firstMessage:'',createdAt:Date.now(),
+        modifiedAt:Date.now(),messageCount:0,status:runtime.status});
+    }
+    return result.sort((a,b)=>b.modifiedAt-a.modifiedAt);
+  }
+
+  private async startRuntime(projectId:string,sessionId?:string,sessionPath?:string){
+    const project=this.project(projectId);const client=await this.createClient(project.root,sessionPath);
+    const provisional=sessionId??crypto.randomUUID();
+    const handle:RuntimeHandle={sessionId:provisional,projectId,cwd:project.root,client,status:'starting',sessionPath,unsubscribe:()=>{}};
+    handle.unsubscribe=client.onEvent(event=>this.onEvent(handle,event));
+    try{
+      await client.start();
+      const state=await client.getState();
+      handle.sessionId=state.sessionId;handle.sessionPath=state.sessionFile;handle.status=state.isStreaming?'running':'idle';
+      if(sessionId&&sessionId!==state.sessionId)throw new Error('Pi opened a different session than requested.');
+      this.runtimes.set(handle.sessionId,handle);
+      this.emit(handle,'status',handle.status);
+      return handle;
+    }catch(error){
+      handle.unsubscribe();await client.stop().catch(()=>{});throw error;
+    }
+  }
+
+  private async ensureRuntime(projectId:string,sessionId:string){
+    const existing=this.runtimes.get(sessionId);
+    if(existing){if(existing.projectId!==projectId)throw new Error('Session does not belong to this project.');return existing;}
+    const session=await this.findSession(projectId,sessionId);
+    return this.startRuntime(projectId,sessionId,session.path);
+  }
+
+  async openSession(projectId:string,sessionId:string){
+    this.selectedSessionId=sessionId;
+    const handle=await this.ensureRuntime(projectId,sessionId);
+    await this.disposeUnselectedIdleRuntimes();
+    return this.snapshot(handle);
+  }
+
+  async newSession(projectId:string){
+    const handle=await this.startRuntime(projectId);
+    this.selectedSessionId=handle.sessionId;
+    await this.disposeUnselectedIdleRuntimes();
+    this.emit(handle,'sessions-changed');
+    return this.snapshot(handle);
+  }
+
+  private async snapshot(handle:RuntimeHandle):Promise<PiSessionSnapshot>{
+    const [state,messages,levels,stats]=await Promise.all([
+      handle.client.getState(),handle.client.getMessages(),handle.client.getAvailableThinkingLevels(),
+      handle.client.getSessionStats().catch(()=>undefined),
+    ]);
+    handle.sessionPath=state.sessionFile;
+    return {sessionId:handle.sessionId,projectId:handle.projectId,status:handle.status,
+      name:state.sessionName||'New Chat',messages,model:state.model?{
+        provider:state.model.provider,id:state.model.id,contextWindow:state.model.contextWindow,
+        reasoning:!!state.model.reasoning,
+      }:undefined,thinkingLevel:state.thinkingLevel,availableThinkingLevels:levels,
+      usage:stats?this.mapUsage(stats):undefined,error:handle.error};
+  }
+
+  async prompt(projectId:string,sessionId:string,text:string){
+    const message=text.trim();if(!message)throw new Error('Message is required.');
+    const handle=await this.ensureRuntime(projectId,sessionId);
+    if(handle.status==='running'||handle.status==='stopping')throw new Error('This session is already running.');
+    handle.status='running';handle.error=undefined;this.emit(handle,'status','running');
+    try{
+      const disposition=await handle.client.prompt(message);
+      if(disposition==='handled'){handle.status='idle';this.emit(handle,'status','idle');}
+    }catch(error){this.fail(handle,error);throw error;}
+  }
+
+  async stop(projectId:string,sessionId:string){
+    this.project(projectId);const handle=this.runtimes.get(sessionId);if(!handle)return;
+    handle.status='stopping';this.emit(handle,'status','stopping');
+    try{await handle.client.clearQueue();await handle.client.abort();}
+    catch(error){this.fail(handle,error);throw error;}
+  }
+
+  private onEvent(handle:RuntimeHandle,event:JsonEvent){
+    this.emit(handle,'event',event);
+    if(event.type==='agent_start'){handle.status='running';this.emit(handle,'status','running');}
+    if(event.type==='agent_settled'){
+      handle.status='idle';this.emit(handle,'status','idle');
+      void handle.client.getSessionStats().then(stats=>this.emit(handle,'usage',this.mapUsage(stats))).catch(()=>{});
+      this.emit(handle,'sessions-changed');
+      if(this.selectedSessionId!==handle.sessionId)void this.disposeRuntime(handle.sessionId);
+    }
+  }
+
+  private fail(handle:RuntimeHandle,error:unknown){
+    handle.status='error';handle.error=errorMessage(error);this.emit(handle,'error',handle.error);
+  }
+
+  private mapUsage(stats:Awaited<ReturnType<RpcClient['getSessionStats']>>):PiUsageStats{
+    return {input:stats.tokens.input,output:stats.tokens.output,cacheRead:stats.tokens.cacheRead,
+      cacheWrite:stats.tokens.cacheWrite,total:stats.tokens.total,cost:stats.cost,
+      contextTokens:stats.contextUsage?.tokens,contextWindow:stats.contextUsage?.contextWindow,
+      contextPercent:stats.contextUsage?.percent};
+  }
+
+  async renameSession(projectId:string,sessionId:string,name:string){
+    const normalized=name.trim();if(!normalized)throw new Error('Session name is required.');
+    const runtime=this.runtimes.get(sessionId);
+    if(runtime)await runtime.client.setSessionName(normalized);
+    else{
+      const session=await this.findSession(projectId,sessionId);
+      const client=await this.createClient(this.project(projectId).root,session.path);
+      try{await client.start();await client.setSessionName(normalized);}
+      finally{await client.stop().catch(()=>{});}
+    }
+    this.options.emit({sessionId,projectId,type:'sessions-changed'});
+  }
+
+  async deleteSession(projectId:string,sessionId:string){
+    const runtime=this.runtimes.get(sessionId);let path=runtime?.sessionPath;
+    if(!path){try{path=(await this.findSession(projectId,sessionId)).path;}catch{path=undefined;}}
+    await this.disposeRuntime(sessionId);
+    if(path)await shell.trashItem(path);
+    if(this.selectedSessionId===sessionId)this.selectedSessionId=null;
+    this.options.emit({sessionId,projectId,type:'sessions-changed'});
+  }
+
+  async closeProject(projectId:string){
+    await Promise.all([...this.runtimes.values()].filter(item=>item.projectId===projectId).map(item=>this.disposeRuntime(item.sessionId)));
+  }
+
+  async listModels(projectId:string,sessionId?:string):Promise<PiModelSummary[]>{
+    let client:RpcClient|undefined;let temporary=false;
+    if(sessionId)client=this.runtimes.get(sessionId)?.client;
+    if(!client){client=await this.createClient(this.project(projectId).root,undefined,true);temporary=true;await client.start();}
+    try{return (await client.getAvailableModels()).map(model=>({...model}));}
+    finally{if(temporary)await client.stop();}
+  }
+
+  async setModel(projectId:string,sessionId:string,provider:string,modelId:string){
+    const handle=await this.ensureRuntime(projectId,sessionId);
+    if(handle.status==='running'||handle.status==='stopping')throw new Error('Stop the session before changing models.');
+    await handle.client.setModel(provider,modelId);
+    return this.snapshot(handle);
+  }
+
+  async setThinkingLevel(projectId:string,sessionId:string,level:PiThinkingLevel){
+    const handle=await this.ensureRuntime(projectId,sessionId);
+    if(handle.status==='running'||handle.status==='stopping')throw new Error('Stop the session before changing thinking level.');
+    await handle.client.setThinkingLevel(level);
+    return this.snapshot(handle);
+  }
+
+  async getModelDefaults(projectId?:string):Promise<PiModelDefaults>{
+    const cwd=projectId?this.project(projectId).root:process.cwd();const {SettingsManager}=await this.module();
+    const settings=SettingsManager.create(cwd,this.agentDir);
+    return {provider:settings.getDefaultProvider(),modelId:settings.getDefaultModel(),
+      thinkingLevel:settings.getDefaultThinkingLevel()??'medium'};
+  }
+
+  async saveModelDefaults(provider:string,modelId:string,thinkingLevel:PiThinkingLevel){
+    const {SettingsManager}=await this.module();const settings=SettingsManager.create(process.cwd(),this.agentDir);
+    settings.setDefaultModelAndProvider(provider,modelId);settings.setDefaultThinkingLevel(thinkingLevel);await settings.flush();
+    const errors=settings.drainErrors();if(errors.length)throw new Error(errors.map(item=>item.error.message).join('\n'));
+  }
+
+  private async disposeRuntime(sessionId:string){
+    const handle=this.runtimes.get(sessionId);if(!handle)return;
+    this.runtimes.delete(sessionId);handle.unsubscribe();await handle.client.stop().catch(()=>{});
+  }
+  private async disposeUnselectedIdleRuntimes(){
+    await Promise.all([...this.runtimes.values()].filter(item=>item.sessionId!==this.selectedSessionId&&item.status==='idle')
+      .map(item=>this.disposeRuntime(item.sessionId)));
+  }
+  private async disposeIdleRuntimes(){
+    await Promise.all([...this.runtimes.values()].filter(item=>item.status==='idle'||item.status==='error')
+      .map(item=>this.disposeRuntime(item.sessionId)));
+  }
+  async dispose(){await Promise.all([...this.runtimes.keys()].map(id=>this.disposeRuntime(id)));}
+}

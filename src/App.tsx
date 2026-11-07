@@ -12,6 +12,7 @@ import SettingsPage, { SettingsSidebar, type ReviewFileLabels, type SettingsCate
 import WindowControls from './WindowControls';
 import NotificationCenter, { type AppNotification, type NotificationLevel } from './NotificationCenter';
 import { defaultTabExpansion, type FileTabExpansion, type FileTabOverflow } from './tabLayout';
+import AgentChat from './AgentChat';
 
 const savedWidth=(key:string,fallback:number)=>{
   const value=Number(localStorage.getItem(key));
@@ -54,6 +55,8 @@ export default function App(){
     localStorage.getItem('revu-review-file-labels')==='name'?'name':'path');
   const [notifications,setNotifications]=useState<AppNotification[]>([]);
   const [notificationsOpen,setNotificationsOpen]=useState(false);
+  const [agentOpen,setAgentOpen]=useState(false);
+  const [agentWidth,setAgentWidth]=useState(()=>savedWidth('revu-agent-width',400));
   const [picking,setPicking]=useState(false);
   const [reveal,setReveal]=useState<{id:string;line:number}|null>(null);
   const [reviewFilter,setReviewFilter]=useState('all');
@@ -263,12 +266,13 @@ export default function App(){
       : {...current,files:current.shared,review:current.shared,settings:current.shared});
     setSyncWidths(value);
   };
-  return <div className="app">
+  return <div className={'app '+(agentOpen?'agent-open':'')}>
     <WindowControls onSave={()=>{if(activeFile)void workspace.save(activeFile);}}
       saveDisabled={!activeFile||!activeFile.dirty||!!(activeFile.saving||activeFile.syncing||activeFile.reason)}
       saving={!!activeFile?.saving}/>
     <Sidebar panel={panel} setPanel={setPanel} dark={dark} toggleTheme={()=>setDark(!dark)}
       showThemeSwitcher={showThemeSwitcher}
+      agentOpen={agentOpen} toggleAgent={()=>setAgentOpen(open=>!open)}
       notificationCount={notifications.filter(item=>!item.read).length} notificationsOpen={notificationsOpen}
       toggleNotifications={()=>setNotificationsOpen(open=>!open)}/>
     <NotificationCenter notifications={notifications} open={notificationsOpen}
@@ -336,5 +340,9 @@ export default function App(){
       </div>}
     </main>
     </>}
+    <AgentChat open={agentOpen} projects={projects} activeProjectId={projectId}
+      dirtyProjectIds={new Set(documents.filter(file=>file.dirty).map(file=>file.project.id))}
+      width={agentWidth} onResize={setAgentWidth}
+      onResizeEnd={value=>localStorage.setItem('revu-agent-width',String(value))} notify={notify}/>
   </div>;
 }
