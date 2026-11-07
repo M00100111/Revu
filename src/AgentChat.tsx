@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { createPortal } from 'react-dom';
 import type { Project } from './editor';
 import Icon from './Icon';
+import MarkdownContent from './MarkdownContent';
 import type {
   PiCompactionResult,PiModelDefaults,PiModelSummary,PiProviderStatus,PiRuntimeStatus,PiSessionSnapshot,
   PiSessionSummary,PiThinkingLevel,PiUsageStats,RevuPiEvent,
@@ -112,6 +113,8 @@ const toolDetail=(chat:ChatState,tool:ToolState,now=Date.now()):ToolDetailReques
 });
 const emptyUsage:PiUsageStats={input:0,output:0,cacheRead:0,cacheWrite:0,total:0,cost:0,runs:0,toolCalls:0,cacheHitPercent:0,contextTokens:0,contextWindow:0,contextPercent:0};
 const finalAnswer=(run:ChatRun)=>[...run.items].reverse().find(item=>item.type==='answer'&&!item.streaming)?.text??'';
+const assistantText=(run:ChatRun)=>run.items.filter(item=>item.type==='answer'&&item.text).map(item=>item.text).join('\n\n');
+export const shouldShowAssistantActions=(isLatest:boolean,status:PiRuntimeStatus)=>!isLatest||(status!=='starting'&&status!=='running');
 const formatTime=(value:number)=>new Intl.DateTimeFormat(undefined,{hour:'2-digit',minute:'2-digit'}).format(value);
 const formatFullTime=(value:number)=>new Intl.DateTimeFormat(undefined,{dateStyle:'medium',timeStyle:'short'}).format(value);
 const sessionTone=(status:PiRuntimeStatus,done:boolean):SessionTone=>done?'done':status==='error'?'error':
@@ -301,13 +304,15 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
   const [previewRunKey,setPreviewRunKey]=useState('');const [previewTop,setPreviewTop]=useState(8);
   const [openSessionIds,setOpenSessionIds]=useState<Record<string,string[]>>({});
   const [doneSessionIds,setDoneSessionIds]=useState<Set<string>>(()=>new Set());
+  const [sourceMessageKeys,setSourceMessageKeys]=useState<Set<string>>(()=>new Set());const [copiedMessageKey,setCopiedMessageKey]=useState('');
   const [newChatModel,setNewChatModel]=useState<PiModelSummary|undefined>();const [newChatThinking,setNewChatThinking]=useState<PiThinkingLevel>('medium');
   const [modelMenuStyle,setModelMenuStyle]=useState<React.CSSProperties>({});
   const bodyRef=useRef<HTMLDivElement|null>(null);const chatContentRef=useRef<HTMLDivElement|null>(null);const activeSessionTabRef=useRef<HTMLDivElement|null>(null);const modelControlRef=useRef<HTMLDivElement|null>(null);const modelMenuRef=useRef<HTMLDivElement|null>(null);
   const usageRef=useRef<HTMLDivElement|null>(null);const contextRef=useRef<HTMLDivElement|null>(null);const draftConfigRequest=useRef(0);
   const runRefs=useRef(new Map<string,HTMLElement>());const pendingRunKey=useRef<string|undefined>(undefined);const skipAutoScroll=useRef(false);
   const chatsRef=useRef(chats);const viewRef=useRef({open,selectedSessionId,projects,sessions});const erroredRuns=useRef(new Set<string>());const notifiedRuns=useRef(new Set<string>());
-  const doneTimers=useRef(new Map<string,ReturnType<typeof setTimeout>>());const wasOpen=useRef(open);const handledNavigationToken=useRef<number|undefined>(undefined);
+  const doneTimers=useRef(new Map<string,ReturnType<typeof setTimeout>>());const copiedTimer=useRef<ReturnType<typeof setTimeout>|undefined>(undefined);
+  const wasOpen=useRef(open);const handledNavigationToken=useRef<number|undefined>(undefined);
   const hasPendingNavigation=!!navigationRequest&&handledNavigationToken.current!==navigationRequest.token;
   chatsRef.current=chats;viewRef.current={open,selectedSessionId,projects,sessions};
   const clearDone=useCallback((sessionId:string)=>{
@@ -371,7 +376,7 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
   useLayoutEffect(()=>{activeSessionTabRef.current?.scrollIntoView({block:'nearest',inline:'nearest'});},[selectedProjectId,selectedSessionId,sessionTabs.length]);
   useEffect(()=>{if(selectedProjectId&&!selectedSessionId)void loadNewChatDefaults(selectedProjectId);},[selectedProjectId,selectedSessionId]);
   useEffect(()=>{if(open&&selectedSessionId)clearDone(selectedSessionId);},[open,selectedSessionId,clearDone]);
-  useEffect(()=>()=>{for(const timer of doneTimers.current.values())clearTimeout(timer);},[]);
+  useEffect(()=>()=>{for(const timer of doneTimers.current.values())clearTimeout(timer);if(copiedTimer.current)clearTimeout(copiedTimer.current);},[]);
   useEffect(()=>{if(selectedSessionId)draftConfigRequest.current++;setComposerExpanded(false);setModelMenu(false);setContextOpen(false);setUsageOpen(false);setCompactionResult(undefined);},[selectedSessionId]);
   useEffect(()=>{
     const opening=open&&!wasOpen.current;wasOpen.current=open;
@@ -534,7 +539,16 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
     const content=chatContentRef.current;if(content){const marker=event.currentTarget.getBoundingClientRect();const bounds=content.getBoundingClientRect();
       setPreviewTop(Math.max(8,Math.min(marker.top-bounds.top-8,bounds.height-128)));}setPreviewRunKey(key);
   };
-  const copyUserMessage=(text:string)=>window.revu.copyText(text);
+  const copyMessage=async(key:string,text:string)=>{
+    try{
+      if(!await window.revu.copyText(text)){notify('error','Could not copy the message.');return;}
+      setCopiedMessageKey(key);if(copiedTimer.current)clearTimeout(copiedTimer.current);
+      copiedTimer.current=setTimeout(()=>setCopiedMessageKey(current=>current===key?'':current),1500);
+    }catch{notify('error','Could not copy the message.');}
+  };
+  const toggleMessageSource=(key:string)=>setSourceMessageKeys(current=>{
+    const next=new Set(current);if(next.has(key))next.delete(key);else next.add(key);return next;
+  });
   return <>
     <aside className={'agent-chat '+(open?'open':'')} style={{width:open?width:0}} aria-hidden={!open}>
       <div className="agent-resize-handle" onPointerDown={beginResize}/>
@@ -558,27 +572,32 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
         {previewRun&&<aside className="agent-run-preview" style={{top:previewTop}}><strong>{previewRun.user||'Run'}</strong><p>{finalAnswer(previewRun)||'Pi is still working…'}</p></aside>}
         <div className="agent-chat-body" ref={bodyRef}>{!projects.length?<div className="agent-welcome"><strong>Open a folder to start</strong></div>
         :!current?null
-        :<>{runs.map(run=><section className="agent-run" key={run.key} ref={element=>{if(element)runRefs.current.set(run.key,element);else runRefs.current.delete(run.key);}}>
+        :<>{runs.map(run=>{const messageKey=`${current.sessionId}:${run.key}`;const answerText=assistantText(run);const showSource=sourceMessageKeys.has(messageKey);
+          const showActions=shouldShowAssistantActions(run.key===runs.at(-1)?.key,current.status);return <section className="agent-run" key={run.key} ref={element=>{if(element)runRefs.current.set(run.key,element);else runRefs.current.delete(run.key);}}>
           {run.user&&<article className="agent-message user"><div className="agent-user-bubble">{run.user}</div>
             <footer className="agent-user-meta">{run.userTimestamp!==undefined&&<time dateTime={new Date(run.userTimestamp).toISOString()} title={formatFullTime(run.userTimestamp)}>{formatTime(run.userTimestamp)}</time>}
-              <button type="button" title="Copy" aria-label="Copy user message" onClick={()=>copyUserMessage(run.user)}><Icon name="copy" size={12}/></button>
+              <button type="button" title={copiedMessageKey===messageKey+'-user'?'Copied':'Copy'} aria-label="Copy user message" onClick={()=>void copyMessage(messageKey+'-user',run.user)}>
+                <Icon name={copiedMessageKey===messageKey+'-user'?'check':'copy'} size={12}/></button>
             </footer></article>}
-          {!!run.items.length&&<div className="agent-response"><span className="agent-role" role="img" aria-label="Pi"><Icon name="pi" size={16}/></span>{run.items.map(part=>part.type==='answer'
-            ?<div className={'agent-answer '+(part.streaming?'streaming':'')} key={part.key}>{part.text}</div>
+          {(!!run.items.length||showActions)&&<div className="agent-response"><span className="agent-role" role="img" aria-label="Pi"><Icon name="pi" size={16}/></span>{run.items.map(part=>part.type==='answer'
+            ?part.streaming||showSource?<div className={'agent-answer source '+(part.streaming?'streaming':'')} key={part.key}>{part.text}</div>
+              :<MarkdownContent text={part.text??''} key={part.key}/>
             :part.type==='thinking'?<details className="agent-thinking" key={part.key} open={part.streaming||undefined} onToggle={()=>requestAnimationFrame(updateRunRail)}><summary title="Toggle thought process"><Icon name="thought" size={16}/><span>Thought process</span></summary><div>{part.text}</div></details>
             :part.tool&&<details className={`agent-tool ${part.tool.status}`} key={part.key} onToggle={()=>requestAnimationFrame(updateRunRail)}><summary><span>{part.tool.name}</span>
               <span className="agent-tool-meta">{toolDuration(part.tool,toolClock)!==undefined&&<time>{formatToolDuration(toolDuration(part.tool,toolClock)!)}</time>}<small>{part.tool.status}</small></span></summary>
               <div className="agent-tool-detail"><button type="button" className="agent-tool-expand" title="Open in Editor" aria-label={`Open ${part.tool.name} details in editor`}
                 onClick={()=>onOpenToolDetail(toolDetail(current,part.tool!,toolClock))}><Icon name="expand" size={13}/></button>
                 <pre>{JSON.stringify({input:part.tool.args,output:part.tool.result},null,2)}</pre></div></details>)}
-            <div className="agent-message-actions" aria-label="Assistant message actions">
-              <button type="button" disabled title="Copy · Coming soon" aria-label="Copy · Coming soon"><Icon name="copy" size={14}/></button>
-              <button type="button" disabled title="Format · Coming soon" aria-label="Format · Coming soon"><Icon name="format" size={14}/></button>
+            {showActions&&<div className="agent-message-actions" aria-label="Assistant message actions">
+              <button type="button" disabled={!answerText} title={copiedMessageKey===messageKey+'-assistant'?'Copied':'Copy'} aria-label="Copy assistant message"
+                onClick={()=>void copyMessage(messageKey+'-assistant',answerText)}><Icon name={copiedMessageKey===messageKey+'-assistant'?'check':'copy'} size={14}/></button>
+              <button type="button" disabled={!answerText} title={showSource?'Show Preview':'Show Source'} aria-label={showSource?'Show Markdown preview':'Show Markdown source'}
+                aria-pressed={showSource} onClick={()=>toggleMessageSource(messageKey)}><Icon name="format" size={14}/></button>
               <button type="button" disabled title="Fork · Coming soon" aria-label="Fork · Coming soon"><Icon name="fork" size={14}/></button>
               <button type="button" disabled title="Retry · Coming soon" aria-label="Retry · Coming soon"><Icon name="retry" size={14}/></button>
               <button type="button" disabled title="More · Coming soon" aria-label="More · Coming soon"><Icon name="more" size={14}/></button>
-            </div></div>}
-        </section>)}
+            </div>}</div>}
+        </section>;})}
           {current.error&&<div className="agent-inline-error">{current.error}</div>}</>}
         </div>
       </div>

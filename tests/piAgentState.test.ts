@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { formatAgentTokens, formatContextPercent, formatToolDuration, updateEvent, withSnapshot } from '../src/AgentChat';
+import { formatAgentTokens, formatContextPercent, formatToolDuration, shouldShowAssistantActions, updateEvent, withSnapshot } from '../src/AgentChat';
 import type { PiSessionSnapshot } from '../shared/piTypes';
 import { calculatePiCacheHitPercent, countPiSessionRuns } from '../shared/piSession';
+import { renderMarkdown } from '../src/MarkdownContent';
 
 const snapshot:PiSessionSnapshot={
   sessionId:'session-a',projectId:'project-a',status:'idle',name:'Test',messages:[],
@@ -62,6 +63,23 @@ test('Pi usage values use compact tokens and fixed context precision',()=>{
   assert.equal(formatToolDuration(90_000),'1m 30s');
   assert.equal(calculatePiCacheHitPercent(10,40,0),80);
   assert.equal(calculatePiCacheHitPercent(0,0,0),0);
+});
+
+test('assistant Markdown renders formatting without allowing raw HTML or unsafe links',()=>{
+  const html=renderMarkdown('**Bold** <script>alert(1)</script> [safe](https://example.com) [unsafe](javascript:alert(1))');
+  assert.match(html,/<strong>Bold<\/strong>/);
+  assert.match(html,/&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.match(html,/href="https:\/\/example.com"/);
+  assert.doesNotMatch(html,/href="javascript:/);
+});
+
+test('assistant actions are hidden only while the latest run is starting or running',()=>{
+  assert.equal(shouldShowAssistantActions(true,'starting'),false);
+  assert.equal(shouldShowAssistantActions(true,'running'),false);
+  assert.equal(shouldShowAssistantActions(true,'stopping'),true);
+  assert.equal(shouldShowAssistantActions(true,'idle'),true);
+  assert.equal(shouldShowAssistantActions(true,'error'),true);
+  assert.equal(shouldShowAssistantActions(false,'running'),true);
 });
 
 test('Pi session Runs count user messages on the active branch only',()=>{

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, type MenuItemConstructorOptions } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell, type MenuItemConstructorOptions } from 'electron';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { diff } from '../server/git';
@@ -118,6 +118,17 @@ ipcMain.handle('revu:context-menu',async(event,kind:'project'|'directory'|'tab')
       : [item('Close','close'),item('Close Others','closeOthers'),item('Close All','closeAll')];
     Menu.buildFromTemplate(template).popup({window,callback:()=>resolve(selected)});
   });
+});
+ipcMain.handle('revu:open-external',async(_event,value:unknown)=>{
+  if(typeof value!=='string')return false;
+  try{
+    const url=new URL(value);if(!['http:','https:','mailto:'].includes(url.protocol))return false;
+    await shell.openExternal(url.toString());return true;
+  }catch{return false;}
+});
+ipcMain.handle('revu:copy-text',(_event,value:unknown)=>{
+  if(typeof value!=='string')return false;
+  try{clipboard.writeText(value);return true;}catch{return false;}
 });
 
 ipcMain.handle('revu:window-control',(event,action:'minimize'|'maximize'|'close'|'isMaximized')=>{

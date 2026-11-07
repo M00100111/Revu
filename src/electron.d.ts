@@ -30,7 +30,8 @@ declare global {
       contextMenu(kind:'project'):Promise<ProjectContextAction|null>;
       contextMenu(kind:'directory'):Promise<DirectoryContextAction|null>;
       contextMenu(kind:'tab'):Promise<TabContextAction|null>;
-      copyText(text:string):void;
+      copyText(text:string):Promise<boolean>;
+      openExternal(url:string):Promise<boolean>;
       windowControl(action:'minimize'|'maximize'|'close'|'isMaximized'):Promise<boolean>;
       setDirty(dirty:boolean):void;
       onMaximized(listener:(maximized:boolean)=>void):()=>void;
