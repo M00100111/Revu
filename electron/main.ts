@@ -111,7 +111,7 @@ ipcMain.handle('revu:context-menu',async(event,kind:'project'|'directory'|'tab')
   return new Promise<string|null>(resolve=>{
     let selected:string|null=null;
     const item=(label:string,id:string):MenuItemConstructorOptions=>({label,click:()=>{selected=id;}});
-    const folderActions=[item('Expand All Subfolders','expandAll'),item('Collapse All Subfolders','collapseAll')];
+    const folderActions=[item('Expand Subfolders','expandAll'),item('Collapse Subfolders','collapseAll')];
     const template:MenuItemConstructorOptions[]=kind==='project'
       ? [item('Close Folder','close'),{type:'separator'},...folderActions]
       : kind==='directory'?folderActions

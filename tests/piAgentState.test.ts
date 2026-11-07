@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { formatAgentTokens, formatContextPercent, updateEvent, withSnapshot } from '../src/AgentChat';
+import { formatAgentTokens, formatContextPercent, formatToolDuration, updateEvent, withSnapshot } from '../src/AgentChat';
 import type { PiSessionSnapshot } from '../shared/piTypes';
 import { calculatePiCacheHitPercent, countPiSessionRuns } from '../shared/piSession';
 
@@ -25,9 +25,11 @@ test('Pi chat state builds streaming text and accepts the authoritative final me
 test('Pi chat state tracks tool execution by tool call id',()=>{
   let state=withSnapshot(snapshot);
   state=updateEvent(state,{type:'tool_execution_start',toolCallId:'tool-1',toolName:'read',args:{path:'README.md'}});
+  assert.equal(typeof state.tools[0].startedAt,'number');
   state=updateEvent(state,{type:'tool_execution_update',toolCallId:'tool-1',partialResult:{content:'partial'}});
-  state=updateEvent(state,{type:'tool_execution_end',toolCallId:'tool-1',result:{content:'done',isError:false}});
-  assert.deepEqual(state.tools,[{id:'tool-1',runKey:'run-0',name:'read',status:'done',args:{path:'README.md'},result:{content:'done',isError:false}}]);
+  state=updateEvent(state,{type:'tool_execution_end',toolCallId:'tool-1',result:{content:'done'},isError:false,durationMs:1250});
+  assert.deepEqual(state.tools,[{id:'tool-1',runKey:'run-0',name:'read',status:'done',args:{path:'README.md'},result:{content:'done'},
+    startedAt:state.tools[0].startedAt,durationMs:1250}]);
 });
 
 test('Pi chat state keeps thinking separate and restores tools in their run',()=>{
@@ -41,12 +43,12 @@ test('Pi chat state keeps thinking separate and restores tools in their run',()=
   const restored=withSnapshot({...snapshot,messages:[
     {role:'user',content:'Inspect this',timestamp:1},
     {role:'assistant',content:[{type:'thinking',thinking:'Checking files'},{type:'toolCall',id:'tool-1',name:'read',arguments:{path:'README.md'}}],timestamp:2},
-    {role:'toolResult',toolCallId:'tool-1',toolName:'read',content:[{type:'text',text:'done'}],isError:false,timestamp:3},
+    {role:'toolResult',toolCallId:'tool-1',toolName:'read',content:[{type:'text',text:'done'}],isError:false,timestamp:3,durationMs:820},
   ]});
   assert.equal(restored.streamThinking,'');
   assert.deepEqual(restored.tools,[{
     id:'tool-1',runKey:'run-0',name:'read',status:'done',args:{path:'README.md'},
-    result:{role:'toolResult',toolCallId:'tool-1',toolName:'read',content:[{type:'text',text:'done'}],isError:false,timestamp:3},
+    result:{role:'toolResult',toolCallId:'tool-1',toolName:'read',content:[{type:'text',text:'done'}],isError:false,timestamp:3,durationMs:820},durationMs:820,
   }]);
 });
 
@@ -56,6 +58,8 @@ test('Pi usage values use compact tokens and fixed context precision',()=>{
   assert.equal(formatAgentTokens(2_100_000),'2.1m');
   assert.equal(formatContextPercent(undefined),'0.00%');
   assert.equal(formatContextPercent(8.126),'8.13%');
+  assert.equal(formatToolDuration(1250),'1.3s');
+  assert.equal(formatToolDuration(90_000),'1m 30s');
   assert.equal(calculatePiCacheHitPercent(10,40,0),80);
   assert.equal(calculatePiCacheHitPercent(0,0,0),0);
 });

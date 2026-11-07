@@ -7,13 +7,19 @@ import EditorArea from './EditorArea';
 import FileSidebar from './FileSidebar';
 import Icon from './Icon';
 import Sidebar, { type Panel } from './Sidebar';
-import TabBar, { type TabContextAction } from './TabBar';
+import TabBar, { type EditorTabItem, type TabContextAction } from './TabBar';
 import ReviewDashboard from './ReviewDashboard';
+import ReadonlyEditor from './ReadonlyEditor';
 import SettingsPage, { SettingsSidebar, type ReviewFileLabels, type SettingsCategory } from './SettingsPage';
 import WindowControls from './WindowControls';
 import NotificationCenter, { type AppNotification, type NotificationAction, type NotificationLevel } from './NotificationCenter';
 import { defaultTabExpansion, type FileTabExpansion, type FileTabOverflow } from './tabLayout';
-import AgentChat, { type AgentNavigationRequest, type AgentNotice } from './AgentChat';
+import AgentChat, { type AgentNavigationRequest, type AgentNotice, type ToolDetailRequest } from './AgentChat';
+
+interface ToolDocument {
+  id:string;projectId:string;sessionId:string;toolCallId:string;name:string;model:monaco.editor.ITextModel;
+}
+type AppEditorTab=(EditorTabItem&{kind:'file';file:OpenFile})|(EditorTabItem&{kind:'tool';toolDocument:ToolDocument});
 
 const savedWidth=(key:string,fallback:number)=>{
   const value=Number(localStorage.getItem(key));
@@ -48,8 +54,10 @@ export default function App(){
     settings:savedWidth('revu-settings-sidebar-width',250),
   }));
   const [tabs,setTabs]=useState<string[]>([]);
+  const [toolDocuments,setToolDocuments]=useState<ToolDocument[]>([]);
   const [activeId,setActiveId]=useState<string|null>(null);
   const [projectId,setProjectId]=useState<string|null>(null);
+  const [otherSelected,setOtherSelected]=useState(false);
   const [mixed,setMixed]=useState(()=>localStorage.getItem('revu-editor-tab-mode')==='mixed');
   const [fileTabOverflow,setFileTabOverflow]=useState<FileTabOverflow>(()=>
     localStorage.getItem('revu-file-tab-overflow')==='wrap'?'wrap':'scroll');
@@ -109,26 +117,37 @@ export default function App(){
   const {projects,projectsLoaded,documents,statuses,tick}=workspace;
   const editorRef=useRef<monaco.editor.IStandaloneCodeEditor|null>(null);
   const lastFile=useRef(new Map<string,string>());
+  const lastToolDocument=useRef<string|null>(null);
   const seenNotices=useRef(new Map<string,string>());
   const openFiles=tabs.map(id=>documents.find(file=>file.id===id)).filter((f):f is OpenFile=>!!f);
   const activeFile=openFiles.find(file=>file.id===activeId);
-  const visibleFiles=mixed?openFiles:openFiles.filter(file=>file.project.id===projectId);
-  const tabScope=mixed?'mixed':projectId;
+  const activeToolDocument=toolDocuments.find(document=>document.id===activeId);
+  const fileEditorTabs:AppEditorTab[]=openFiles.map(file=>({kind:'file',file,id:file.id,name:file.name,
+    title:file.project.name+'/'+file.path,projectName:file.project.name,dirty:file.dirty}));
+  const toolEditorTabs:AppEditorTab[]=toolDocuments.map(toolDocument=>({kind:'tool',toolDocument,id:toolDocument.id,name:toolDocument.name,
+    title:'Other/'+toolDocument.name,projectName:'Other',dirty:false}));
+  const editorTabs:AppEditorTab[]=[...fileEditorTabs,...toolEditorTabs];
+  const visibleEditorTabs=mixed?editorTabs:otherSelected?toolEditorTabs:fileEditorTabs.filter(tab=>tab.kind==='file'&&tab.file.project.id===projectId);
+  const tabScope=mixed?'mixed':otherSelected?'other':projectId;
   useEffect(()=>{
     if(!projectId&&projects.length)setProjectId(projects[0].id);
   },[projects,projectId]);
   useEffect(()=>{
-    const documentIds=new Set(documents.map(file=>file.id));
+    const documentIds=new Set(documents.map(file=>file.id));const toolIds=new Set(toolDocuments.map(document=>document.id));
     if(tabs.every(id=>documentIds.has(id)))return;
     const activeIndex=activeId?tabs.indexOf(activeId):-1;
     const remaining=tabs.filter(id=>documentIds.has(id));
     setTabs(remaining);
-    if(activeId&&!documentIds.has(activeId)){
+    if(activeId&&!documentIds.has(activeId)&&!toolIds.has(activeId)){
       const nextId=remaining[Math.min(Math.max(activeIndex,0),remaining.length-1)]??null;
       const next=documents.find(file=>file.id===nextId);
       setActiveId(nextId);setProjectId(next?.project.id??null);setReveal(null);
     }
-  },[documents,tabs,activeId]);
+  },[documents,toolDocuments,tabs,activeId]);
+  useEffect(()=>{
+    if(mixed)return;
+    setOtherSelected(!!activeToolDocument);
+  },[mixed,activeToolDocument]);
   useEffect(()=>{
     document.documentElement.dataset.theme=dark?'dark':'light';
     document.documentElement.style.setProperty('--theme-bg',dark?darkThemeColor:lightThemeColor);
@@ -197,13 +216,24 @@ export default function App(){
     return()=>window.removeEventListener('keydown',onKeyDown,true);
   });
   function selectFile(file:OpenFile){
-    lastFile.current.set(file.project.id,file.id);setProjectId(file.project.id);setActiveId(file.id);setReveal(null);
+    lastFile.current.set(file.project.id,file.id);setOtherSelected(false);setProjectId(file.project.id);setActiveId(file.id);setReveal(null);
   }
   function selectProject(id:string){
-    setProjectId(id);
+    setOtherSelected(false);setProjectId(id);
     const remembered=lastFile.current.get(id);
     const file=openFiles.find(file=>file.id===remembered)??openFiles.find(file=>file.project.id===id);
     setActiveId(file?.id??null);setReveal(null);
+  }
+  function selectToolDocument(document:ToolDocument){
+    lastToolDocument.current=document.id;setOtherSelected(!mixed);setActiveId(document.id);setReveal(null);
+  }
+  function selectOther(){
+    const document=toolDocuments.find(item=>item.id===lastToolDocument.current)??toolDocuments[0];
+    if(document)selectToolDocument(document);
+  }
+  function selectEditorTab(tab:EditorTabItem){
+    const item=editorTabs.find(candidate=>candidate.id===tab.id);if(!item)return;
+    if(item.kind==='file')selectFile(item.file);else selectToolDocument(item.toolDocument);
   }
   function toggleDirectory(key:string){
     setExpandedDirectories(current=>{
@@ -254,6 +284,25 @@ export default function App(){
       setPanel('files');
     }catch(error){notifyError(errorMessage(error));}finally{setPicking(false);}
   }
+  const openToolDetail=useCallback((detail:ToolDetailRequest)=>{
+    setToolDocuments(current=>{
+      const existing=current.find(document=>document.id===detail.id);
+      if(existing){if(existing.model.getValue()!==detail.content)existing.model.setValue(detail.content);return current;}
+      const uri=monaco.Uri.parse(`revu-tool-detail:///${encodeURIComponent(detail.sessionId)}/${encodeURIComponent(detail.toolCallId)}.json`);
+      const model=monaco.editor.getModel(uri)??monaco.editor.createModel(detail.content,'json',uri);
+      if(model.getValue()!==detail.content)model.setValue(detail.content);
+      return [...current,{id:detail.id,projectId:detail.projectId,sessionId:detail.sessionId,
+        toolCallId:detail.toolCallId,name:detail.fileName,model}];
+    });
+    lastToolDocument.current=detail.id;setActiveId(detail.id);setOtherSelected(!mixed);setReveal(null);
+  },[mixed]);
+  const updateToolDetail=useCallback((detail:ToolDetailRequest)=>{
+    setToolDocuments(current=>{
+      const existing=current.find(document=>document.id===detail.id);if(!existing)return current;
+      if(existing.model.getValue()!==detail.content)existing.model.setValue(detail.content);
+      return current;
+    });
+  },[]);
   async function openFile(project:Project,path:string,line?:number){
     try{
       const file=await workspace.load(project,path);
@@ -261,42 +310,62 @@ export default function App(){
       selectFile(file);if(line)setReveal({id:file.id,line});
     }catch(error){notifyError(errorMessage(error));}
   }
-  function closeFiles(targets:OpenFile[]){
-    if(!targets.length||targets.some(file=>file.saving||file.syncing))return;
-    const dirty=targets.filter(file=>file.dirty);
+  function closeEditorTabs(targets:AppEditorTab[]){
+    if(!targets.length)return;
+    const fileTargets=targets.flatMap(target=>target.kind==='file'?[target.file]:[]);
+    if(fileTargets.some(file=>file.saving||file.syncing))return;
+    const dirty=fileTargets.filter(file=>file.dirty);
     if(dirty.length&&!window.confirm(`${dirty.length} tab${dirty.length===1?' has':'s have'} unsaved changes. Discard the draft${dirty.length===1?'':'s'} and close?`))return;
     const closing=new Set(targets.map(file=>file.id));
     for(const file of dirty){
       file.records=[];file.chunks=[];file.draftExists=file.synced.exists;
       file.model.setValue(file.synced.text);file.dirty=false;
     }
-    const remaining=openFiles.filter(file=>!closing.has(file.id));
-    for(const file of targets){
+    const remainingFiles=openFiles.filter(file=>!closing.has(file.id));
+    for(const file of fileTargets){
       if(lastFile.current.get(file.project.id)!==file.id)continue;
-      const sibling=remaining.find(item=>item.project.id===file.project.id);
+      const sibling=remainingFiles.find(item=>item.project.id===file.project.id);
       if(sibling)lastFile.current.set(file.project.id,sibling.id);else lastFile.current.delete(file.project.id);
     }
     if(activeId&&closing.has(activeId)){
-      const candidates=visibleFiles.filter(file=>!closing.has(file.id));
-      const index=Math.max(0,visibleFiles.findIndex(file=>file.id===activeId));
+      const candidates=visibleEditorTabs.filter(tab=>!closing.has(tab.id));
+      const index=Math.max(0,visibleEditorTabs.findIndex(tab=>tab.id===activeId));
       const next=candidates[Math.min(index,candidates.length-1)];
-      if(next)selectFile(next);else setActiveId(null);
+      if(next)selectEditorTab(next);
+      else if(!mixed&&otherSelected){
+        const fallback=remainingFiles.find(file=>file.project.id===projectId)??remainingFiles[0];
+        if(fallback)selectFile(fallback);else{setOtherSelected(false);setActiveId(null);}
+      }else setActiveId(null);
     }
     setTabs(current=>current.filter(id=>!closing.has(id)));
+    const closedTools=toolDocuments.filter(document=>closing.has(document.id));
+    setToolDocuments(current=>current.filter(document=>!closing.has(document.id)));
+    for(const document of closedTools)document.model.dispose();
+    if(lastToolDocument.current&&closing.has(lastToolDocument.current))lastToolDocument.current=null;
   }
-  const closeFile=(file:OpenFile)=>closeFiles([file]);
-  const tabContext=(file:OpenFile,action:TabContextAction)=>closeFiles(action==='close'?[file]:action==='closeOthers'
-    ?openFiles.filter(item=>item!==file):openFiles);
+  const closeEditorTab=(tab:EditorTabItem)=>{
+    const item=editorTabs.find(candidate=>candidate.id===tab.id);if(item)closeEditorTabs([item]);
+  };
+  const tabContext=(tab:EditorTabItem,action:TabContextAction)=>{
+    const item=editorTabs.find(candidate=>candidate.id===tab.id);if(!item)return;
+    closeEditorTabs(action==='close'?[item]:action==='closeOthers'?editorTabs.filter(candidate=>candidate.id!==item.id):editorTabs);
+  };
   async function closeProject(project:Project){
     const affected=documents.filter(file=>file.project.id===project.id);
+    const affectedTools=toolDocuments.filter(document=>document.projectId===project.id);
     if(affected.some(file=>file.saving||file.syncing)){notify('warning','Wait for active file operations before closing the folder.');return;}
     const dirty=affected.filter(file=>file.dirty);
     if(dirty.length&&!window.confirm(`${project.name} has ${dirty.length} unsaved file${dirty.length===1?'':'s'}. Discard the drafts and close the folder?`))return;
     const remaining=openFiles.filter(file=>file.project.id!==project.id);
+    const remainingTools=toolDocuments.filter(document=>document.projectId!==project.id);
     try{
       await workspace.removeProject(project);
       setTabs(current=>current.filter(id=>!affected.some(file=>file.id===id)));lastFile.current.delete(project.id);
-      if(activeFile?.project.id===project.id){const next=remaining[0];if(next)selectFile(next);else setActiveId(null);}
+      setToolDocuments(current=>current.filter(document=>document.projectId!==project.id));
+      for(const document of affectedTools)document.model.dispose();
+      if(activeFile?.project.id===project.id||activeToolDocument?.projectId===project.id){
+        const next=remaining[0];if(next)selectFile(next);else if(remainingTools[0])selectToolDocument(remainingTools[0]);else setActiveId(null);
+      }
       if(projectId===project.id)setProjectId(remaining[0]?.project.id??projects.find(item=>item.id!==project.id)?.id??null);
     }catch(error){notifyError(errorMessage(error));}
   }
@@ -311,6 +380,7 @@ export default function App(){
       : {...current,files:current.shared,review:current.shared,settings:current.shared});
     setSyncWidths(value);
   };
+  const showProjectBar=!mixed&&(!hideSingleProjectTabs||projects.length>1||toolDocuments.length>0);
   return <div className={'app '+(agentOpen?'agent-open':'')}>
     <WindowControls onSave={()=>{if(activeFile)void workspace.save(activeFile);}}
       saveDisabled={!activeFile||!activeFile.dirty||!!(activeFile.saving||activeFile.syncing||activeFile.reason)}
@@ -354,18 +424,22 @@ export default function App(){
       onResetThemeColors={()=>{setLightThemeColor('#FFFFFF');setDarkThemeColor('#191919');}}
       onShowThemeSwitcherChange={setShowThemeSwitcher}/>:<>
     <main className="main">
-      {projects.length>0&&<>
-        {!mixed&&!(hideSingleProjectTabs&&projects.length===1)&&<div className="project-bar"><div className="project-tabs" aria-label="Project tabs">
-          {projects.map(project=><button key={project.id} className={'project-tab '+(project.id===projectId?'active':'')}
-            aria-pressed={project.id===projectId} onClick={()=>selectProject(project.id)}>
+      {(projects.length>0||toolDocuments.length>0)&&<>
+        {showProjectBar&&<div className="project-bar"><div className="project-tabs" aria-label="Project tabs">
+          {projects.map(project=><button key={project.id} className={'project-tab '+(!otherSelected&&project.id===projectId?'active':'')}
+            aria-pressed={!otherSelected&&project.id===projectId} onClick={()=>selectProject(project.id)}>
             <Icon name="projectFolder" size={14}/><span>{project.name}</span>
             {documents.some(file=>file.project.id===project.id&&file.dirty)&&<span className="dirty-dot"/>}
-          </button>)}</div></div>}
-        <TabBar files={visibleFiles} activeId={activeId} onSelect={selectFile} onClose={closeFile}
+          </button>)}
+          {!!toolDocuments.length&&<button className={'project-tab '+(otherSelected?'active':'')} aria-pressed={otherSelected} onClick={selectOther}>
+            <Icon name="projectFolder" size={14}/><span>Other</span>
+          </button>}
+        </div></div>}
+        <TabBar tabs={visibleEditorTabs} activeId={activeId} onSelect={selectEditorTab} onClose={closeEditorTab}
           onContextAction={tabContext}
           mixed={mixed} overflowMode={fileTabOverflow} expansion={fileTabExpansion}
           onExpansionChange={setFileTabExpansion}
-          underWindowControls={mixed||(!mixed&&hideSingleProjectTabs&&projects.length===1)}/>
+          underWindowControls={!showProjectBar}/>
       </>}
       {activeFile?<>
         <div className="breadcrumb"><span>{activeFile.project.name}</span><span>/</span><span>{activeFile.path}</span></div>
@@ -382,6 +456,10 @@ export default function App(){
         <footer className="status-bar"><span>{activeFile.dirty?'Unsaved':'Saved'}
           {activeFile.computing?' · Updating diff…':''}</span>
           <span>{activeFile.model.getLanguageId()}<span className="status-divider">UTF-8{activeFile.synced.bom?' BOM':''}</span></span></footer>
+      </>:activeToolDocument?<>
+        <div className="breadcrumb"><span>Other</span><span>/</span><span>{activeToolDocument.name}</span></div>
+        <div className="editor-container"><ReadonlyEditor model={activeToolDocument.model} dark={dark} editorRef={editorRef} fontSize={fontSize}/></div>
+        <footer className="status-bar"><span>Read-only</span><span>JSON<span className="status-divider">UTF-8</span></span></footer>
       </>:<div className="empty-state">
         {projects.length?<span className="empty-project-hint">Select a file from the sidebar</span>
           :<button className="open-folder-button" onClick={addFolder} disabled={picking}><Icon name="openFolder" size={19}/>{picking?'Opening…':'Open Folder'}</button>}
@@ -393,6 +471,7 @@ export default function App(){
       dirtyProjectIds={new Set(documents.filter(file=>file.dirty).map(file=>file.project.id))}
       width={agentWidth} onResize={setAgentWidth}
       onResizeEnd={value=>localStorage.setItem('revu-agent-width',String(value))} notify={notify}
-      navigationRequest={agentNavigation} onNotice={handleAgentNotice}/>
+      navigationRequest={agentNavigation} onNotice={handleAgentNotice}
+      onOpenToolDetail={openToolDetail} onUpdateToolDetail={updateToolDetail}/>
   </div>;
 }

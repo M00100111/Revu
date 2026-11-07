@@ -7,8 +7,14 @@ import type {
   PiSessionSummary,PiThinkingLevel,PiUsageStats,RevuPiEvent,
 } from '../shared/piTypes';
 
-export interface ToolState {id:string;runKey:string;name:string;status:'running'|'done'|'error';args?:unknown;result?:unknown}
+export interface ToolState {
+  id:string;runKey:string;name:string;status:'running'|'done'|'error';args?:unknown;result?:unknown;
+  startedAt?:number;durationMs?:number;
+}
 export interface ChatState extends PiSessionSnapshot {tools:ToolState[];streamText:string;streamThinking:string}
+export interface ToolDetailRequest {
+  id:string;projectId:string;sessionId:string;toolCallId:string;fileName:string;content:string;
+}
 interface RunItem {type:'answer'|'thinking'|'tool';key:string;text?:string;tool?:ToolState;streaming?:boolean}
 interface ChatRun {key:string;user:string;userTimestamp?:number;items:RunItem[]}
 type SessionTone='idle'|'running'|'done'|'error';
@@ -39,6 +45,7 @@ const messageTimestamp=(message:unknown)=>{
   const time=typeof value==='number'?value:typeof value==='string'?Date.parse(value):NaN;
   return Number.isFinite(time)?time:undefined;
 };
+const numberValue=(value:unknown)=>typeof value==='number'&&Number.isFinite(value)?value:undefined;
 const runKey=(index:number)=>`run-${Math.max(0,index)}`;
 const lastRunKey=(messages:unknown[])=>runKey(messages.reduce<number>((count,message)=>count+(record(message).role==='user'?1:0),0)-1);
 const toolsFromMessages=(messages:unknown[]):ToolState[]=>{
@@ -48,7 +55,8 @@ const toolsFromMessages=(messages:unknown[]):ToolState[]=>{
     if(role==='assistant'&&Array.isArray(item.content))for(const raw of item.content){const block=record(raw);if(block.type!=='toolCall')continue;
       const id=String(block.id??'');if(!id)continue;tools.set(id,{id,runKey:runKey(runIndex),name:String(block.name??'Tool'),status:'running',args:block.arguments});}
     if(role==='toolResult'){const id=String(item.toolCallId??'');if(!id)continue;const existing=tools.get(id);
-      tools.set(id,{id,runKey:existing?.runKey??runKey(runIndex),name:String(item.toolName??existing?.name??'Tool'),status:item.isError?'error':'done',args:existing?.args,result:message});}
+      tools.set(id,{id,runKey:existing?.runKey??runKey(runIndex),name:String(item.toolName??existing?.name??'Tool'),status:item.isError?'error':'done',
+        args:existing?.args,result:message,durationMs:numberValue(item.durationMs)});}
   }
   return [...tools.values()];
 };
@@ -81,6 +89,27 @@ export const formatAgentTokens=(value:number)=>{
   return value>=1_000_000?compact(value/1_000_000,'m'):value>=1000?compact(value/1000,'k'):String(value);
 };
 export const formatContextPercent=(value?:number|null)=>`${(value??0).toFixed(2)}%`;
+export const formatToolDuration=(value:number)=>{
+  const seconds=Math.max(0,value)/1000;
+  if(seconds<60)return `${seconds.toFixed(1)}s`;
+  const total=Math.floor(seconds);const minutes=Math.floor(total/60);const remainder=total%60;
+  return minutes<60?`${minutes}m ${remainder}s`:`${Math.floor(minutes/60)}h ${minutes%60}m ${remainder}s`;
+};
+const toolDuration=(tool:ToolState,now:number)=>tool.durationMs??(tool.startedAt===undefined?undefined:Math.max(0,now-tool.startedAt));
+const toolFileName=(tool:ToolState)=>{
+  const name=tool.name.trim().replace(/[^A-Za-z0-9._-]+/g,'-').replace(/^-+|-+$/g,'')||'tool';
+  const id=tool.id.replace(/[^A-Za-z0-9_-]+/g,'-').slice(0,16)||'call';
+  return `${name}-${id}.tool.json`;
+};
+const toolDetail=(chat:ChatState,tool:ToolState,now=Date.now()):ToolDetailRequest=>({
+  id:`tool:${chat.sessionId}:${tool.id}`,projectId:chat.projectId,sessionId:chat.sessionId,toolCallId:tool.id,
+  fileName:toolFileName(tool),content:JSON.stringify({
+    tool:tool.name,toolCallId:tool.id,status:tool.status,
+    ...(tool.startedAt!==undefined?{startedAt:new Date(tool.startedAt).toISOString()}:{}),
+    ...(toolDuration(tool,now)!==undefined?{durationMs:Math.round(toolDuration(tool,now)!)}:{}),
+    input:tool.args??null,output:tool.result??null,
+  },null,2),
+});
 const emptyUsage:PiUsageStats={input:0,output:0,cacheRead:0,cacheWrite:0,total:0,cost:0,runs:0,toolCalls:0,cacheHitPercent:0,contextTokens:0,contextWindow:0,contextPercent:0};
 const finalAnswer=(run:ChatRun)=>[...run.items].reverse().find(item=>item.type==='answer'&&!item.streaming)?.text??'';
 const formatTime=(value:number)=>new Intl.DateTimeFormat(undefined,{hour:'2-digit',minute:'2-digit'}).format(value);
@@ -152,7 +181,7 @@ export function updateEvent(current:ChatState,event:unknown):ChatState{
     return {...current,messages,streamText:'',streamThinking:''};
   }
   if(type==='tool_execution_start'){
-    const id=String(item.toolCallId);const tool:ToolState={id,runKey:lastRunKey(current.messages),name:String(item.toolName),status:'running',args:item.args};
+    const id=String(item.toolCallId);const tool:ToolState={id,runKey:lastRunKey(current.messages),name:String(item.toolName),status:'running',args:item.args,startedAt:Date.now()};
     return {...current,tools:[...current.tools.filter(existing=>existing.id!==id),tool]};
   }
   if(type==='tool_execution_update'){
@@ -161,7 +190,8 @@ export function updateEvent(current:ChatState,event:unknown):ChatState{
   }
   if(type==='tool_execution_end'){
     const id=String(item.toolCallId);const result=record(item.result);
-    return {...current,tools:current.tools.map(tool=>tool.id===id?{...tool,status:result.isError?'error':'done',result:item.result}:tool)};
+    return {...current,tools:current.tools.map(tool=>tool.id===id?{...tool,status:item.isError||result.isError?'error':'done',result:item.result,
+      durationMs:numberValue(item.durationMs)??(tool.startedAt===undefined?undefined:Math.max(0,Date.now()-tool.startedAt))}:tool)};
   }
   return current;
 }
@@ -254,10 +284,11 @@ function ModelDialog({projectId,sessionId,onClose,onChanged,notify}:{projectId:s
   </div>;
 }
 
-export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds,width,onResize,onResizeEnd,notify,navigationRequest,onNotice}:{
+export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds,width,onResize,onResizeEnd,notify,navigationRequest,onNotice,onOpenToolDetail,onUpdateToolDetail}:{
   open:boolean;projects:Project[];activeProjectId:string|null;dirtyProjectIds:ReadonlySet<string>;width:number;
   onResize:(width:number)=>void;onResizeEnd:(width:number)=>void;notify:Notify;
   navigationRequest:AgentNavigationRequest|null;onNotice:(notice:AgentNotice)=>void;
+  onOpenToolDetail:(detail:ToolDetailRequest)=>void;onUpdateToolDetail:(detail:ToolDetailRequest)=>void;
 }){
   const [selectedProjectId,setSelectedProjectId]=useState<string>('');const [selectedSessionId,setSelectedSessionId]=useState<string|null>(null);
   const [sessions,setSessions]=useState<Record<string,PiSessionSummary[]>>({});const [chats,setChats]=useState<Record<string,ChatState>>({});
@@ -266,6 +297,7 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
   const [composerExpanded,setComposerExpanded]=useState(false);
   const [usageOpen,setUsageOpen]=useState(false);const [contextOpen,setContextOpen]=useState(false);const [contextOperation,setContextOperation]=useState<'compact'|'toggle'|null>(null);
   const [compactionResult,setCompactionResult]=useState<PiCompactionResult|undefined>();const [activeRunKey,setActiveRunKey]=useState('');
+  const [toolClock,setToolClock]=useState(Date.now());
   const [previewRunKey,setPreviewRunKey]=useState('');const [previewTop,setPreviewTop]=useState(8);
   const [openSessionIds,setOpenSessionIds]=useState<Record<string,string[]>>({});
   const [doneSessionIds,setDoneSessionIds]=useState<Set<string>>(()=>new Set());
@@ -292,9 +324,19 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
   },[clearDone]);
   const selectedProject=projects.find(project=>project.id===selectedProjectId);
   const current=selectedSessionId?chats[selectedSessionId]:undefined;
+  const hasRunningTool=!!current?.tools.some(tool=>tool.status==='running');
   const sessionTabs=openSessionIds[selectedProjectId]??[];
   const runs=current?buildRuns(current):[];const usage=current?.usage??emptyUsage;
   const previewRun=runs.find(run=>run.key===previewRunKey);
+  useEffect(()=>{
+    if(!hasRunningTool)return;
+    setToolClock(Date.now());const timer=setInterval(()=>setToolClock(Date.now()),1000);
+    return()=>clearInterval(timer);
+  },[hasRunningTool,selectedSessionId]);
+  useEffect(()=>{
+    if(!current)return;
+    for(const tool of current.tools)if(tool.status==='running')onUpdateToolDetail(toolDetail(current,tool,toolClock));
+  },[current,toolClock,onUpdateToolDetail]);
   const dirty=selectedProjectId?dirtyProjectIds.has(selectedProjectId):false;
   const reloadSessions=async(projectId:string)=>{
     try{const items=await window.revu.agent.listSessions(projectId).then(unwrap);setSessions(current=>({...current,[projectId]:items}));return items;}
@@ -382,7 +424,11 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
     };
     if(event.type==='event'){
       const payload=record(event.payload);
-      const chat=chatsRef.current[event.sessionId];if(chat){const next={...chatsRef.current,[event.sessionId]:updateEvent(chat,event.payload)};chatsRef.current=next;setChats(next);}
+      const chat=chatsRef.current[event.sessionId];if(chat){const updated=updateEvent(chat,event.payload);const next={...chatsRef.current,[event.sessionId]:updated};chatsRef.current=next;setChats(next);
+        if(payload.type==='tool_execution_start'||payload.type==='tool_execution_update'||payload.type==='tool_execution_end'){
+          const tool=updated.tools.find(item=>item.id===String(payload.toolCallId));if(tool)onUpdateToolDetail(toolDetail(updated,tool));
+        }
+      }
       if(payload.type==='compaction_start'||payload.type==='compaction_end'){
         const compacting=chatsRef.current[event.sessionId];if(compacting){const next={...chatsRef.current,
           [event.sessionId]:{...compacting,isCompacting:payload.type==='compaction_start'}};chatsRef.current=next;setChats(next);}
@@ -421,7 +467,7 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
       setSessions(current=>({...current,[event.projectId]:(current[event.projectId]??[]).map(session=>session.id===event.sessionId?{...session,status:'error'}:session)}));
     }
     if(event.type==='sessions-changed')void reloadSessions(event.projectId);
-  }),[onNotice,markDone,clearDone]);
+  }),[onNotice,markDone,clearDone,onUpdateToolDetail]);
   useLayoutEffect(()=>{
     const body=bodyRef.current;if(!body)return;const frame=requestAnimationFrame(updateRunRail);const observer=new ResizeObserver(updateRunRail);observer.observe(body);
     for(const element of runRefs.current.values())observer.observe(element);body.addEventListener('scroll',updateRunRail,{passive:true});
@@ -520,8 +566,11 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
           {!!run.items.length&&<div className="agent-response"><span className="agent-role" role="img" aria-label="Pi"><Icon name="pi" size={16}/></span>{run.items.map(part=>part.type==='answer'
             ?<div className={'agent-answer '+(part.streaming?'streaming':'')} key={part.key}>{part.text}</div>
             :part.type==='thinking'?<details className="agent-thinking" key={part.key} open={part.streaming||undefined} onToggle={()=>requestAnimationFrame(updateRunRail)}><summary title="Toggle thought process"><Icon name="thought" size={16}/><span>Thought process</span></summary><div>{part.text}</div></details>
-            :part.tool&&<details className={`agent-tool ${part.tool.status}`} key={part.key} onToggle={()=>requestAnimationFrame(updateRunRail)}><summary><span>{part.tool.name}</span><small>{part.tool.status}</small></summary>
-              <pre>{JSON.stringify({input:part.tool.args,output:part.tool.result},null,2)}</pre></details>)}
+            :part.tool&&<details className={`agent-tool ${part.tool.status}`} key={part.key} onToggle={()=>requestAnimationFrame(updateRunRail)}><summary><span>{part.tool.name}</span>
+              <span className="agent-tool-meta">{toolDuration(part.tool,toolClock)!==undefined&&<time>{formatToolDuration(toolDuration(part.tool,toolClock)!)}</time>}<small>{part.tool.status}</small></span></summary>
+              <div className="agent-tool-detail"><button type="button" className="agent-tool-expand" title="Open in Editor" aria-label={`Open ${part.tool.name} details in editor`}
+                onClick={()=>onOpenToolDetail(toolDetail(current,part.tool!,toolClock))}><Icon name="expand" size={13}/></button>
+                <pre>{JSON.stringify({input:part.tool.args,output:part.tool.result},null,2)}</pre></div></details>)}
             <div className="agent-message-actions" aria-label="Assistant message actions">
               <button type="button" disabled title="Copy · Coming soon" aria-label="Copy · Coming soon"><Icon name="copy" size={14}/></button>
               <button type="button" disabled title="Format · Coming soon" aria-label="Format · Coming soon"><Icon name="format" size={14}/></button>

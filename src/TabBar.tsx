@@ -1,12 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { OpenFile } from './editor';
 import Icon from './Icon';
 import { countTabRows, defaultTabExpansion, nextTabExpansion, type FileTabExpansion, type FileTabOverflow } from './tabLayout';
 export type TabContextAction='close'|'closeOthers'|'closeAll';
-export default function TabBar({ files, activeId, onSelect, onClose, onContextAction, mixed,
+export interface EditorTabItem {id:string;name:string;title:string;projectName:string;dirty:boolean}
+export default function TabBar({ tabs, activeId, onSelect, onClose, onContextAction, mixed,
   overflowMode,expansion,onExpansionChange,underWindowControls }: {
-  files: OpenFile[]; activeId: string | null; onSelect: (file: OpenFile) => void;
-  onClose: (file: OpenFile) => void;onContextAction:(file:OpenFile,action:TabContextAction)=>void;
+  tabs: EditorTabItem[]; activeId: string | null; onSelect: (tab: EditorTabItem) => void;
+  onClose: (tab: EditorTabItem) => void;onContextAction:(tab:EditorTabItem,action:TabContextAction)=>void;
   mixed: boolean;overflowMode:FileTabOverflow;expansion:FileTabExpansion;
   onExpansionChange:(expansion:FileTabExpansion)=>void;underWindowControls:boolean;
 }) {
@@ -29,7 +29,7 @@ export default function TabBar({ files, activeId, onSelect, onClose, onContextAc
     };
     const observer=new ResizeObserver(measure);observer.observe(bar);observer.observe(tabs);measure();
     return()=>observer.disconnect();
-  },[files,mixed,overflowMode,metrics.overflow]);
+  },[tabs,mixed,overflowMode,metrics.overflow]);
   useEffect(()=>{
     const fallback=defaultTabExpansion(overflowMode);
     if(!metrics.overflow&&expansion!==fallback)onExpansionChange(fallback);
@@ -44,18 +44,18 @@ export default function TabBar({ files, activeId, onSelect, onClose, onContextAc
   return <div ref={barRef} className={'tab-bar '+(wrapped?'wrapped ':'')+(limited?'limited ':'')+
     (expansion==='all'?'all ':'')+(underWindowControls?'under-window-controls':'')}>
     <div ref={tabsRef} className="tabs" aria-label="Open files">
-      {files.map(file => <div key={file.id} className={'tab ' + (file.id === activeId ? 'active' : '')}
-        ref={file.id===activeId?activeRef:undefined}
-        onContextMenu={async event=>{event.preventDefault();const action=await window.revu.contextMenu('tab');if(action)onContextAction(file,action);}}>
-        <button className="tab-select" title={file.project.name + '/' + file.path}
-          aria-pressed={file.id === activeId} onClick={() => onSelect(file)}>
-          <Icon name="editorDocument" size={14} /><span>{file.name}</span>
-          {mixed && <small className="tab-project">{file.project.name}</small>}
+      {tabs.map(tab => <div key={tab.id} className={'tab ' + (tab.id === activeId ? 'active' : '')}
+        ref={tab.id===activeId?activeRef:undefined}
+        onContextMenu={async event=>{event.preventDefault();const action=await window.revu.contextMenu('tab');if(action)onContextAction(tab,action);}}>
+        <button className="tab-select" title={tab.title}
+          aria-pressed={tab.id === activeId} onClick={() => onSelect(tab)}>
+          <Icon name="editorDocument" size={14} /><span>{tab.name}</span>
+          {mixed && <small className="tab-project">{tab.projectName}</small>}
         </button>
-        <button className={'tab-close ' + (file.dirty ? 'dirty' : '')}
-          aria-label={'Close ' + file.project.name + '/' + file.path + (file.dirty ? ' (unsaved)' : '')}
-          title={file.dirty ? 'Unsaved · Close file' : 'Close file'} onClick={() => onClose(file)}>
-          {file.dirty && <span className="dirty-dot" />}<Icon name="close" size={12} />
+        <button className={'tab-close ' + (tab.dirty ? 'dirty' : '')}
+          aria-label={'Close ' + tab.title + (tab.dirty ? ' (unsaved)' : '')}
+          title={tab.dirty ? 'Unsaved · Close file' : 'Close file'} onClick={() => onClose(tab)}>
+          {tab.dirty && <span className="dirty-dot" />}<Icon name="close" size={12} />
         </button>
       </div>)}
     </div>
