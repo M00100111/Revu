@@ -1,5 +1,8 @@
 import type { PiCompactionResponse, PiModelDefaults, PiModelSummary, PiProviderStatus, PiSessionSnapshot, PiSessionSummary, PiThinkingLevel, RevuPiEvent } from '../shared/piTypes';
 interface RevuResponse<T>{ok:boolean;value?:T;status?:number;error?:string}
+type ProjectContextAction='close'|'expandAll'|'collapseAll';
+type DirectoryContextAction='expandAll'|'collapseAll';
+type TabContextAction='close'|'closeOthers'|'closeAll';
 interface RevuAgentApi {
   listSessions(projectId:string):Promise<RevuResponse<PiSessionSummary[]>>;
   openSession(projectId:string,sessionId:string):Promise<RevuResponse<PiSessionSnapshot>>;
@@ -24,7 +27,10 @@ declare global {
   interface Window{
     revu:{
       invoke<T>(body:Record<string,unknown>):Promise<RevuResponse<T>>;
-      contextMenu(kind:'project'|'tab'):Promise<'close'|'closeOthers'|'closeAll'|null>;
+      contextMenu(kind:'project'):Promise<ProjectContextAction|null>;
+      contextMenu(kind:'directory'):Promise<DirectoryContextAction|null>;
+      contextMenu(kind:'tab'):Promise<TabContextAction|null>;
+      copyText(text:string):void;
       windowControl(action:'minimize'|'maximize'|'close'|'isMaximized'):Promise<boolean>;
       setDirty(dirty:boolean):void;
       onMaximized(listener:(maximized:boolean)=>void):()=>void;

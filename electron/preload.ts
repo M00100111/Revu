@@ -1,11 +1,12 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { clipboard, contextBridge, ipcRenderer } from 'electron';
 import type { PiAgentRequest, PiCompactionResponse, PiModelDefaults, PiModelSummary, PiProviderStatus, PiSessionSnapshot, PiSessionSummary, PiThinkingLevel, RevuPiEvent } from '../shared/piTypes';
 
 const agentInvoke=<T>(body:PiAgentRequest)=>ipcRenderer.invoke('revu:agent',body) as Promise<{ok:boolean;value?:T;error?:string}>;
 
 contextBridge.exposeInMainWorld('revu',{
   invoke:(body:Record<string,unknown>)=>ipcRenderer.invoke('revu:invoke',body),
-  contextMenu:(kind:'project'|'tab')=>ipcRenderer.invoke('revu:context-menu',kind),
+  contextMenu:(kind:'project'|'directory'|'tab')=>ipcRenderer.invoke('revu:context-menu',kind),
+  copyText:(text:string)=>clipboard.writeText(text),
   windowControl:(action:'minimize'|'maximize'|'close'|'isMaximized')=>ipcRenderer.invoke('revu:window-control',action),
   setDirty:(dirty:boolean)=>ipcRenderer.send('revu:dirty-state',dirty),
   onMaximized:(listener:(maximized:boolean)=>void)=>{

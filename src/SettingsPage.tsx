@@ -22,6 +22,22 @@ function FontSizeSetting({fontSize,onChange}:{fontSize:number;onChange:(value:nu
     }}/>;
 }
 
+function ThemeColorSetting({value,label,onChange}:{value:string;label:string;onChange:(value:string)=>void}){
+  const [draft,setDraft]=useState(value);
+  useEffect(()=>setDraft(value),[value]);
+  const commit=()=>{
+    const next=draft.toUpperCase();
+    if(!/^#[0-9A-F]{6}$/.test(next)){setDraft(value);return;}
+    onChange(next);setDraft(next);
+  };
+  return <div className="theme-color-setting">
+    <i style={{background:value}}/>
+    <input className="setting-text-input" type="text" value={draft} maxLength={7} aria-label={label}
+      spellCheck={false} onChange={event=>{const next=event.target.value.toUpperCase();setDraft(next);if(/^#[0-9A-F]{6}$/.test(next))onChange(next);}} onBlur={commit}
+      onKeyDown={event=>{if(event.key==='Enter'){event.preventDefault();event.currentTarget.blur();}}}/>
+  </div>;
+}
+
 export function SettingsSidebar({width,onResize,category,onCategoryChange}:{
   width:number;onResize:(width:number)=>void;category:SettingsCategory;
   onCategoryChange:(category:SettingsCategory)=>void;
@@ -41,7 +57,7 @@ export function SettingsSidebar({width,onResize,category,onCategoryChange}:{
 
 export default function SettingsPage({category,syncWidths,onChange,mixed,onModeChange,hideSingleProjectTabs,onHideSingleProjectTabsChange,fontSize,
   onFontSizeChange,onResetEditor,fileTabOverflow,onFileTabOverflowChange,reviewFileLabels,onReviewFileLabelsChange,dark,onThemeChange,
-  showThemeSwitcher,onShowThemeSwitcherChange}:{
+  showThemeSwitcher,onShowThemeSwitcherChange,lightThemeColor,darkThemeColor,onLightThemeColorChange,onDarkThemeColorChange,onResetThemeColors}:{
   category:SettingsCategory;syncWidths:boolean;onChange:(value:boolean)=>void;
   mixed:boolean;onModeChange:(mixed:boolean)=>void;hideSingleProjectTabs:boolean;
   onHideSingleProjectTabsChange:(value:boolean)=>void;fontSize:number;
@@ -49,6 +65,8 @@ export default function SettingsPage({category,syncWidths,onChange,mixed,onModeC
   fileTabOverflow:FileTabOverflow;onFileTabOverflowChange:(value:FileTabOverflow)=>void;
   reviewFileLabels:ReviewFileLabels;onReviewFileLabelsChange:(value:ReviewFileLabels)=>void;
   dark:boolean;onThemeChange:(dark:boolean)=>void;showThemeSwitcher:boolean;onShowThemeSwitcherChange:(value:boolean)=>void;
+  lightThemeColor:string;darkThemeColor:string;onLightThemeColorChange:(value:string)=>void;
+  onDarkThemeColorChange:(value:string)=>void;onResetThemeColors:()=>void;
 }){
   return <main className="main settings-main">
     <div className="settings-content">
@@ -98,13 +116,21 @@ export default function SettingsPage({category,syncWidths,onChange,mixed,onModeC
           </div>
         </div>
       </>:category==='appearance'?<>
-        <h1>Appearance</h1>
+        <div className="settings-title-row"><h1>Appearance</h1><button onClick={onResetThemeColors}>Reset</button></div>
         <div className="setting-row">
           <span><strong>Color theme</strong><small>Choose the application color theme.</small></span>
           <div className="setting-options" role="group" aria-label="Color theme">
             <button className={!dark?'active':''} onClick={()=>onThemeChange(false)}>Light</button>
             <button className={dark?'active':''} onClick={()=>onThemeChange(true)}>Dark</button>
           </div>
+        </div>
+        <div className="setting-row">
+          <span><strong>Light theme color</strong><small>Set the light theme background using #RRGGBB.</small></span>
+          <ThemeColorSetting value={lightThemeColor} label="Light theme color" onChange={onLightThemeColorChange}/>
+        </div>
+        <div className="setting-row">
+          <span><strong>Dark theme color</strong><small>Set the dark theme background using #RRGGBB.</small></span>
+          <ThemeColorSetting value={darkThemeColor} label="Dark theme color" onChange={onDarkThemeColorChange}/>
         </div>
       </>:<>
         <h1>Activity Bar</h1>

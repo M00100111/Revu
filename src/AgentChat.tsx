@@ -10,7 +10,8 @@ import type {
 export interface ToolState {id:string;runKey:string;name:string;status:'running'|'done'|'error';args?:unknown;result?:unknown}
 export interface ChatState extends PiSessionSnapshot {tools:ToolState[];streamText:string;streamThinking:string}
 interface RunItem {type:'answer'|'thinking'|'tool';key:string;text?:string;tool?:ToolState;streaming?:boolean}
-interface ChatRun {key:string;user:string;items:RunItem[]}
+interface ChatRun {key:string;user:string;userTimestamp?:number;items:RunItem[]}
+type SessionTone='idle'|'running'|'done'|'error';
 export interface AgentNavigationRequest {projectId:string;sessionId:string;runKey?:string;token:number}
 export interface AgentNotice {level:'success'|'error';message:string;projectId:string;sessionId:string;runKey?:string}
 type Notify=(level:'info'|'warning'|'error',message:string)=>void;
@@ -33,6 +34,11 @@ const messageText=(message:unknown)=>{
     return '';
   }).filter(Boolean).join('\n');
 };
+const messageTimestamp=(message:unknown)=>{
+  const value=record(message).timestamp;
+  const time=typeof value==='number'?value:typeof value==='string'?Date.parse(value):NaN;
+  return Number.isFinite(time)?time:undefined;
+};
 const runKey=(index:number)=>`run-${Math.max(0,index)}`;
 const lastRunKey=(messages:unknown[])=>runKey(messages.reduce<number>((count,message)=>count+(record(message).role==='user'?1:0),0)-1);
 const toolsFromMessages=(messages:unknown[]):ToolState[]=>{
@@ -54,7 +60,7 @@ const buildRuns=(state:ChatState):ChatRun[]=>{
   const runs:ChatRun[]=[];const tools=new Map(state.tools.map(tool=>[tool.id,tool]));const placed=new Set<string>();let current:ChatRun|undefined;
   const ensureRun=()=>current??(current={key:runKey(runs.length),user:'',items:[]},runs.push(current),current);
   for(const message of state.messages){const item=record(message);const role=item.role;
-    if(role==='user'){current={key:runKey(runs.length),user:messageText(message),items:[]};runs.push(current);continue;}
+    if(role==='user'){current={key:runKey(runs.length),user:messageText(message),userTimestamp:messageTimestamp(message),items:[]};runs.push(current);continue;}
     if(role==='assistant'&&Array.isArray(item.content)){const run=ensureRun();for(const raw of item.content){const block=record(raw);
       if(block.type==='text'&&typeof block.text==='string'&&block.text.trim())run.items.push({type:'answer',key:`answer-${run.items.length}`,text:block.text});
       if(block.type==='thinking'&&typeof block.thinking==='string'&&block.thinking.trim())run.items.push({type:'thinking',key:`thinking-${run.items.length}`,text:block.thinking});
@@ -78,6 +84,10 @@ export const formatContextPercent=(value?:number|null)=>`${(value??0).toFixed(2)
 const emptyUsage:PiUsageStats={input:0,output:0,cacheRead:0,cacheWrite:0,total:0,cost:0,runs:0,toolCalls:0,cacheHitPercent:0,contextTokens:0,contextWindow:0,contextPercent:0};
 const finalAnswer=(run:ChatRun)=>[...run.items].reverse().find(item=>item.type==='answer'&&!item.streaming)?.text??'';
 const formatTime=(value:number)=>new Intl.DateTimeFormat(undefined,{hour:'2-digit',minute:'2-digit'}).format(value);
+const formatFullTime=(value:number)=>new Intl.DateTimeFormat(undefined,{dateStyle:'medium',timeStyle:'short'}).format(value);
+const sessionTone=(status:PiRuntimeStatus,done:boolean):SessionTone=>done?'done':status==='error'?'error':
+  status==='running'||status==='starting'||status==='stopping'?'running':'idle';
+const sessionStatusLabel=(tone:SessionTone)=>tone==='running'?'Running':tone==='done'?'Done':tone==='error'?'Error':'Idle';
 const PROVIDER_NAMES:Record<string,string>={anthropic:'Anthropic',openai:'OpenAI',google:'Google Gemini',openrouter:'OpenRouter',deepseek:'DeepSeek',xai:'xAI',groq:'Groq',mistral:'Mistral',cerebras:'Cerebras',nvidia:'NVIDIA NIM',zai:'ZAI',moonshotai:'Moonshot AI','moonshotai-cn':'Moonshot AI CN'};
 const providerName=(id:string)=>PROVIDER_NAMES[id]??id;
 const modelValue=(provider:string,id:string)=>`${provider}\u0000${id}`;
@@ -119,7 +129,7 @@ function AgentSelect({value,groups,placeholder,onChange,disabled=false,placement
     <span className={selected?'':'placeholder'}>{selected?.label??placeholder}</span><Icon name="down" size={12}/></button>
     {open&&createPortal(<div ref={menu} style={menuStyle} className="agent-select-menu" role="listbox">{groups.map((group,index)=><section key={group.label??index}>
       {group.label&&<strong>{group.label}</strong>}{group.options.map(option=><button type="button" role="option" aria-selected={option.value===value}
-        className={option.value===value?'selected':''} key={option.value} onClick={()=>choose(option.value)}><span>{option.label}</span>{option.value===value&&<i>✓</i>}</button>)}</section>)}</div>,document.body)}
+        className={option.value===value?'selected':''} key={option.value} onClick={()=>choose(option.value)}><span>{option.label}</span>{option.value===value&&<Icon name="check" size={11}/>}</button>)}</section>)}</div>,document.body)}
   </div>;
 }
 
@@ -156,9 +166,9 @@ export function updateEvent(current:ChatState,event:unknown):ChatState{
   return current;
 }
 
-function SessionDialog({projects,projectId,selectedSessionId,sessions,onProject,onOpen,onNew,onRename,onDelete,onClose}:{
+function SessionDialog({projects,projectId,selectedSessionId,sessions,doneSessionIds,onProject,onOpen,onNew,onRename,onDelete,onClose}:{
   projects:Project[];projectId:string;sessions:PiSessionSummary[];onProject:(id:string)=>void;
-  selectedSessionId:string|null;
+  selectedSessionId:string|null;doneSessionIds:ReadonlySet<string>;
   onOpen:(session:PiSessionSummary)=>void;onNew:()=>void;onRename:(session:PiSessionSummary,name:string)=>void;
   onDelete:(session:PiSessionSummary)=>void;onClose:()=>void;
 }){
@@ -177,16 +187,16 @@ function SessionDialog({projects,projectId,selectedSessionId,sessions,onProject,
         className={project.id===projectId?'active':''} onClick={()=>onProject(project.id)}>{project.name}</button>)}</nav>}
       <div className="session-groups">{sessions.length===0?<p className="agent-empty">No conversations yet.</p>:groups.map(([label,match])=>{
         const items=sessions.filter(match);if(!items.length)return null;
-        return <section className="session-group" key={label}><h3>{label}</h3>{items.map(session=><div className={'session-row '+(session.id===selectedSessionId?'active':'')} key={session.id}>
+        return <section className="session-group" key={label}><h3>{label}</h3>{items.map(session=>{const tone=sessionTone(session.status,doneSessionIds.has(session.id));return <div className={`session-row status-${tone} ${session.id===selectedSessionId?'active':''}`} key={session.id}>
           {renaming===session.id?<form onSubmit={event=>{event.preventDefault();onRename(session,name);setRenaming(null);}}>
             <input autoFocus value={name} onChange={event=>setName(event.target.value)}/><button type="submit">Save</button><button type="button" onClick={()=>setRenaming(null)}>Cancel</button>
           </form>:<>
             <button className="session-select" onClick={()=>onOpen(session)}><span>{session.name}</span><small>{formatTime(session.modifiedAt)} · {session.runCount} {session.runCount===1?'run':'runs'}</small></button>
-            <span className={`session-status ${session.status}`}><i/>{session.status==='running'?'Running':session.status==='error'?'Error':'Idle'}</span>
+            <span className={`session-status ${tone}`}><i/>{sessionStatusLabel(tone)}</span>
             <div className="session-actions"><button className="session-action" onClick={()=>{setRenaming(session.id);setName(session.name);}}>Rename</button>
               <button className="session-action" onClick={()=>onDelete(session)}>Delete</button></div>
           </>}
-        </div>)}</section>;
+        </div>;})}</section>;
       })}</div>
     </section>
   </div>;
@@ -258,13 +268,28 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
   const [compactionResult,setCompactionResult]=useState<PiCompactionResult|undefined>();const [activeRunKey,setActiveRunKey]=useState('');
   const [previewRunKey,setPreviewRunKey]=useState('');const [previewTop,setPreviewTop]=useState(8);
   const [openSessionIds,setOpenSessionIds]=useState<Record<string,string[]>>({});
+  const [doneSessionIds,setDoneSessionIds]=useState<Set<string>>(()=>new Set());
   const [newChatModel,setNewChatModel]=useState<PiModelSummary|undefined>();const [newChatThinking,setNewChatThinking]=useState<PiThinkingLevel>('medium');
   const [modelMenuStyle,setModelMenuStyle]=useState<React.CSSProperties>({});
   const bodyRef=useRef<HTMLDivElement|null>(null);const chatContentRef=useRef<HTMLDivElement|null>(null);const activeSessionTabRef=useRef<HTMLDivElement|null>(null);const modelControlRef=useRef<HTMLDivElement|null>(null);const modelMenuRef=useRef<HTMLDivElement|null>(null);
   const usageRef=useRef<HTMLDivElement|null>(null);const contextRef=useRef<HTMLDivElement|null>(null);const draftConfigRequest=useRef(0);
   const runRefs=useRef(new Map<string,HTMLElement>());const pendingRunKey=useRef<string|undefined>(undefined);const skipAutoScroll=useRef(false);
   const chatsRef=useRef(chats);const viewRef=useRef({open,selectedSessionId,projects,sessions});const erroredRuns=useRef(new Set<string>());const notifiedRuns=useRef(new Set<string>());
+  const doneTimers=useRef(new Map<string,ReturnType<typeof setTimeout>>());const wasOpen=useRef(open);const handledNavigationToken=useRef<number|undefined>(undefined);
+  const hasPendingNavigation=!!navigationRequest&&handledNavigationToken.current!==navigationRequest.token;
   chatsRef.current=chats;viewRef.current={open,selectedSessionId,projects,sessions};
+  const clearDone=useCallback((sessionId:string)=>{
+    const timer=doneTimers.current.get(sessionId);if(timer)clearTimeout(timer);doneTimers.current.delete(sessionId);
+    setDoneSessionIds(current=>{if(!current.has(sessionId))return current;const next=new Set(current);next.delete(sessionId);return next;});
+  },[]);
+  const markDone=useCallback((sessionId:string)=>{
+    const timer=doneTimers.current.get(sessionId);if(timer)clearTimeout(timer);
+    setDoneSessionIds(current=>{const next=new Set(current);next.add(sessionId);return next;});
+    const view=viewRef.current;
+    if(view.open&&view.selectedSessionId===sessionId){
+      doneTimers.current.set(sessionId,setTimeout(()=>clearDone(sessionId),3000));
+    }
+  },[clearDone]);
   const selectedProject=projects.find(project=>project.id===selectedProjectId);
   const current=selectedSessionId?chats[selectedSessionId]:undefined;
   const sessionTabs=openSessionIds[selectedProjectId]??[];
@@ -303,8 +328,24 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
   useEffect(()=>{if(selectedProjectId)void reloadSessions(selectedProjectId);},[selectedProjectId]);
   useLayoutEffect(()=>{activeSessionTabRef.current?.scrollIntoView({block:'nearest',inline:'nearest'});},[selectedProjectId,selectedSessionId,sessionTabs.length]);
   useEffect(()=>{if(selectedProjectId&&!selectedSessionId)void loadNewChatDefaults(selectedProjectId);},[selectedProjectId,selectedSessionId]);
+  useEffect(()=>{if(open&&selectedSessionId)clearDone(selectedSessionId);},[open,selectedSessionId,clearDone]);
+  useEffect(()=>()=>{for(const timer of doneTimers.current.values())clearTimeout(timer);},[]);
   useEffect(()=>{if(selectedSessionId)draftConfigRequest.current++;setComposerExpanded(false);setModelMenu(false);setContextOpen(false);setUsageOpen(false);setCompactionResult(undefined);},[selectedSessionId]);
-  useEffect(()=>{if(!navigationRequest)return;void openSessionById(navigationRequest.projectId,navigationRequest.sessionId,navigationRequest.runKey??'__latest__');},[navigationRequest?.token]);
+  useEffect(()=>{
+    const opening=open&&!wasOpen.current;wasOpen.current=open;
+    if(!opening||hasPendingNavigation)return;
+    const projectId=activeProjectId??projects[0]?.id??'';if(!projectId)return;
+    let cancelled=false;
+    setSelectedProjectId(projectId);setSelectedSessionId(null);setNewChatModel(undefined);setDraft('');setSessionDialog(false);
+    void reloadSessions(projectId).then(items=>{
+      if(cancelled)return;
+      const latest=items.reduce<PiSessionSummary|undefined>((result,item)=>!result||item.modifiedAt>result.modifiedAt?item:result,undefined);
+      if(latest)void openSessionById(projectId,latest.id);
+    });
+    return()=>{cancelled=true;};
+  },[open]);
+  useEffect(()=>{if(!navigationRequest)return;handledNavigationToken.current=navigationRequest.token;
+    void openSessionById(navigationRequest.projectId,navigationRequest.sessionId,navigationRequest.runKey??'__latest__');},[navigationRequest?.token]);
   useLayoutEffect(()=>{if(!modelMenu||!modelControlRef.current)return;const trigger=modelControlRef.current.getBoundingClientRect();
     const panel=modelControlRef.current.closest('.agent-chat')?.getBoundingClientRect();const limitLeft=panel?panel.left+8:8;const limitRight=panel?panel.right-8:window.innerWidth-8;
     const width=Math.max(190,Math.min(236,limitRight-limitLeft));const left=Math.max(limitLeft,Math.min(limitRight-width,trigger.right-width));
@@ -346,13 +387,14 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
         const compacting=chatsRef.current[event.sessionId];if(compacting){const next={...chatsRef.current,
           [event.sessionId]:{...compacting,isCompacting:payload.type==='compaction_start'}};chatsRef.current=next;setChats(next);}
       }
-      if(payload.type==='agent_start')erroredRuns.current.delete(event.sessionId);
+      if(payload.type==='agent_start'){erroredRuns.current.delete(event.sessionId);clearDone(event.sessionId);}
       const ended=record(payload.message);
       if(payload.type==='message_end'&&ended.role==='assistant'&&ended.stopReason==='error'){
         const message=typeof ended.errorMessage==='string'?ended.errorMessage:'The model response failed.';sendErrorNotice(message);
         const failed=chatsRef.current[event.sessionId];if(failed){const next={...chatsRef.current,[event.sessionId]:{...failed,error:message}};chatsRef.current=next;setChats(next);}
       }
       if(payload.type==='agent_settled'&&!payload.aborted&&!erroredRuns.current.has(event.sessionId)){
+        markDone(event.sessionId);
         const chat=chatsRef.current[event.sessionId];const latest=chat?buildRuns(chat).at(-1):undefined;
         const noticeKey=`${event.sessionId}:${latest?.key??'latest'}:success`;const view=viewRef.current;
         if((!view.open||view.selectedSessionId!==event.sessionId)&&!notifiedRuns.current.has(noticeKey)){
@@ -365,6 +407,7 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
     }
     if(event.type==='status'){
       const status=event.payload as PiRuntimeStatus;
+      if(status==='starting'||status==='running'||status==='stopping'||status==='error')clearDone(event.sessionId);
       const chat=chatsRef.current[event.sessionId];if(chat){const next={...chatsRef.current,[event.sessionId]:{...chat,status,error:status==='running'?undefined:chat.error}};chatsRef.current=next;setChats(next);}
       setSessions(current=>({...current,[event.projectId]:(current[event.projectId]??[]).map(session=>session.id===event.sessionId?{...session,status}:session)}));
     }
@@ -372,12 +415,13 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
       const chat=chatsRef.current[event.sessionId];if(chat){const next={...chatsRef.current,[event.sessionId]:{...chat,usage:event.payload as PiUsageStats}};chatsRef.current=next;setChats(next);}
     }
     if(event.type==='error'){
+      clearDone(event.sessionId);
       const message=typeof event.payload==='string'?event.payload:'Pi Agent failed.';sendErrorNotice(message);
       const currentChat=chatsRef.current[event.sessionId];if(currentChat){const next={...chatsRef.current,[event.sessionId]:{...currentChat,status:'error' as const,error:message}};chatsRef.current=next;setChats(next);}
       setSessions(current=>({...current,[event.projectId]:(current[event.projectId]??[]).map(session=>session.id===event.sessionId?{...session,status:'error'}:session)}));
     }
     if(event.type==='sessions-changed')void reloadSessions(event.projectId);
-  }),[onNotice]);
+  }),[onNotice,markDone,clearDone]);
   useLayoutEffect(()=>{
     const body=bodyRef.current;if(!body)return;const frame=requestAnimationFrame(updateRunRail);const observer=new ResizeObserver(updateRunRail);observer.observe(body);
     for(const element of runRefs.current.values())observer.observe(element);body.addEventListener('scroll',updateRunRail,{passive:true});
@@ -444,13 +488,15 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
     const content=chatContentRef.current;if(content){const marker=event.currentTarget.getBoundingClientRect();const bounds=content.getBoundingClientRect();
       setPreviewTop(Math.max(8,Math.min(marker.top-bounds.top-8,bounds.height-128)));}setPreviewRunKey(key);
   };
+  const copyUserMessage=(text:string)=>window.revu.copyText(text);
   return <>
     <aside className={'agent-chat '+(open?'open':'')} style={{width:open?width:0}} aria-hidden={!open}>
       <div className="agent-resize-handle" onPointerDown={beginResize}/>
       <header className="agent-chat-header"><button className="agent-project-trigger" disabled={!projects.length} onClick={()=>setSessionDialog(true)}>
         <span>{selectedProject?.name??'No Project'}</span><Icon name="down" size={11}/></button>
         <div className="agent-session-tabs" role="tablist" aria-label="Open chats">{sessionTabs.map(sessionId=>{
-          const summary=(sessions[selectedProjectId]??[]).find(item=>item.id===sessionId);const chat=chats[sessionId];const active=selectedSessionId===sessionId;return <div ref={active?activeSessionTabRef:undefined} className={'agent-session-tab '+(active?'active':'')} key={sessionId}>
+          const summary=(sessions[selectedProjectId]??[]).find(item=>item.id===sessionId);const chat=chats[sessionId];const active=selectedSessionId===sessionId;
+          const tone=sessionTone(chat?.status??summary?.status??'idle',doneSessionIds.has(sessionId));return <div ref={active?activeSessionTabRef:undefined} className={`agent-session-tab status-${tone} ${active?'active':''}`} key={sessionId}>
             <button role="tab" aria-selected={selectedSessionId===sessionId} title={titleFor(summary,chat)} onClick={()=>void openSessionById(selectedProjectId,sessionId)}>{titleFor(summary,chat)}</button>
             <button className="agent-session-tab-close" title="Close Chat" aria-label={`Close ${titleFor(summary,chat)}`} onClick={()=>closeSessionTab(sessionId)}><Icon name="close" size={10}/></button>
           </div>;})}
@@ -467,16 +513,20 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
         <div className="agent-chat-body" ref={bodyRef}>{!projects.length?<div className="agent-welcome"><strong>Open a folder to start</strong></div>
         :!current?null
         :<>{runs.map(run=><section className="agent-run" key={run.key} ref={element=>{if(element)runRefs.current.set(run.key,element);else runRefs.current.delete(run.key);}}>
-          {run.user&&<article className="agent-message user"><div>{run.user}</div></article>}
+          {run.user&&<article className="agent-message user"><div className="agent-user-bubble">{run.user}</div>
+            <footer className="agent-user-meta">{run.userTimestamp!==undefined&&<time dateTime={new Date(run.userTimestamp).toISOString()} title={formatFullTime(run.userTimestamp)}>{formatTime(run.userTimestamp)}</time>}
+              <button type="button" title="Copy" aria-label="Copy user message" onClick={()=>copyUserMessage(run.user)}><Icon name="copy" size={12}/></button>
+            </footer></article>}
           {!!run.items.length&&<div className="agent-response"><span className="agent-role" role="img" aria-label="Pi"><Icon name="pi" size={16}/></span>{run.items.map(part=>part.type==='answer'
             ?<div className={'agent-answer '+(part.streaming?'streaming':'')} key={part.key}>{part.text}</div>
-            :part.type==='thinking'?<details className="agent-thinking" key={part.key} open={part.streaming||undefined} onToggle={()=>requestAnimationFrame(updateRunRail)}><summary title="Toggle thought process"><Icon name="think" size={14}/><span>Thought process</span></summary><div>{part.text}</div></details>
+            :part.type==='thinking'?<details className="agent-thinking" key={part.key} open={part.streaming||undefined} onToggle={()=>requestAnimationFrame(updateRunRail)}><summary title="Toggle thought process"><Icon name="thought" size={16}/><span>Thought process</span></summary><div>{part.text}</div></details>
             :part.tool&&<details className={`agent-tool ${part.tool.status}`} key={part.key} onToggle={()=>requestAnimationFrame(updateRunRail)}><summary><span>{part.tool.name}</span><small>{part.tool.status}</small></summary>
               <pre>{JSON.stringify({input:part.tool.args,output:part.tool.result},null,2)}</pre></details>)}
             <div className="agent-message-actions" aria-label="Assistant message actions">
               <button type="button" disabled title="Copy · Coming soon" aria-label="Copy · Coming soon"><Icon name="copy" size={14}/></button>
-              <button type="button" disabled title="Fork · Coming soon" aria-label="Fork · Coming soon"><Icon name="fork" size={14}/></button>
               <button type="button" disabled title="Format · Coming soon" aria-label="Format · Coming soon"><Icon name="format" size={14}/></button>
+              <button type="button" disabled title="Fork · Coming soon" aria-label="Fork · Coming soon"><Icon name="fork" size={14}/></button>
+              <button type="button" disabled title="Retry · Coming soon" aria-label="Retry · Coming soon"><Icon name="retry" size={14}/></button>
               <button type="button" disabled title="More · Coming soon" aria-label="More · Coming soon"><Icon name="more" size={14}/></button>
             </div></div>}
         </section>)}
@@ -519,12 +569,13 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
     {modelMenu&&createPortal(<div ref={modelMenuRef} style={modelMenuStyle} className="agent-model-menu combined" role="dialog" aria-label="Model and thinking">
       <div className="agent-model-picker"><div className="agent-model-list">{groupedModels.map(group=><section key={group.label}><strong>{group.label}</strong>
         {group.options.map(option=>{const [provider,id]=option.value.split('\u0000');const selected=selectedModel?.provider===provider&&selectedModel.id===id;return <button className={selected?'selected':''}
-          key={option.value} onClick={()=>{const model=models.find(item=>item.provider===provider&&item.id===id);if(model)void setModel(model);}}><span>{option.label}</span>{selected&&<i>✓</i>}</button>;})}</section>)}</div>
+          key={option.value} onClick={()=>{const model=models.find(item=>item.provider===provider&&item.id===id);if(model)void setModel(model);}}><span>{option.label}</span>{selected&&<Icon name="check" size={11}/>}</button>;})}</section>)}</div>
         {selectedModel&&<div className="agent-thinking-list"><strong>Thinking</strong>{thinkingOptions.map(option=><button className={option.value===selectedThinking?'selected':''} key={option.value}
-          onClick={()=>void setThinking(option.value as PiThinkingLevel).then(()=>setModelMenu(false))}>{option.label}{option.value===selectedThinking&&<i>✓</i>}</button>)}</div>}</div>
+          onClick={()=>void setThinking(option.value as PiThinkingLevel).then(()=>setModelMenu(false))}>{option.label}{option.value===selectedThinking&&<Icon name="check" size={11}/>}</button>)}</div>}</div>
       <button className="configure-models" onClick={()=>{setModelMenu(false);setModelDialog(true);}}><Icon name="settings" size={13}/>Configure Models</button>
     </div>,document.body)}
-    {sessionDialog&&selectedProjectId&&<SessionDialog projects={projects} projectId={selectedProjectId} selectedSessionId={selectedSessionId} sessions={sessions[selectedProjectId]??[]}
+    {sessionDialog&&selectedProjectId&&<SessionDialog projects={projects} projectId={selectedProjectId} selectedSessionId={selectedSessionId}
+      sessions={sessions[selectedProjectId]??[]} doneSessionIds={doneSessionIds}
       onProject={id=>{setSelectedProjectId(id);setSelectedSessionId(null);setNewChatModel(undefined);setDraft('');void reloadSessions(id);}} onOpen={session=>void openSession(session)} onNew={startNewChat}
       onRename={(session,name)=>void window.revu.agent.renameSession(session.projectId,session.id,name).then(unwrap).then(()=>{setChats(current=>{
         const chat=current[session.id];return chat?{...current,[session.id]:{...chat,name}}:current;});return reloadSessions(session.projectId);}).catch(error=>notify('error',errorMessage(error)))}

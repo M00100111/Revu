@@ -16,26 +16,31 @@ self.MonacoEnvironment = {
   },
 };
 loader.config({ monaco });
-monaco.editor.defineTheme('revu-light', {
-  base: 'vs', inherit: true, rules: [],
-  colors: {
-    'editor.background': '#ffffff',
-    'editorLineNumber.foreground': '#b0b0b0',
-    'editorLineNumber.activeForeground': '#333333',
-    'editor.lineHighlightBackground': '#f7f7f7',
-    'editor.selectionBackground': '#e1e1e1',
-  },
-});
-monaco.editor.defineTheme('revu-dark', {
-  base: 'vs-dark', inherit: true, rules: [],
-  colors: {
-    'editor.background': '#191919',
-    'editorLineNumber.foreground': '#606060',
-    'editorLineNumber.activeForeground': '#dddddd',
-    'editor.lineHighlightBackground': '#202020',
-    'editor.selectionBackground': '#3d3d3d',
-  },
-});
+const mix=(base:string,target:number,amount:number)=>{
+  const values=[1,3,5].map(index=>Number.parseInt(base.slice(index,index+2),16));
+  return '#'+values.map(value=>Math.round(value*(1-amount)+target*amount).toString(16).padStart(2,'0')).join('');
+};
+export function defineRevuThemes(lightBackground='#FFFFFF',darkBackground='#191919'){
+  monaco.editor.defineTheme('revu-light',{
+    base:'vs',inherit:true,rules:[],colors:{
+      'editor.background':lightBackground,
+      'editorLineNumber.foreground':'#b0b0b0',
+      'editorLineNumber.activeForeground':'#333333',
+      'editor.lineHighlightBackground':mix(lightBackground,0,.0314),
+      'editor.selectionBackground':mix(lightBackground,0,.1176),
+    },
+  });
+  monaco.editor.defineTheme('revu-dark',{
+    base:'vs-dark',inherit:true,rules:[],colors:{
+      'editor.background':darkBackground,
+      'editorLineNumber.foreground':'#606060',
+      'editorLineNumber.activeForeground':'#dddddd',
+      'editor.lineHighlightBackground':mix(darkBackground,255,.0304),
+      'editor.selectionBackground':mix(darkBackground,255,.1565),
+    },
+  });
+}
+defineRevuThemes();
 export { monaco };
 export type { Project } from '../shared/types';
 import type { Project, Snapshot, Chunk, ReviewRecord } from '../shared/types';

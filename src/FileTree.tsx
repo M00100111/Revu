@@ -6,9 +6,11 @@ type Props = {
   projectId: string; projectRoot:string; activePath: string | null;
   onOpen: (path: string) => void; onError: (message: string) => void;
   expandedDirectories: ReadonlySet<string>; onDirectoryToggle: (key: string) => void;
+  onExpandAllSubfolders:(path:string)=>void;onCollapseAllSubfolders:(path:string)=>void;
   path?: string; depth?: number;
 };
-export default function FileTree({ projectId, projectRoot, activePath, onOpen, onError, expandedDirectories, onDirectoryToggle, path = '', depth = 0 }: Props) {
+export default function FileTree({ projectId, projectRoot, activePath, onOpen, onError, expandedDirectories, onDirectoryToggle,
+  onExpandAllSubfolders, onCollapseAllSubfolders, path = '', depth = 0 }: Props) {
   const [entries,setEntries]=useState<Entry[]>([]);
   const [status,setStatus]=useState('Loading…');
   useEffect(()=>{
@@ -28,7 +30,8 @@ export default function FileTree({ projectId, projectRoot, activePath, onOpen, o
       return entry.kind==='directory'
         ? <Directory key={entry.name} projectId={projectId} projectRoot={projectRoot} name={entry.name} path={entryPath}
             depth={depth} activePath={activePath} onOpen={onOpen} onError={onError}
-            expandedDirectories={expandedDirectories} onDirectoryToggle={onDirectoryToggle}/>
+            expandedDirectories={expandedDirectories} onDirectoryToggle={onDirectoryToggle}
+            onExpandAllSubfolders={onExpandAllSubfolders} onCollapseAllSubfolders={onCollapseAllSubfolders}/>
         : <li key={entry.name}><button className={'tree-row '+(activePath===entryPath?'active':'')}
             style={{paddingLeft:16+depth*14}} title={entryPath} onClick={()=>onOpen(entryPath)}>
             <Icon name="file" size={15}/><span>{entry.name}</span>
@@ -40,7 +43,11 @@ function Directory(props:Props & {name:string;path:string;depth:number}){
   const key=props.projectRoot+'\n'+props.path;
   const expanded=props.expandedDirectories.has(key);
   return <li><button className="tree-row directory-row" style={{paddingLeft:8+props.depth*14}}
-    aria-expanded={expanded} onClick={()=>props.onDirectoryToggle(key)}>
+    aria-expanded={expanded} onClick={()=>props.onDirectoryToggle(key)} onContextMenu={async event=>{
+      event.preventDefault();event.stopPropagation();const action=await window.revu.contextMenu('directory');
+      if(action==='expandAll')props.onExpandAllSubfolders(props.path);
+      if(action==='collapseAll')props.onCollapseAllSubfolders(props.path);
+    }}>
     <Icon name="down" size={12} style={{transform:expanded?undefined:'rotate(-90deg)'}}/>
     <Icon name="folder" size={15}/><span>{props.name}</span>
   </button>{expanded&&<FileTree {...props} depth={props.depth+1}/>}</li>;

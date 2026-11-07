@@ -18,7 +18,7 @@ export default function WindowControls({onSave,saveDisabled,saving}:{
     </button>
     <button className="window-minimize" title="Minimize" aria-label="Minimize" onClick={()=>control('minimize')}><Icon name="minimize" size={11}/></button>
     <button className="window-maximize" title={maximized?'Restore':'Maximize'} aria-label={maximized?'Restore':'Maximize'}
-      onClick={()=>control('maximize')}><Icon name="maximize" size={11}/></button>
+      onClick={()=>control('maximize')}><Icon name={maximized?'restore':'maximize'} size={11}/></button>
     <button className="window-close" title="Close" aria-label="Close" onClick={()=>control('close')}><Icon name="close" size={10}/></button>
   </div>,document.body);
 }

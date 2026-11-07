@@ -105,14 +105,16 @@ ipcMain.handle('revu:agent',async(_event,body:PiAgentRequest)=>{
   catch(error){return {ok:false,status:500,error:error instanceof Error?error.message:String(error)};}
 });
 
-ipcMain.handle('revu:context-menu',async(event,kind:'project'|'tab')=>{
+ipcMain.handle('revu:context-menu',async(event,kind:'project'|'directory'|'tab')=>{
   const window=BrowserWindow.fromWebContents(event.sender);
   if(!window)return null;
   return new Promise<string|null>(resolve=>{
     let selected:string|null=null;
     const item=(label:string,id:string):MenuItemConstructorOptions=>({label,click:()=>{selected=id;}});
-    const template=kind==='project'
-      ? [item('Close Folder','close')]
+    const folderActions=[item('Expand All Subfolders','expandAll'),item('Collapse All Subfolders','collapseAll')];
+    const template:MenuItemConstructorOptions[]=kind==='project'
+      ? [item('Close Folder','close'),{type:'separator'},...folderActions]
+      : kind==='directory'?folderActions
       : [item('Close','close'),item('Close Others','closeOthers'),item('Close All','closeAll')];
     Menu.buildFromTemplate(template).popup({window,callback:()=>resolve(selected)});
   });

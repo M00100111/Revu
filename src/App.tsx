@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { monaco, type OpenFile, type Project } from './editor';
-import { errorMessage } from './files';
+import { defineRevuThemes, monaco, type OpenFile, type Project } from './editor';
+import { api, errorMessage } from './files';
+import type { Entry } from '../shared/types';
 import { useWorkspace } from './useWorkspace';
 import EditorArea from './EditorArea';
 import FileSidebar from './FileSidebar';
@@ -28,9 +29,15 @@ const savedFontSize=()=>{
   const value=Number(localStorage.getItem('revu-editor-font-size'));
   return Number.isFinite(value)&&value>=10&&value<=24?value:14;
 };
+const savedColor=(key:string,fallback:string)=>{
+  const value=localStorage.getItem(key)?.toUpperCase();
+  return value&&/^#[0-9A-F]{6}$/.test(value)?value:fallback;
+};
 
 export default function App(){
   const [dark,setDark]=useState(()=>localStorage.getItem('revu-theme')==='dark');
+  const [lightThemeColor,setLightThemeColor]=useState(()=>savedColor('revu-light-theme-color','#FFFFFF'));
+  const [darkThemeColor,setDarkThemeColor]=useState(()=>savedColor('revu-dark-theme-color','#191919'));
   const [showThemeSwitcher,setShowThemeSwitcher]=useState(()=>localStorage.getItem('revu-show-theme-switcher')!=='false');
   const [panel,setPanel]=useState<Panel>('files');
   const [syncWidths,setSyncWidths]=useState(()=>localStorage.getItem('revu-sync-sidebar-widths')!=='false');
@@ -124,8 +131,12 @@ export default function App(){
   },[documents,tabs,activeId]);
   useEffect(()=>{
     document.documentElement.dataset.theme=dark?'dark':'light';
+    document.documentElement.style.setProperty('--theme-bg',dark?darkThemeColor:lightThemeColor);
+    defineRevuThemes(lightThemeColor,darkThemeColor);monaco.editor.setTheme(dark?'revu-dark':'revu-light');
     localStorage.setItem('revu-theme',dark?'dark':'light');
-  },[dark]);
+    localStorage.setItem('revu-light-theme-color',lightThemeColor);
+    localStorage.setItem('revu-dark-theme-color',darkThemeColor);
+  },[dark,lightThemeColor,darkThemeColor]);
   useEffect(()=>localStorage.setItem('revu-show-theme-switcher',String(showThemeSwitcher)),[showThemeSwitcher]);
   useEffect(()=>{
     localStorage.setItem('revu-sync-sidebar-widths',String(syncWidths));
@@ -206,6 +217,29 @@ export default function App(){
       if(open===!current.has(root))return current;
       const next=new Set(current);if(open)next.delete(root);else next.add(root);return next;
     });
+  }
+  async function expandAllSubfolders(project:Project,path=''){
+    const keys:string[]=path?[project.root+'\n'+path]:[];
+    try{
+      const entries=await api<Entry[]>('list',{projectId:project.id,path});
+      for(const entry of entries){
+        if(entry.kind!=='directory')continue;
+        const child=path?path+'/'+entry.name:entry.name;
+        keys.push(project.root+'\n'+child);
+      }
+      if(!path)setCollapsedProjects(current=>{const next=new Set(current);next.delete(project.root);return next;});
+      setExpandedDirectories(current=>new Set([...current,...keys]));
+    }catch(error){notifyError(errorMessage(error));}
+  }
+  function collapseAllSubfolders(project:Project,path=''){
+    const key=project.root+'\n'+path;
+    if(!path)setCollapsedProjects(current=>new Set([...current,project.root]));
+    setExpandedDirectories(current=>new Set([...current].filter(candidate=>{
+      if(candidate===key)return false;
+      const childPrefix=key+(path?'/':'');
+      if(!candidate.startsWith(childPrefix))return true;
+      return candidate.slice(childPrefix.length).includes('/');
+    })));
   }
   function toggleReviewPreview(id:string){
     setExpandedReviewRecords(current=>{
@@ -294,6 +328,7 @@ export default function App(){
       mixed={mixed} picking={picking} collapsedProjects={collapsedProjects} expandedDirectories={expandedDirectories}
       onResize={resizeSidebar} onAddFolder={()=>void addFolder()} onSelectFile={selectFile}
       onOpenFile={(project,path)=>void openFile(project,path)} onCloseProject={project=>void closeProject(project)}
+      onExpandAllSubfolders={(project,path)=>void expandAllSubfolders(project,path)} onCollapseAllSubfolders={collapseAllSubfolders}
       onProjectToggle={toggleProject} onDirectoryToggle={toggleDirectory} onError={notifyError}/>}
     {panel==='review'&&<ReviewDashboard projects={projects} documents={documents} statuses={statuses}
       filter={reviewFilter} selected={reviewSelected} onFilterChange={setReviewFilter} onSelectedChange={setReviewSelected}
@@ -314,6 +349,9 @@ export default function App(){
       fileTabOverflow={fileTabOverflow} onFileTabOverflowChange={setFileTabOverflow}
       reviewFileLabels={reviewFileLabels} onReviewFileLabelsChange={setReviewFileLabels}
       dark={dark} onThemeChange={setDark} showThemeSwitcher={showThemeSwitcher}
+      lightThemeColor={lightThemeColor} darkThemeColor={darkThemeColor}
+      onLightThemeColorChange={setLightThemeColor} onDarkThemeColorChange={setDarkThemeColor}
+      onResetThemeColors={()=>{setLightThemeColor('#FFFFFF');setDarkThemeColor('#191919');}}
       onShowThemeSwitcherChange={setShowThemeSwitcher}/>:<>
     <main className="main">
       {projects.length>0&&<>

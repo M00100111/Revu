@@ -13,11 +13,13 @@ const savedOrder=()=>{
 };
 
 export default function FileSidebar({width,projects,projectsLoaded,openFiles,activeFile,mixed,picking,collapsedProjects,
-  expandedDirectories,onResize,onAddFolder,onSelectFile,onOpenFile,onCloseProject,onProjectToggle,onDirectoryToggle,onError}:{
+  expandedDirectories,onResize,onAddFolder,onSelectFile,onOpenFile,onCloseProject,onExpandAllSubfolders,onCollapseAllSubfolders,
+  onProjectToggle,onDirectoryToggle,onError}:{
   width:number;projects:Project[];projectsLoaded:boolean;openFiles:OpenFile[];activeFile?:OpenFile;mixed:boolean;picking:boolean;
   collapsedProjects:ReadonlySet<string>;expandedDirectories:ReadonlySet<string>;
   onResize:(width:number)=>void;onAddFolder:()=>void;onSelectFile:(file:OpenFile)=>void;
   onOpenFile:(project:Project,path:string)=>void;onCloseProject:(project:Project)=>void;
+  onExpandAllSubfolders:(project:Project,path:string)=>void;onCollapseAllSubfolders:(project:Project,path:string)=>void;
   onProjectToggle:(root:string,open:boolean)=>void;onDirectoryToggle:(key:string)=>void;onError:(message:string)=>void;
 }){
   const rootsKey=projects.map(project=>project.root).join('\0');
@@ -89,12 +91,17 @@ export default function FileSidebar({width,projects,projectsLoaded,openFiles,act
       onDragStart={event=>beginDrag(event,project.root)} onDragEnd={()=>{setDragged(null);setDrop(null);}}
       onDragOver={event=>dragOver(event,project.root)} onDrop={event=>finishDrop(event,project.root)}
       onContextMenu={async event=>{
-        event.preventDefault();if(await window.revu.contextMenu('project')==='close')onCloseProject(project);
+        event.preventDefault();const action=await window.revu.contextMenu('project');
+        if(action==='close')onCloseProject(project);
+        if(action==='expandAll')onExpandAllSubfolders(project,'');
+        if(action==='collapseAll')onCollapseAllSubfolders(project,'');
       }}><Icon name="down" size={12}/><Icon name="folder" size={15}/><span>{project.name}</span></summary>
     <FileTree projectId={project.id} projectRoot={project.root}
       activePath={activeFile?.project.id===project.id?activeFile.path:null}
       onOpen={path=>onOpenFile(project,path)} onError={onError}
-      expandedDirectories={expandedDirectories} onDirectoryToggle={onDirectoryToggle}/>
+      expandedDirectories={expandedDirectories} onDirectoryToggle={onDirectoryToggle}
+      onExpandAllSubfolders={path=>onExpandAllSubfolders(project,path)}
+      onCollapseAllSubfolders={path=>onCollapseAllSubfolders(project,path)}/>
   </details>;
   return <aside className="explorer" style={{width}}>
     <header className="explorer-header"><span>File</span><button className="icon-button" onClick={onAddFolder}
