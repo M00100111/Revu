@@ -470,9 +470,14 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
           {run.user&&<article className="agent-message user"><div>{run.user}</div></article>}
           {!!run.items.length&&<div className="agent-response"><span className="agent-role">Pi</span>{run.items.map(part=>part.type==='answer'
             ?<div className={'agent-answer '+(part.streaming?'streaming':'')} key={part.key}>{part.text}</div>
-            :part.type==='thinking'?<details className="agent-thinking" key={part.key} open={part.streaming||undefined} onToggle={()=>requestAnimationFrame(updateRunRail)}><summary>Thought process</summary><div>{part.text}</div></details>
+            :part.type==='thinking'?<details className="agent-thinking" key={part.key} open={part.streaming||undefined} onToggle={()=>requestAnimationFrame(updateRunRail)}><summary title="Toggle thought process"><Icon name="think" size={14}/><span>Thought process</span></summary><div>{part.text}</div></details>
             :part.tool&&<details className={`agent-tool ${part.tool.status}`} key={part.key} onToggle={()=>requestAnimationFrame(updateRunRail)}><summary><span>{part.tool.name}</span><small>{part.tool.status}</small></summary>
-              <pre>{JSON.stringify({input:part.tool.args,output:part.tool.result},null,2)}</pre></details>)}</div>}
+              <pre>{JSON.stringify({input:part.tool.args,output:part.tool.result},null,2)}</pre></details>)}
+            <div className="agent-message-actions" aria-label="Assistant message actions">
+              <button type="button" disabled title="Copy · Coming soon" aria-label="Copy · Coming soon"><Icon name="copy" size={14}/></button>
+              <button type="button" disabled title="Fork · Coming soon" aria-label="Fork · Coming soon"><Icon name="fork" size={14}/></button>
+              <button type="button" disabled title="Format · Coming soon" aria-label="Format · Coming soon"><Icon name="format" size={14}/></button>
+            </div></div>}
         </section>)}
           {current.error&&<div className="agent-inline-error">{current.error}</div>}</>}
         </div>

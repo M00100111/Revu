@@ -16,9 +16,9 @@ export default function WindowControls({onSave,saveDisabled,saving}:{
       aria-label={saving?'Saving file':'Save file'} disabled={saveDisabled} onClick={onSave}>
       <Icon name="save" size={13}/>
     </button>
-    <button title="Minimize" aria-label="Minimize" onClick={()=>control('minimize')}><i className="window-minimize"/></button>
-    <button title={maximized?'Restore':'Maximize'} aria-label={maximized?'Restore':'Maximize'}
-      onClick={()=>control('maximize')}><i className={maximized?'window-restore':'window-maximize'}/></button>
-    <button className="window-close" title="Close" aria-label="Close" onClick={()=>control('close')}><i/></button>
+    <button className="window-minimize" title="Minimize" aria-label="Minimize" onClick={()=>control('minimize')}><Icon name="minimize" size={11}/></button>
+    <button className="window-maximize" title={maximized?'Restore':'Maximize'} aria-label={maximized?'Restore':'Maximize'}
+      onClick={()=>control('maximize')}><Icon name="maximize" size={11}/></button>
+    <button className="window-close" title="Close" aria-label="Close" onClick={()=>control('close')}><Icon name="close" size={10}/></button>
   </div>,document.body);
 }

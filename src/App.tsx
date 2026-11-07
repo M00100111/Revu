@@ -320,7 +320,7 @@ export default function App(){
         {!mixed&&!(hideSingleProjectTabs&&projects.length===1)&&<div className="project-bar"><div className="project-tabs" aria-label="Project tabs">
           {projects.map(project=><button key={project.id} className={'project-tab '+(project.id===projectId?'active':'')}
             aria-pressed={project.id===projectId} onClick={()=>selectProject(project.id)}>
-            <Icon name="folder" size={14}/><span>{project.name}</span>
+            <Icon name="projectFolder" size={14}/><span>{project.name}</span>
             {documents.some(file=>file.project.id===project.id&&file.dirty)&&<span className="dirty-dot"/>}
           </button>)}</div></div>}
         <TabBar files={visibleFiles} activeId={activeId} onSelect={selectFile} onClose={closeFile}
@@ -346,7 +346,7 @@ export default function App(){
           <span>{activeFile.model.getLanguageId()}<span className="status-divider">UTF-8{activeFile.synced.bom?' BOM':''}</span></span></footer>
       </>:<div className="empty-state">
         {projects.length?<span className="empty-project-hint">Select a file from the sidebar</span>
-          :<button className="open-folder-button" onClick={addFolder} disabled={picking}><Icon name="folder" size={19}/>{picking?'Opening…':'Open Folder'}</button>}
+          :<button className="open-folder-button" onClick={addFolder} disabled={picking}><Icon name="openFolder" size={19}/>{picking?'Opening…':'Open Folder'}</button>}
         <div className="shortcut-hint"><kbd>Ctrl</kbd> + <kbd>S</kbd><span>Save</span><i/><kbd>Ctrl</kbd> + <kbd>F</kbd><span>Find</span></div>
       </div>}
     </main>

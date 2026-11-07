@@ -98,7 +98,7 @@ export default function FileSidebar({width,projects,projectsLoaded,openFiles,act
   </details>;
   return <aside className="explorer" style={{width}}>
     <header className="explorer-header"><span>File</span><button className="icon-button" onClick={onAddFolder}
-      disabled={picking} title="Open folder" aria-label="Open folder"><Icon name="folder" size={17}/></button></header>
+      disabled={picking} title="Open folder" aria-label="Open folder"><Icon name="openFolder" size={17}/></button></header>
     {projects.length?<div className="tree-scroll">{order.map(key=>key===OPEN_EDITORS_KEY?openEditors:
       projectByRoot.has(key)?projectEntry(projectByRoot.get(key)!):null)}</div>:<p className="sidebar-empty">No folders open</p>}
     <ResizeHandle width={width} onResize={onResize}/>
