@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { formatAgentTokens, formatContextPercent, formatToolDuration, shouldShowAssistantActions, updateEvent, withSnapshot } from '../src/AgentChat';
+import { buildRuns, formatAgentTokens, formatContextPercent, formatToolDuration, shouldShowAssistantActions, updateEvent, withSnapshot } from '../src/AgentChat';
 import type { PiSessionSnapshot } from '../shared/piTypes';
 import { calculatePiCacheHitPercent, countPiSessionRuns } from '../shared/piSession';
 import { renderMarkdown } from '../src/MarkdownContent';
@@ -97,4 +97,24 @@ test('reloading a snapshot preserves in-flight tool cards but clears stale strea
   assert.equal(restored.streamText,'');
   assert.equal(restored.tools.length,1);
   assert.equal(restored.messages.length,1);
+});
+
+test('Pi run statistics combine assistant and model-backed tool usage',()=>{
+  const state=withSnapshot({...snapshot,messages:[
+    {role:'user',content:'Inspect',timestamp:1000},
+    {role:'assistant',content:[{type:'toolCall',id:'tool-1',name:'classify',arguments:{}}],timestamp:1100,durationMs:500,stopReason:'toolUse',
+      usage:{input:70,output:10,cacheRead:20,cacheWrite:0,totalTokens:100,cost:{total:.01}}},
+    {role:'toolResult',toolCallId:'tool-1',toolName:'classify',content:[],isError:false,timestamp:2000,durationMs:300,
+      usage:{input:12,output:3,cacheRead:5,cacheWrite:0,totalTokens:20,cost:{total:.002}}},
+    {role:'assistant',content:[{type:'text',text:'Done'}],timestamp:2100,durationMs:400,stopReason:'stop',
+      usage:{input:35,output:10,cacheRead:5,cacheWrite:0,totalTokens:50,cost:{total:.005}}},
+  ]});
+  const run=buildRuns(state)[0];
+  assert.equal(run.stats.elapsedMs,1500);
+  assert.equal(run.stats.modelTimeMs,900);
+  assert.equal(run.stats.toolTimeMs,300);
+  assert.equal(run.stats.assistantUsage.totalTokens,150);
+  assert.equal(run.stats.toolUsage.totalTokens,20);
+  assert.equal(run.stats.calls.length,3);
+  assert.equal(run.items.find(item=>item.type==='tool')?.tool?.usage?.totalTokens,20);
 });

@@ -11,14 +11,17 @@ import type {
 
 export interface ToolState {
   id:string;runKey:string;name:string;status:'running'|'done'|'error';args?:unknown;result?:unknown;
-  startedAt?:number;durationMs?:number;
+  startedAt?:number;durationMs?:number;usage?:MessageUsage;
 }
-export interface ChatState extends PiSessionSnapshot {tools:ToolState[];streamText:string;streamThinking:string;entries:PiSessionEntry[];leafId:string|null}
+export interface ChatState extends PiSessionSnapshot {tools:ToolState[];streamText:string;streamThinking:string;entries:PiSessionEntry[];leafId:string|null;settledRuns:Record<string,number>}
 export interface ToolDetailRequest {
   id:string;projectId:string;sessionId:string;toolCallId:string;fileName:string;content:string;
 }
 interface RunItem {type:'answer'|'thinking'|'tool';key:string;text?:string;tool?:ToolState;streaming?:boolean}
-interface ChatRun {key:string;user:string;userTimestamp?:number;userEntryId?:string;items:RunItem[]}
+interface MessageUsage {input:number;output:number;cacheRead:number;cacheWrite:number;reasoning:number;totalTokens:number;cost:number}
+interface RunCall {key:string;type:'model'|'tool';name:string;durationMs?:number;usage?:MessageUsage}
+interface RunStats {elapsedMs?:number;modelTimeMs:number;toolTimeMs:number;assistantUsage:MessageUsage;toolUsage:MessageUsage;calls:RunCall[]}
+interface ChatRun {key:string;user:string;userTimestamp?:number;userEntryId?:string;items:RunItem[];stats:RunStats;lastEventAt?:number}
 type SessionTone='idle'|'running'|'done'|'error';
 export interface AgentNavigationRequest {projectId:string;sessionId:string;runKey?:string;token:number}
 export interface AgentNotice {level:'success'|'error';message:string;projectId:string;sessionId:string;runKey?:string}
@@ -48,6 +51,20 @@ const messageTimestamp=(message:unknown)=>{
   return Number.isFinite(time)?time:undefined;
 };
 const numberValue=(value:unknown)=>typeof value==='number'&&Number.isFinite(value)?value:undefined;
+const emptyMessageUsage=():MessageUsage=>({input:0,output:0,cacheRead:0,cacheWrite:0,reasoning:0,totalTokens:0,cost:0});
+const messageUsage=(message:unknown):MessageUsage|undefined=>{
+  const usage=record(record(message).usage);const cost=record(usage.cost);
+  const input=numberValue(usage.input)??0;const output=numberValue(usage.output)??0;const cacheRead=numberValue(usage.cacheRead)??0;
+  const cacheWrite=numberValue(usage.cacheWrite)??0;const reasoning=numberValue(usage.reasoning)??0;
+  const totalTokens=numberValue(usage.totalTokens)??numberValue(usage.total)??input+output+cacheRead+cacheWrite;
+  const totalCost=numberValue(cost.total)??0;
+  return totalTokens||totalCost||input||output||cacheRead||cacheWrite||reasoning?{input,output,cacheRead,cacheWrite,reasoning,totalTokens,cost:totalCost}:undefined;
+};
+const addUsage=(target:MessageUsage,value?:MessageUsage)=>{if(!value)return;target.input+=value.input;target.output+=value.output;target.cacheRead+=value.cacheRead;
+  target.cacheWrite+=value.cacheWrite;target.reasoning+=value.reasoning;target.totalTokens+=value.totalTokens;target.cost+=value.cost;};
+const combinedUsage=(stats:RunStats)=>{const total=emptyMessageUsage();addUsage(total,stats.assistantUsage);addUsage(total,stats.toolUsage);return total;};
+const emptyRunStats=():RunStats=>({modelTimeMs:0,toolTimeMs:0,assistantUsage:emptyMessageUsage(),toolUsage:emptyMessageUsage(),calls:[]});
+const savedSessionSort=():PiSessionSort=>localStorage.getItem('revu-session-sort')==='recent'?'recent':'relevance';
 const runKey=(index:number)=>`run-${Math.max(0,index)}`;
 const lastRunKey=(messages:unknown[])=>runKey(messages.reduce<number>((count,message)=>count+(record(message).role==='user'?1:0),0)-1);
 const toolsFromMessages=(messages:unknown[]):ToolState[]=>{
@@ -57,15 +74,15 @@ const toolsFromMessages=(messages:unknown[]):ToolState[]=>{
     if(role==='assistant'&&Array.isArray(item.content))for(const raw of item.content){const block=record(raw);if(block.type!=='toolCall')continue;
       const id=String(block.id??'');if(!id)continue;tools.set(id,{id,runKey:runKey(runIndex),name:String(block.name??'Tool'),status:'running',args:block.arguments});}
     if(role==='toolResult'){const id=String(item.toolCallId??'');if(!id)continue;const existing=tools.get(id);
-      tools.set(id,{id,runKey:existing?.runKey??runKey(runIndex),name:String(item.toolName??existing?.name??'Tool'),status:item.isError?'error':'done',
-        args:existing?.args,result:message,durationMs:numberValue(item.durationMs)});}
+      const usage=messageUsage(message);tools.set(id,{id,runKey:existing?.runKey??runKey(runIndex),name:String(item.toolName??existing?.name??'Tool'),status:item.isError?'error':'done',
+        args:existing?.args,result:message,durationMs:numberValue(item.durationMs),...(usage?{usage}:{})});}
   }
   return [...tools.values()];
 };
 export const withSnapshot=(snapshot:PiSessionSnapshot,previous?:ChatState):ChatState=>({
   ...snapshot,tools:(()=>{const history=toolsFromMessages(snapshot.messages);const known=new Set(history.map(tool=>tool.id));
     return [...history,...(previous?.tools??[]).filter(tool=>tool.status==='running'&&!known.has(tool.id))];})(),streamText:'',streamThinking:'',
-  entries:previous?.entries??[],leafId:previous?.leafId??null,
+  entries:previous?.entries??[],leafId:previous?.leafId??null,settledRuns:previous?.settledRuns??{},
 });
 const withEntries=(state:ChatState,response:PiEntriesResponse):ChatState=>({...state,entries:response.entries,leafId:response.leafId});
 const activeEntries=(state:ChatState)=>{
@@ -73,24 +90,29 @@ const activeEntries=(state:ChatState)=>{
   while(id){const entry=byId.get(id);if(!entry)break;branch.push(entry);id=entry.parentId;}
   return branch.reverse();
 };
-const buildRuns=(state:ChatState):ChatRun[]=>{
+export const buildRuns=(state:ChatState):ChatRun[]=>{
   const userEntries=activeEntries(state).filter(entry=>entry.type==='message'&&record(entry.message).role==='user');
   const runs:ChatRun[]=[];const tools=new Map(state.tools.map(tool=>[tool.id,tool]));const placed=new Set<string>();let current:ChatRun|undefined;let userIndex=0;
-  const ensureRun=()=>current??(current={key:runKey(runs.length),user:'',items:[]},runs.push(current),current);
+  const ensureRun=()=>current??(current={key:runKey(runs.length),user:'',items:[],stats:emptyRunStats()},runs.push(current),current);
   for(const message of state.messages){const item=record(message);const role=item.role;
     if(role==='user'){const text=messageText(message);const found=userEntries.findIndex((entry,index)=>index>=userIndex&&messageText(entry.message)===text);const entry=found>=0?userEntries[found]:undefined;if(found>=0)userIndex=found+1;
-      current={key:runKey(runs.length),user:text,userTimestamp:messageTimestamp(message),userEntryId:entry?.id,items:[]};runs.push(current);continue;}
-    if(role==='assistant'&&Array.isArray(item.content)){const run=ensureRun();for(const raw of item.content){const block=record(raw);
+      current={key:runKey(runs.length),user:text,userTimestamp:messageTimestamp(message),userEntryId:entry?.id,items:[],stats:emptyRunStats()};runs.push(current);continue;}
+    if(role==='assistant'&&Array.isArray(item.content)){const run=ensureRun();const usage=messageUsage(message);const durationMs=numberValue(item.durationMs);addUsage(run.stats.assistantUsage,usage);
+      if(durationMs!==undefined)run.stats.modelTimeMs+=durationMs;run.stats.calls.push({key:`model-${run.stats.calls.length}`,type:'model',name:String(item.stopReason??'response'),durationMs,usage});
+      const timestamp=messageTimestamp(message);if(timestamp!==undefined)run.lastEventAt=Math.max(run.lastEventAt??0,timestamp+(durationMs??0));for(const raw of item.content){const block=record(raw);
       if(block.type==='text'&&typeof block.text==='string'&&block.text.trim())run.items.push({type:'answer',key:`answer-${run.items.length}`,text:block.text});
       if(block.type==='thinking'&&typeof block.thinking==='string'&&block.thinking.trim())run.items.push({type:'thinking',key:`thinking-${run.items.length}`,text:block.thinking});
       if(block.type==='toolCall'){const id=String(block.id??'');if(!id||placed.has(id))continue;const tool=tools.get(id)??{id,runKey:run.key,name:String(block.name??'Tool'),status:'running',args:block.arguments};
         run.items.push({type:'tool',key:id,tool});placed.add(id);}
     }}
-    if(role==='toolResult'){const id=String(item.toolCallId??'');if(!id||placed.has(id))continue;const tool=tools.get(id);if(tool){ensureRun().items.push({type:'tool',key:id,tool});placed.add(id);}}
+    if(role==='toolResult'){const run=ensureRun();const id=String(item.toolCallId??'');const usage=messageUsage(message);const durationMs=numberValue(item.durationMs);addUsage(run.stats.toolUsage,usage);
+      if(durationMs!==undefined)run.stats.toolTimeMs+=durationMs;run.stats.calls.push({key:`tool-${id||run.stats.calls.length}`,type:'tool',name:String(item.toolName??'Tool'),durationMs,usage});
+      const timestamp=messageTimestamp(message);if(timestamp!==undefined)run.lastEventAt=Math.max(run.lastEventAt??0,timestamp);if(!id||placed.has(id))continue;const tool=tools.get(id);if(tool){run.items.push({type:'tool',key:id,tool});placed.add(id);}}
   }
   for(const tool of state.tools){if(placed.has(tool.id))continue;const run=runs.find(candidate=>candidate.key===tool.runKey)??ensureRun();run.items.push({type:'tool',key:tool.id,tool});placed.add(tool.id);}
   const live=ensureRun();if(state.streamThinking)live.items.push({type:'thinking',key:'stream-thinking',text:state.streamThinking,streaming:true});
   if(state.streamText)live.items.push({type:'answer',key:'stream-answer',text:state.streamText,streaming:true});
+  for(const run of runs){const settledAt=state.settledRuns[run.key]??run.lastEventAt;if(run.userTimestamp!==undefined&&settledAt!==undefined&&settledAt>=run.userTimestamp)run.stats.elapsedMs=settledAt-run.userTimestamp;}
   return runs.filter(run=>run.user||run.items.length);
 };
 const titleFor=(session?:PiSessionSummary,snapshot?:ChatState)=>snapshot?.name&&snapshot.name!=='New Chat'
@@ -118,11 +140,26 @@ const toolDetail=(chat:ChatState,tool:ToolState,now=Date.now()):ToolDetailReques
     tool:tool.name,toolCallId:tool.id,status:tool.status,
     ...(tool.startedAt!==undefined?{startedAt:new Date(tool.startedAt).toISOString()}:{}),
     ...(toolDuration(tool,now)!==undefined?{durationMs:Math.round(toolDuration(tool,now)!)}:{}),
-    input:tool.args??null,output:tool.result??null,
+    input:tool.args??null,output:tool.result??null,usage:tool.usage??null,
   },null,2),
 });
 const emptyUsage:PiUsageStats={input:0,output:0,cacheRead:0,cacheWrite:0,total:0,cost:0,runs:0,toolCalls:0,cacheHitPercent:0,contextTokens:0,contextWindow:0,contextPercent:0};
 const finalAnswer=(run:ChatRun)=>[...run.items].reverse().find(item=>item.type==='answer'&&!item.streaming)?.text??'';
+const usageMeta=(usage:MessageUsage)=>`${formatAgentTokens(usage.totalTokens)} tokens · $${usage.cost.toFixed(4)}`;
+const runStatsSummary=(run:ChatRun)=>{const usage=combinedUsage(run.stats);return [run.stats.elapsedMs===undefined?undefined:formatToolDuration(run.stats.elapsedMs),
+  `${formatAgentTokens(usage.totalTokens)} tokens`,`$${usage.cost.toFixed(4)}`].filter(Boolean).join(' · ');};
+function RunStatsDetails({run}:{run:ChatRun}){
+  const usage=combinedUsage(run.stats);const toolCalls=run.stats.calls.filter(call=>call.type==='tool').length;const modelCalls=run.stats.calls.length-toolCalls;
+  const row=(label:string,value:string,wide=false)=><div className={wide?'wide':undefined}><dt>{label}</dt><dd>{value}</dd></div>;
+  return <div className="agent-run-stats-content"><header><strong>Run Details</strong></header><dl className="agent-run-stats-grid">
+    {run.stats.elapsedMs!==undefined&&row('Elapsed',formatToolDuration(run.stats.elapsedMs),true)}{row('Model time',formatToolDuration(run.stats.modelTimeMs))}{row('Tool time (sum)',formatToolDuration(run.stats.toolTimeMs))}
+    {row('Input',usage.input.toLocaleString())}{row('Output',usage.output.toLocaleString())}{row('Cache read',usage.cacheRead.toLocaleString())}{row('Cache write',usage.cacheWrite.toLocaleString())}
+    {usage.reasoning>0&&row('Reasoning (included in Output)',usage.reasoning.toLocaleString(),true)}{run.stats.toolUsage.totalTokens>0&&row('Tool model tokens',run.stats.toolUsage.totalTokens.toLocaleString(),true)}
+    {row('Model calls',String(modelCalls))}{row('Tool calls',String(toolCalls))}{row('Total tokens',usage.totalTokens.toLocaleString())}{row('Cost',`$${usage.cost.toFixed(4)}`)}
+  </dl>{run.stats.calls.length>0&&<details className="agent-run-calls"><summary><Icon name="down" size={11}/><span>Calls</span></summary><div>{run.stats.calls.map(call=><div key={call.key}>
+    <span>{call.type==='model'?`Model · ${call.name}`:call.name}</span><small>{[call.usage?`${formatAgentTokens(call.usage.totalTokens)} · $${call.usage.cost.toFixed(4)}`:undefined,
+      call.durationMs===undefined?undefined:formatToolDuration(call.durationMs)].filter(Boolean).join(' · ')||'No usage data'}</small></div>)}</div></details>}</div>;
+}
 const assistantText=(run:ChatRun)=>run.items.filter(item=>item.type==='answer'&&item.text).map(item=>item.text).join('\n\n');
 export const shouldShowAssistantActions=(isLatest:boolean,status:PiRuntimeStatus)=>!isLatest||(status!=='starting'&&status!=='running');
 const formatTime=(value:number)=>new Intl.DateTimeFormat(undefined,{hour:'2-digit',minute:'2-digit'}).format(value);
@@ -139,9 +176,9 @@ const modelGroups=(models:PiModelSummary[]):SelectGroup[]=>{
   return [...groups].map(([provider,options])=>({label:providerName(provider),options}));
 };
 
-function AgentSelect({value,groups,placeholder,onChange,disabled=false,placement='down',align='start',compact=false}:{
+function AgentSelect({value,groups,placeholder,onChange,disabled=false,placement='down',align='start',compact=false,showCheck=true}:{
   value?:string;groups:SelectGroup[];placeholder:string;onChange:(value:string)=>void;disabled?:boolean;
-  placement?:'up'|'down';align?:'start'|'end';compact?:boolean;
+  placement?:'up'|'down';align?:'start'|'end';compact?:boolean;showCheck?:boolean;
 }){
   const [open,setOpen]=useState(false);const [menuStyle,setMenuStyle]=useState<React.CSSProperties>({});
   const root=useRef<HTMLDivElement|null>(null);const menu=useRef<HTMLDivElement|null>(null);
@@ -171,7 +208,7 @@ function AgentSelect({value,groups,placeholder,onChange,disabled=false,placement
     <span className={selected?'':'placeholder'}>{selected?.label??placeholder}</span><Icon name="down" size={12}/></button>
     {open&&createPortal(<div ref={menu} style={menuStyle} className="agent-select-menu" role="listbox">{groups.map((group,index)=><section key={group.label??index}>
       {group.label&&<strong>{group.label}</strong>}{group.options.map(option=><button type="button" role="option" aria-selected={option.value===value}
-        className={option.value===value?'selected':''} key={option.value} onClick={()=>choose(option.value)}><span>{option.label}</span>{option.value===value&&<Icon name="check" size={11}/>}</button>)}</section>)}</div>,document.body)}
+        className={option.value===value?'selected':''} key={option.value} onClick={()=>choose(option.value)}><span>{option.label}</span>{showCheck&&option.value===value&&<Icon name="check" size={11}/>}</button>)}</section>)}</div>,document.body)}
   </div>;
 }
 
@@ -189,8 +226,10 @@ export function updateEvent(current:ChatState,event:unknown):ChatState{
     if(delta.type==='thinking_delta'&&typeof delta.delta==='string')return {...current,streamThinking:current.streamThinking+delta.delta};
   }
   if(type==='message_end'){
-    const message=item.message;const key=messageKey(message);const index=current.messages.findIndex(existing=>messageKey(existing)===key);
+    const message=item.message;const value=record(message);const key=messageKey(message);const index=current.messages.findIndex(existing=>messageKey(existing)===key);
     const messages=index<0?[...current.messages,message]:current.messages.map((existing,i)=>i===index?message:existing);
+    if(value.role==='toolResult'){const id=String(value.toolCallId??'');const usage=messageUsage(message);return {...current,messages,streamText:'',streamThinking:'',tools:current.tools.map(tool=>tool.id===id
+      ?{...tool,status:value.isError?'error':'done',result:message,durationMs:numberValue(value.durationMs)??tool.durationMs,...(usage?{usage}:tool.usage?{usage:tool.usage}:{})}:tool)};}
     return {...current,messages,streamText:'',streamThinking:''};
   }
   if(type==='tool_execution_start'){
@@ -203,8 +242,8 @@ export function updateEvent(current:ChatState,event:unknown):ChatState{
   }
   if(type==='tool_execution_end'){
     const id=String(item.toolCallId);const result=record(item.result);
-    return {...current,tools:current.tools.map(tool=>tool.id===id?{...tool,status:item.isError||result.isError?'error':'done',result:item.result,
-      durationMs:numberValue(item.durationMs)??(tool.startedAt===undefined?undefined:Math.max(0,Date.now()-tool.startedAt))}:tool)};
+    return {...current,tools:current.tools.map(tool=>{if(tool.id!==id)return tool;const usage=messageUsage(item.result)??tool.usage;return {...tool,status:item.isError||result.isError?'error':'done',result:item.result,
+      durationMs:numberValue(item.durationMs)??(tool.startedAt===undefined?undefined:Math.max(0,Date.now()-tool.startedAt)),...(usage?{usage}:{})};})};
   }
   return current;
 }
@@ -216,8 +255,9 @@ function SessionDialog({projects,projectId,selectedSessionId,sessions,doneSessio
   onDelete:(session:PiSessionSummary)=>void;onClone:(session:PiSessionSummary)=>void;onExport:(session:PiSessionSummary)=>void;onClose:()=>void;
 }){
   const [renaming,setRenaming]=useState<string|null>(null);const [name,setName]=useState('');const [query,setQuery]=useState('');
-  const [sort,setSort]=useState<PiSessionSort>('relevance');const [results,setResults]=useState<PiSessionSearchResult[]>([]);const [searching,setSearching]=useState(false);
+  const [sort,setSort]=useState<PiSessionSort>(savedSessionSort);const [results,setResults]=useState<PiSessionSearchResult[]>([]);const [searching,setSearching]=useState(false);
   const trimmedQuery=query.trim();
+  useEffect(()=>localStorage.setItem('revu-session-sort',sort),[sort]);
   useEffect(()=>{
     if(!trimmedQuery){setResults([]);setSearching(false);return;}
     let cancelled=false;setSearching(true);
@@ -253,7 +293,8 @@ function SessionDialog({projects,projectId,selectedSessionId,sessions,doneSessio
       {projects.length>1&&<nav className="session-project-tabs" aria-label="Projects">{projects.map(project=><button key={project.id}
         className={project.id===projectId?'active':''} onClick={()=>onProject(project.id)}>{project.name}</button>)}</nav>}
       <div className="session-search"><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="Search conversations..." aria-label="Search conversations"/>
-        <select value={sort} onChange={event=>setSort(event.target.value as PiSessionSort)} aria-label="Sort conversations"><option value="relevance">Relevant</option><option value="recent">Recent</option></select></div>
+        <AgentSelect compact align="end" showCheck={false} value={sort} placeholder="Sort" groups={[{options:[{value:'relevance',label:'Relevant'},{value:'recent',label:'Recent'}]}]}
+          onChange={value=>setSort(value as PiSessionSort)}/></div>
       <div className="session-groups">{trimmedQuery
         ?searching?<p className="agent-empty">Searching…</p>:results.length?<section className="session-group search-results">{results.map(renderSession)}</section>:<p className="agent-empty">No matching conversations.</p>
         :sessions.length===0?<p className="agent-empty">No conversations yet.</p>:groups.map(([label,match])=>{
@@ -332,11 +373,15 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
   const [toolClock,setToolClock]=useState(Date.now());
   const [previewRunKey,setPreviewRunKey]=useState('');const [previewTop,setPreviewTop]=useState(8);
   const [openSessionIds,setOpenSessionIds]=useState<Record<string,string[]>>({});
+  const [sessionTabCapacity,setSessionTabCapacity]=useState(1);const [sessionMenuOpen,setSessionMenuOpen]=useState(false);const [sessionMenuStyle,setSessionMenuStyle]=useState<React.CSSProperties>({});
+  const [statsRunKey,setStatsRunKey]=useState('');const [statsMenuStyle,setStatsMenuStyle]=useState<React.CSSProperties>({});
   const [doneSessionIds,setDoneSessionIds]=useState<Set<string>>(()=>new Set());
   const [sourceMessageKeys,setSourceMessageKeys]=useState<Set<string>>(()=>new Set());const [copiedMessageKey,setCopiedMessageKey]=useState('');
   const [newChatModel,setNewChatModel]=useState<PiModelSummary|undefined>();const [newChatThinking,setNewChatThinking]=useState<PiThinkingLevel>('medium');
   const [modelMenuStyle,setModelMenuStyle]=useState<React.CSSProperties>({});
-  const bodyRef=useRef<HTMLDivElement|null>(null);const chatContentRef=useRef<HTMLDivElement|null>(null);const activeSessionTabRef=useRef<HTMLDivElement|null>(null);const modelControlRef=useRef<HTMLDivElement|null>(null);const modelMenuRef=useRef<HTMLDivElement|null>(null);
+  const bodyRef=useRef<HTMLDivElement|null>(null);const chatContentRef=useRef<HTMLDivElement|null>(null);const activeSessionTabRef=useRef<HTMLDivElement|null>(null);const sessionTabsRef=useRef<HTMLDivElement|null>(null);
+  const sessionMoreRef=useRef<HTMLButtonElement|null>(null);const sessionMoreMenuRef=useRef<HTMLDivElement|null>(null);const statsButtonRef=useRef<HTMLButtonElement|null>(null);const statsMenuRef=useRef<HTMLDivElement|null>(null);
+  const modelControlRef=useRef<HTMLDivElement|null>(null);const modelMenuRef=useRef<HTMLDivElement|null>(null);
   const usageRef=useRef<HTMLDivElement|null>(null);const contextRef=useRef<HTMLDivElement|null>(null);const draftConfigRequest=useRef(0);
   const runRefs=useRef(new Map<string,HTMLElement>());const pendingRunKey=useRef<string|undefined>(undefined);const skipAutoScroll=useRef(false);
   const chatsRef=useRef(chats);const viewRef=useRef({open,selectedSessionId,projects,sessions});const erroredRuns=useRef(new Set<string>());const notifiedRuns=useRef(new Set<string>());
@@ -360,8 +405,11 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
   const current=selectedSessionId?chats[selectedSessionId]:undefined;
   const hasRunningTool=!!current?.tools.some(tool=>tool.status==='running');
   const sessionTabs=openSessionIds[selectedProjectId]??[];
+  const visibleSessionCount=Math.max(0,sessionTabCapacity-(!selectedSessionId&&selectedProjectId?1:0));
+  const visibleSessionTabs=visibleSessionCount?sessionTabs.slice(-visibleSessionCount).reverse():[];
   const runs=current?buildRuns(current):[];const usage=current?.usage??emptyUsage;
   const previewRun=runs.find(run=>run.key===previewRunKey);
+  const statsRun=runs.find(run=>run.key===statsRunKey);
   useEffect(()=>{
     if(!hasRunningTool)return;
     setToolClock(Date.now());const timer=setInterval(()=>setToolClock(Date.now()),1000);
@@ -380,7 +428,7 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
     const snapshot=await window.revu.agent.openSession(projectId,sessionId).then(unwrap);pendingRunKey.current=targetRunKey;
     const entries=await window.revu.agent.getEntries(projectId,snapshot.sessionId).then(unwrap);
     setChats(current=>{const next={...current,[snapshot.sessionId]:withEntries(withSnapshot(snapshot,current[snapshot.sessionId]),entries)};chatsRef.current=next;return next;});
-    setOpenSessionIds(current=>{const ids=current[projectId]??[];return ids.includes(snapshot.sessionId)?current:{...current,[projectId]:[...ids,snapshot.sessionId]};});
+    setOpenSessionIds(current=>{const ids=current[projectId]??[];const next=[...ids.filter(id=>id!==snapshot.sessionId),snapshot.sessionId];return {...current,[projectId]:next};});
     setSelectedProjectId(projectId);setSelectedSessionId(snapshot.sessionId);setDraft('');setSessionDialog(false);
   }catch(error){notify('error',error instanceof Error?error.message:String(error));setModelDialog(true);}finally{setLoading(false);}};
   const openSession=async(session:PiSessionSummary,targetRunKey?:string)=>openSessionById(session.projectId,session.id,targetRunKey);
@@ -404,10 +452,12 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
   },[activeProjectId,projects,selectedProjectId]);
   useEffect(()=>{if(selectedProjectId)void reloadSessions(selectedProjectId);},[selectedProjectId]);
   useLayoutEffect(()=>{activeSessionTabRef.current?.scrollIntoView({block:'nearest',inline:'nearest'});},[selectedProjectId,selectedSessionId,sessionTabs.length]);
+  useLayoutEffect(()=>{const container=sessionTabsRef.current;if(!container)return;const update=()=>setSessionTabCapacity(Math.max(1,Math.floor((container.clientWidth+3)/95)));
+    update();const observer=new ResizeObserver(update);observer.observe(container);return()=>observer.disconnect();},[]);
   useEffect(()=>{if(selectedProjectId&&!selectedSessionId)void loadNewChatDefaults(selectedProjectId);},[selectedProjectId,selectedSessionId]);
   useEffect(()=>{if(open&&selectedSessionId)clearDone(selectedSessionId);},[open,selectedSessionId,clearDone]);
   useEffect(()=>()=>{for(const timer of doneTimers.current.values())clearTimeout(timer);if(copiedTimer.current)clearTimeout(copiedTimer.current);},[]);
-  useEffect(()=>{if(selectedSessionId)draftConfigRequest.current++;setComposerExpanded(false);setModelMenu(false);setContextOpen(false);setUsageOpen(false);setCompactionResult(undefined);},[selectedSessionId]);
+  useEffect(()=>{if(selectedSessionId)draftConfigRequest.current++;setComposerExpanded(false);setModelMenu(false);setSessionMenuOpen(false);setStatsRunKey('');setContextOpen(false);setUsageOpen(false);setCompactionResult(undefined);},[selectedSessionId]);
   useEffect(()=>{
     const opening=open&&!wasOpen.current;wasOpen.current=open;
     if(!opening||hasPendingNavigation)return;
@@ -434,6 +484,21 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
     document.addEventListener('pointerdown',outside);document.addEventListener('focusin',outside);document.addEventListener('keydown',escape);
     return()=>{document.removeEventListener('pointerdown',outside);document.removeEventListener('focusin',outside);document.removeEventListener('keydown',escape);};
   },[modelMenu]);
+  useLayoutEffect(()=>{if(!sessionMenuOpen||!sessionMoreRef.current)return;const rect=sessionMoreRef.current.getBoundingClientRect();const panel=sessionMoreRef.current.closest('.agent-chat')?.getBoundingClientRect();
+    const left=panel?panel.left+16:16;const width=Math.max(220,(panel?.width??252)-32);const bottom=panel?.bottom??window.innerHeight;
+    setSessionMenuStyle({position:'fixed',width,left,top:rect.bottom+5,maxHeight:Math.max(120,bottom-rect.bottom-13)});
+  },[sessionMenuOpen,selectedProjectId,sessionTabs.length]);
+  useEffect(()=>{if(!sessionMenuOpen)return;const outside=(event:PointerEvent|FocusEvent)=>{const target=event.target as Node;if(!sessionMoreRef.current?.contains(target)&&!sessionMoreMenuRef.current?.contains(target))setSessionMenuOpen(false);};
+    const escape=(event:KeyboardEvent)=>{if(event.key==='Escape')setSessionMenuOpen(false);};document.addEventListener('pointerdown',outside);document.addEventListener('focusin',outside);document.addEventListener('keydown',escape);
+    return()=>{document.removeEventListener('pointerdown',outside);document.removeEventListener('focusin',outside);document.removeEventListener('keydown',escape);};},[sessionMenuOpen]);
+  useLayoutEffect(()=>{if(!statsRunKey||!statsButtonRef.current)return;const rect=statsButtonRef.current.getBoundingClientRect();const bounds=chatContentRef.current?.getBoundingClientRect();
+    const width=Math.min(360,Math.max(260,(bounds?.width??376)-16));const limitLeft=(bounds?.left??8)+8;const limitRight=(bounds?.right??window.innerWidth)-8;
+    const left=Math.max(limitLeft,Math.min(limitRight-width,rect.right-width));const above=Math.max(0,rect.top-(bounds?.top??8)-7);const below=Math.max(0,(bounds?.bottom??window.innerHeight)-rect.bottom-7);
+    setStatsMenuStyle(above>=below?{position:'fixed',width,left,bottom:window.innerHeight-rect.top+5,maxHeight:Math.max(120,above)}:{position:'fixed',width,left,top:rect.bottom+5,maxHeight:Math.max(120,below)});
+  },[statsRunKey]);
+  useEffect(()=>{if(!statsRunKey)return;const outside=(event:PointerEvent|FocusEvent)=>{const target=event.target as Node;if(!statsButtonRef.current?.contains(target)&&!statsMenuRef.current?.contains(target))setStatsRunKey('');};
+    const escape=(event:KeyboardEvent)=>{if(event.key==='Escape')setStatsRunKey('');};document.addEventListener('pointerdown',outside);document.addEventListener('focusin',outside);document.addEventListener('keydown',escape);
+    return()=>{document.removeEventListener('pointerdown',outside);document.removeEventListener('focusin',outside);document.removeEventListener('keydown',escape);};},[statsRunKey]);
   useEffect(()=>{if(!usageOpen)return;const outside=(event:PointerEvent|FocusEvent)=>{const target=event.target as Node;if(!usageRef.current?.contains(target))setUsageOpen(false);};
     const escape=(event:KeyboardEvent)=>{if(event.key==='Escape')setUsageOpen(false);};document.addEventListener('pointerdown',outside);document.addEventListener('focusin',outside);document.addEventListener('keydown',escape);
     return()=>{document.removeEventListener('pointerdown',outside);document.removeEventListener('focusin',outside);document.removeEventListener('keydown',escape);};
@@ -471,6 +536,10 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
           ?{...session,isCompacting:payload.type==='compaction_start'}:session)}));
       }
       if(payload.type==='agent_start'){erroredRuns.current.delete(event.sessionId);clearDone(event.sessionId);}
+      if(payload.type==='agent_settled'){
+        const settling=chatsRef.current[event.sessionId];if(settling){const key=lastRunKey(settling.messages);const next={...chatsRef.current,
+          [event.sessionId]:{...settling,settledRuns:{...settling.settledRuns,[key]:Date.now()}}};chatsRef.current=next;setChats(next);}
+      }
       const ended=record(payload.message);
       if(payload.type==='message_end'&&ended.role==='assistant'&&ended.stopReason==='error'){
         const message=typeof ended.errorMessage==='string'?ended.errorMessage:'The model response failed.';sendErrorNotice(message);
@@ -526,6 +595,15 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
     if(selectedSessionId!==sessionId)return;const next=remaining[Math.min(index,remaining.length-1)]??remaining.at(-1);
     if(next)void openSessionById(selectedProjectId,next);else startNewChat();
   };
+  const closeOtherSessionTabs=(sessionId:string)=>{const tabs=openSessionIds[selectedProjectId]??[];const closing=tabs.filter(id=>id!==sessionId);
+    setOpenSessionIds(current=>({...current,[selectedProjectId]:[sessionId]}));for(const id of closing)void window.revu.agent.releaseSession(selectedProjectId,id).then(unwrap).catch(error=>notify('error',errorMessage(error)));
+    if(selectedSessionId!==sessionId)void openSessionById(selectedProjectId,sessionId);
+  };
+  const closeAllSessionTabs=()=>{const tabs=openSessionIds[selectedProjectId]??[];setOpenSessionIds(current=>({...current,[selectedProjectId]:[]}));
+    for(const id of tabs)void window.revu.agent.releaseSession(selectedProjectId,id).then(unwrap).catch(error=>notify('error',errorMessage(error)));startNewChat();
+  };
+  const sessionTabContext=async(event:React.MouseEvent,sessionId:string)=>{event.preventDefault();const action=await window.revu.contextMenu('tab');
+    if(action==='close')closeSessionTab(sessionId);if(action==='closeOthers')closeOtherSessionTabs(sessionId);if(action==='closeAll')closeAllSessionTabs();};
   const closeNewChatTab=()=>{const next=(openSessionIds[selectedProjectId]??[]).at(-1);if(next)void openSessionById(selectedProjectId,next);};
   const send=async()=>{if(!selectedProjectId||!draft.trim()||dirty||(!current&&!newChatModel))return;const text=draft;setDraft('');
     try{
@@ -609,15 +687,18 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
       <div className="agent-resize-handle" onPointerDown={beginResize}/>
       <header className="agent-chat-header"><button className="agent-project-trigger" disabled={!projects.length} onClick={()=>setSessionDialog(true)}>
         <span>{selectedProject?.name??'No Project'}</span><Icon name="down" size={11}/></button>
-        <div className="agent-session-tabs" role="tablist" aria-label="Open chats">{sessionTabs.map(sessionId=>{
+        <div className="agent-session-tabs" ref={sessionTabsRef} role="tablist" aria-label="Open chats">{visibleSessionTabs.map(sessionId=>{
           const summary=(sessions[selectedProjectId]??[]).find(item=>item.id===sessionId);const chat=chats[sessionId];const active=selectedSessionId===sessionId;
-          const tone=sessionTone(chat?.status??summary?.status??'idle',doneSessionIds.has(sessionId));return <div ref={active?activeSessionTabRef:undefined} className={`agent-session-tab status-${tone} ${active?'active':''}`} key={sessionId}>
+          const tone=sessionTone(chat?.status??summary?.status??'idle',doneSessionIds.has(sessionId));return <div ref={active?activeSessionTabRef:undefined} className={`agent-session-tab status-${tone} ${active?'active':''}`} key={sessionId}
+            onContextMenu={event=>void sessionTabContext(event,sessionId)}>
             <button role="tab" aria-selected={selectedSessionId===sessionId} title={titleFor(summary,chat)} onClick={()=>void openSessionById(selectedProjectId,sessionId)}>{titleFor(summary,chat)}</button>
             <button className="agent-session-tab-close" title="Close Chat" aria-label={`Close ${titleFor(summary,chat)}`} onClick={()=>closeSessionTab(sessionId)}><Icon name="close" size={10}/></button>
           </div>;})}
           {!selectedSessionId&&selectedProjectId&&<div ref={activeSessionTabRef} className="agent-session-tab active new"><button role="tab" aria-selected="true">New Chat</button>
             {!!sessionTabs.length&&<button className="agent-session-tab-close" title="Close Chat" aria-label="Close New Chat" onClick={closeNewChatTab}><Icon name="close" size={10}/></button>}</div>}
         </div>
+        <button ref={sessionMoreRef} className="agent-icon-button agent-session-more" title="Open Chats" aria-label="Open chats" aria-haspopup="listbox" aria-expanded={sessionMenuOpen}
+          disabled={!sessionTabs.length} onClick={()=>setSessionMenuOpen(value=>!value)}><Icon name="more" size={15}/></button>
         <button className="agent-icon-button agent-new-chat" title="New Chat" disabled={!selectedProjectId||loading} onClick={startNewChat}><Icon name="add" size={15}/></button></header>
       <div className="agent-chat-content" ref={chatContentRef}>
         <nav className="agent-run-rail" aria-label="Runs"><div>{runs.map((run,index)=><button key={run.key}
@@ -641,18 +722,19 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
               :<MarkdownContent text={part.text??''} key={part.key}/>
             :part.type==='thinking'?<details className="agent-thinking" key={part.key} open={part.streaming||undefined} onToggle={()=>requestAnimationFrame(updateRunRail)}><summary title="Toggle thought process"><Icon name="thought" size={16}/><span>Thought process</span></summary><div>{part.text}</div></details>
             :part.tool&&<details className={`agent-tool ${part.tool.status}`} key={part.key} onToggle={()=>requestAnimationFrame(updateRunRail)}><summary><span>{part.tool.name}</span>
-              <span className="agent-tool-meta">{toolDuration(part.tool,toolClock)!==undefined&&<time>{formatToolDuration(toolDuration(part.tool,toolClock)!)}</time>}<small>{part.tool.status}</small></span></summary>
+              <span className="agent-tool-meta">{part.tool.usage&&<span className="agent-tool-usage">{usageMeta(part.tool.usage)}</span>}{toolDuration(part.tool,toolClock)!==undefined&&<time>{formatToolDuration(toolDuration(part.tool,toolClock)!)}</time>}<small>{part.tool.status}</small></span></summary>
               <div className="agent-tool-detail"><button type="button" className="agent-tool-expand" title="Open in Editor" aria-label={`Open ${part.tool.name} details in editor`}
                 onClick={()=>onOpenToolDetail(toolDetail(current,part.tool!,toolClock))}><Icon name="expand" size={13}/></button>
                 <pre>{JSON.stringify({input:part.tool.args,output:part.tool.result},null,2)}</pre></div></details>)}
-            {showActions&&<div className="agent-message-actions" aria-label="Assistant message actions">
-              <button type="button" disabled={!answerText} title={copiedMessageKey===messageKey+'-assistant'?'Copied':'Copy'} aria-label="Copy assistant message"
-                onClick={()=>void copyMessage(messageKey+'-assistant',answerText)}><Icon name={copiedMessageKey===messageKey+'-assistant'?'check':'copy'} size={14}/></button>
-              <button type="button" disabled={!answerText} title={showSource?'Show Preview':'Show Source'} aria-label={showSource?'Show Markdown preview':'Show Markdown source'}
-                aria-pressed={showSource} onClick={()=>toggleMessageSource(messageKey)}><Icon name="format" size={14}/></button>
-              <button type="button" disabled title="Retry · Coming soon" aria-label="Retry · Coming soon"><Icon name="retry" size={14}/></button>
-              <button type="button" disabled title="More · Coming soon" aria-label="More · Coming soon"><Icon name="more" size={14}/></button>
-            </div>}</div>}
+            {showActions&&<div className="agent-response-footer"><div className="agent-message-actions" aria-label="Assistant message actions">
+                <button type="button" disabled={!answerText} title={copiedMessageKey===messageKey+'-assistant'?'Copied':'Copy'} aria-label="Copy assistant message"
+                  onClick={()=>void copyMessage(messageKey+'-assistant',answerText)}><Icon name={copiedMessageKey===messageKey+'-assistant'?'check':'copy'} size={14}/></button>
+                <button type="button" disabled={!answerText} title={showSource?'Show Preview':'Show Source'} aria-label={showSource?'Show Markdown preview':'Show Markdown source'}
+                  aria-pressed={showSource} onClick={()=>toggleMessageSource(messageKey)}><Icon name="format" size={14}/></button>
+                <button type="button" disabled title="Retry · Coming soon" aria-label="Retry · Coming soon"><Icon name="retry" size={14}/></button>
+                <button type="button" disabled title="More · Coming soon" aria-label="More · Coming soon"><Icon name="more" size={14}/></button>
+              </div>{answerText&&<button ref={statsRunKey===run.key?statsButtonRef:undefined} type="button" className="agent-run-stats-button" title="View run details" aria-haspopup="dialog" aria-expanded={statsRunKey===run.key}
+                onClick={()=>setStatsRunKey(current=>current===run.key?'':run.key)}>{runStatsSummary(run)}</button>}</div>}</div>}
         </section>;})}
           {current.error&&<div className="agent-inline-error">{current.error}</div>}</>}
         </div>
@@ -690,6 +772,12 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
           </dl></section>}</div>
       </div>}
     </aside>
+    {sessionMenuOpen&&createPortal(<div ref={sessionMoreMenuRef} style={sessionMenuStyle} className="agent-session-more-menu" role="listbox" aria-label="Open chats">
+      {[...sessionTabs].reverse().map(sessionId=>{const summary=(sessions[selectedProjectId]??[]).find(item=>item.id===sessionId);const chat=chats[sessionId];const active=selectedSessionId===sessionId;
+        const tone=sessionTone(chat?.status??summary?.status??'idle',doneSessionIds.has(sessionId));return <button type="button" role="option" aria-selected={active} className={active?'selected':''} key={sessionId}
+          onClick={()=>{setSessionMenuOpen(false);void openSessionById(selectedProjectId,sessionId);}}><i className={`session-menu-status ${tone}`}/><span>{titleFor(summary,chat)}</span></button>;})}
+    </div>,document.body)}
+    {statsRun&&createPortal(<aside ref={statsMenuRef} style={statsMenuStyle} className="agent-run-stats-popover" role="dialog" aria-label="Run details"><RunStatsDetails run={statsRun}/></aside>,document.body)}
     {modelMenu&&createPortal(<div ref={modelMenuRef} style={modelMenuStyle} className="agent-model-menu combined" role="dialog" aria-label="Model and thinking">
       <div className="agent-model-picker"><div className="agent-model-list">{groupedModels.map(group=><section key={group.label}><strong>{group.label}</strong>
         {group.options.map(option=>{const [provider,id]=option.value.split('\u0000');const selected=selectedModel?.provider===provider&&selectedModel.id===id;return <button className={selected?'selected':''}
