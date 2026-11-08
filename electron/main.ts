@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell, type MenuItemConstructorOptions } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell, type MenuItemConstructorOptions, type SaveDialogOptions } from 'electron';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { diff } from '../server/git';
@@ -76,12 +76,28 @@ ipcMain.handle('revu:invoke',async(_event,body)=>{
     error:error instanceof Error?error.message:String(error)};}
 });
 
-async function invokeAgent(body:PiAgentRequest){
+async function invokeAgent(body:PiAgentRequest,sourceWindow?:BrowserWindow|null){
   if(!piManager)throw new Error('Pi Agent is not ready.');
   switch(body.action){
     case 'listSessions':return piManager.listSessions(body.projectId);
+    case 'searchSessions':return piManager.searchSessions(body.projectId,body.query,body.sort);
     case 'openSession':return piManager.openSession(body.projectId,body.sessionId);
     case 'newSession':return piManager.newSession(body.projectId);
+    case 'getEntries':return piManager.getEntries(body.projectId,body.sessionId,body.sinceEntryId);
+    case 'forkSession':return piManager.forkSession(body.projectId,body.sessionId,body.entryId);
+    case 'cloneSession':return piManager.cloneSession(body.projectId,body.sessionId);
+    case 'releaseSession':return piManager.releaseSession(body.projectId,body.sessionId);
+    case 'exportHtml':{
+      const name=await piManager.sessionName(body.projectId,body.sessionId);
+      const fileName=(name.replace(/[<>:"/\\|?*\x00-\x1f]/g,'_').replace(/[. ]+$/,'').slice(0,100)||'Conversation')+'.html';
+      const options:SaveDialogOptions={
+        title:'Export Conversation',defaultPath:join(workspace.get(body.projectId).root,fileName),
+        filters:[{name:'HTML',extensions:['html']}],properties:['showOverwriteConfirmation'],
+      };
+      const owner=sourceWindow??mainWindow;const result=owner?await dialog.showSaveDialog(owner,options):await dialog.showSaveDialog(options);
+      if(result.canceled||!result.filePath)return null;
+      return piManager.exportHtml(body.projectId,body.sessionId,result.filePath);
+    }
     case 'renameSession':return piManager.renameSession(body.projectId,body.sessionId,body.name);
     case 'deleteSession':return piManager.deleteSession(body.projectId,body.sessionId);
     case 'closeProject':return piManager.closeProject(body.projectId);
@@ -100,12 +116,12 @@ async function invokeAgent(body:PiAgentRequest){
   }
 }
 
-ipcMain.handle('revu:agent',async(_event,body:PiAgentRequest)=>{
-  try{return {ok:true,value:await invokeAgent(body)};}
+ipcMain.handle('revu:agent',async(event,body:PiAgentRequest)=>{
+  try{return {ok:true,value:await invokeAgent(body,BrowserWindow.fromWebContents(event.sender))};}
   catch(error){return {ok:false,status:500,error:error instanceof Error?error.message:String(error)};}
 });
 
-ipcMain.handle('revu:context-menu',async(event,kind:'project'|'directory'|'tab')=>{
+ipcMain.handle('revu:context-menu',async(event,kind:'project'|'directory'|'tab'|'session',options?:{enabled?:boolean})=>{
   const window=BrowserWindow.fromWebContents(event.sender);
   if(!window)return null;
   return new Promise<string|null>(resolve=>{
@@ -115,7 +131,9 @@ ipcMain.handle('revu:context-menu',async(event,kind:'project'|'directory'|'tab')
     const template:MenuItemConstructorOptions[]=kind==='project'
       ? [item('Close Folder','close'),{type:'separator'},...folderActions]
       : kind==='directory'?folderActions
-      : [item('Close','close'),item('Close Others','closeOthers'),item('Close All','closeAll')];
+      : kind==='session'
+        ? [{...item('Clone','clone'),enabled:options?.enabled!==false},{...item('Export','export'),enabled:options?.enabled!==false}]
+        : [item('Close','close'),item('Close Others','closeOthers'),item('Close All','closeAll')];
     Menu.buildFromTemplate(template).popup({window,callback:()=>resolve(selected)});
   });
 });

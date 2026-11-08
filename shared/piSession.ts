@@ -9,3 +9,14 @@ export const calculatePiCacheHitPercent=(input:number,cacheRead:number,cacheWrit
   const total=input+cacheRead+cacheWrite;
   return total?cacheRead/total*100:0;
 };
+
+export const derivedPiSessionName=(source:string,kind:'Fork'|'Clone',existingNames:Iterable<string>)=>{
+  const clean=source.trim()||'New Chat';
+  const base=clean.replace(/ \((?:Fork|Clone)(?: \d+)?\)$/,'');
+  const existing=new Set([...existingNames].map(name=>name.toLocaleLowerCase()));
+  for(let index=1;;index++){
+    const suffix=index===1?kind:`${kind} ${index}`;
+    const candidate=`${base} (${suffix})`;
+    if(!existing.has(candidate.toLocaleLowerCase()))return candidate;
+  }
+};

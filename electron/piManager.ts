@@ -4,10 +4,12 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type {
-  PiCompactionResponse,PiModelDefaults,PiModelSummary,PiProviderStatus,PiRuntimeStatus,PiSessionSnapshot,
-  PiSessionSummary,PiThinkingLevel,PiUsageStats,RevuPiEvent,
+  PiCompactionResponse,PiEntriesResponse,PiForkResponse,PiModelDefaults,PiModelSummary,PiProviderStatus,
+  PiRuntimeStatus,PiSessionSearchResult,PiSessionSnapshot,PiSessionSort,PiSessionSummary,PiThinkingLevel,
+  PiUsageStats,RevuPiEvent,
 } from '../shared/piTypes';
-import { calculatePiCacheHitPercent, countPiSessionRuns } from '../shared/piSession';
+import { calculatePiCacheHitPercent, countPiSessionRuns, derivedPiSessionName } from '../shared/piSession';
+import { searchPiSessions } from '../shared/piSessionSearch';
 
 type PiModule=typeof import('@earendil-works/pi-coding-agent');
 type RpcClient=InstanceType<PiModule['RpcClient']>;
@@ -37,6 +39,7 @@ interface RuntimeHandle {
   status:PiRuntimeStatus;
   sessionPath?:string;
   error?:string;
+  isCompacting?:boolean;
   unsubscribe:()=>void;
   usageRefresh?:Promise<void>;
   usageRefreshPending?:boolean;
@@ -162,13 +165,27 @@ export class PiManager {
       id:session.id,projectId,name:session.name||session.firstMessage.trim().slice(0,80)||'New Chat',
       firstMessage:session.firstMessage,createdAt:session.created.getTime(),modifiedAt:session.modified.getTime(),
       runCount:this.countRuns(SessionManager,session.path,session.modified.getTime()),status:this.runtimes.get(session.id)?.status??'idle' as PiRuntimeStatus,
+      hasSessionFile:true,isCompacting:this.runtimes.get(session.id)?.isCompacting,
     }));
     for(const runtime of this.runtimes.values()){
       if(runtime.projectId!==projectId||result.some(item=>item.id===runtime.sessionId))continue;
       result.unshift({id:runtime.sessionId,projectId,name:'New Chat',firstMessage:'',createdAt:Date.now(),
-        modifiedAt:Date.now(),runCount:0,status:runtime.status});
+        modifiedAt:Date.now(),runCount:0,status:runtime.status,hasSessionFile:!!runtime.sessionPath&&existsSync(runtime.sessionPath),isCompacting:runtime.isCompacting});
     }
     return result.sort((a,b)=>b.modifiedAt-a.modifiedAt);
+  }
+
+  async searchSessions(projectId:string,query:string,sort:PiSessionSort):Promise<PiSessionSearchResult[]>{
+    const project=this.project(projectId);const {SessionManager}=await this.module();
+    const listed=await SessionManager.list(project.root);
+    return searchPiSessions(listed.map(session=>({
+      summary:{id:session.id,projectId,name:session.name||session.firstMessage.trim().slice(0,80)||'New Chat',
+        firstMessage:session.firstMessage,createdAt:session.created.getTime(),modifiedAt:session.modified.getTime(),
+        runCount:this.countRuns(SessionManager,session.path,session.modified.getTime()),
+        status:this.runtimes.get(session.id)?.status??'idle' as PiRuntimeStatus,hasSessionFile:true,
+        isCompacting:this.runtimes.get(session.id)?.isCompacting},
+      allMessagesText:session.allMessagesText,
+    })),query,sort);
   }
 
   private countRuns(SessionManager:PiModule['SessionManager'],path:string,modifiedAt:number){
@@ -203,6 +220,28 @@ export class PiManager {
     return this.startRuntime(projectId,sessionId,session.path);
   }
 
+  private async stableRuntime(projectId:string,sessionId:string){
+    const existing=this.runtimes.get(sessionId);
+    if(existing?.status==='error')await this.disposeRuntime(sessionId);
+    const handle=await this.ensureRuntime(projectId,sessionId);
+    if(handle.status==='starting'||handle.status==='running'||handle.status==='stopping')
+      throw new Error('Wait for the session to finish before using this action.');
+    const state=await handle.client.getState();
+    if(state.isStreaming||state.isCompacting)throw new Error('Wait for the session to finish before using this action.');
+    if(!state.sessionFile||!existsSync(state.sessionFile))throw new Error('Send a message before using this action.');
+    handle.sessionPath=state.sessionFile;
+    return handle;
+  }
+
+  private async replaceRuntimeSession(handle:RuntimeHandle,previousId:string){
+    const state=await handle.client.getState();
+    if(!state.sessionId||!state.sessionFile)throw new Error('Pi did not create the new session.');
+    this.runtimes.delete(previousId);
+    handle.sessionId=state.sessionId;handle.sessionPath=state.sessionFile;handle.status='idle';handle.error=undefined;
+    this.runtimes.set(handle.sessionId,handle);this.selectedSessionId=handle.sessionId;
+    return handle;
+  }
+
   async openSession(projectId:string,sessionId:string){
     this.selectedSessionId=sessionId;
     const handle=await this.ensureRuntime(projectId,sessionId);
@@ -216,6 +255,53 @@ export class PiManager {
     await this.disposeUnselectedIdleRuntimes();
     this.emit(handle,'sessions-changed');
     return this.snapshot(handle);
+  }
+
+  async getEntries(projectId:string,sessionId:string,sinceEntryId?:string):Promise<PiEntriesResponse>{
+    const handle=await this.ensureRuntime(projectId,sessionId);
+    const response=await handle.client.getEntries(sinceEntryId);
+    return response as PiEntriesResponse;
+  }
+
+  async forkSession(projectId:string,sessionId:string,entryId:string):Promise<PiForkResponse>{
+    const sessions=await this.listSessions(projectId);const source=sessions.find(item=>item.id===sessionId);
+    if(!source)throw new Error('Session not found.');
+    const handle=await this.stableRuntime(projectId,sessionId);const result=await handle.client.fork(entryId);
+    if(result.cancelled)throw new Error('Fork was cancelled.');
+    await this.replaceRuntimeSession(handle,sessionId);
+    await handle.client.setSessionName(derivedPiSessionName(source.name,'Fork',sessions.map(item=>item.name)));
+    this.emit(handle,'sessions-changed');await this.disposeUnselectedIdleRuntimes();
+    return {snapshot:await this.snapshot(handle),selectedText:result.text};
+  }
+
+  async cloneSession(projectId:string,sessionId:string){
+    const sessions=await this.listSessions(projectId);const source=sessions.find(item=>item.id===sessionId);
+    if(!source)throw new Error('Session not found.');
+    const handle=await this.stableRuntime(projectId,sessionId);const result=await handle.client.clone();
+    if(result.cancelled)throw new Error('Clone was cancelled.');
+    await this.replaceRuntimeSession(handle,sessionId);
+    await handle.client.setSessionName(derivedPiSessionName(source.name,'Clone',sessions.map(item=>item.name)));
+    this.emit(handle,'sessions-changed');await this.disposeUnselectedIdleRuntimes();
+    return this.snapshot(handle);
+  }
+
+  async exportHtml(projectId:string,sessionId:string,outputPath:string){
+    const handle=await this.stableRuntime(projectId,sessionId);
+    const result=await handle.client.exportHtml(outputPath);
+    if(this.selectedSessionId!==sessionId)await this.disposeRuntime(sessionId);
+    return result.path;
+  }
+
+  async releaseSession(projectId:string,sessionId:string){
+    this.project(projectId);const handle=this.runtimes.get(sessionId);
+    if(handle&&handle.projectId!==projectId)throw new Error('Session does not belong to this project.');
+    if(this.selectedSessionId===sessionId)this.selectedSessionId=null;
+    if(handle&&(handle.status==='idle'||handle.status==='error'))await this.disposeRuntime(sessionId);
+  }
+
+  async sessionName(projectId:string,sessionId:string){
+    const session=await this.findSession(projectId,sessionId);
+    return session.name||session.firstMessage.trim().slice(0,80)||'New Chat';
   }
 
   private async snapshot(handle:RuntimeHandle):Promise<PiSessionSnapshot>{
@@ -270,6 +356,8 @@ export class PiManager {
     this.emit(handle,'event',event);
     if(event.type==='agent_start'){handle.status='running';this.emit(handle,'status','running');}
     if(event.type==='turn_end')void this.refreshUsage(handle);
+    if(event.type==='compaction_start')handle.isCompacting=true;
+    if(event.type==='compaction_end')handle.isCompacting=false;
     if(event.type==='agent_settled'){
       handle.status='idle';this.emit(handle,'status','idle');
       this.emit(handle,'sessions-changed');

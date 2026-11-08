@@ -1,11 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { PiAgentRequest, PiCompactionResponse, PiModelDefaults, PiModelSummary, PiProviderStatus, PiSessionSnapshot, PiSessionSummary, PiThinkingLevel, RevuPiEvent } from '../shared/piTypes';
+import type { PiAgentRequest, PiCompactionResponse, PiEntriesResponse, PiForkResponse, PiModelDefaults, PiModelSummary, PiProviderStatus, PiSessionSearchResult, PiSessionSnapshot, PiSessionSort, PiSessionSummary, PiThinkingLevel, RevuPiEvent } from '../shared/piTypes';
 
 const agentInvoke=<T>(body:PiAgentRequest)=>ipcRenderer.invoke('revu:agent',body) as Promise<{ok:boolean;value?:T;error?:string}>;
 
 contextBridge.exposeInMainWorld('revu',{
   invoke:(body:Record<string,unknown>)=>ipcRenderer.invoke('revu:invoke',body),
-  contextMenu:(kind:'project'|'directory'|'tab')=>ipcRenderer.invoke('revu:context-menu',kind),
+  contextMenu:(kind:'project'|'directory'|'tab'|'session',options?:{enabled?:boolean})=>ipcRenderer.invoke('revu:context-menu',kind,options),
   copyText:(text:string)=>ipcRenderer.invoke('revu:copy-text',text) as Promise<boolean>,
   openExternal:(url:string)=>ipcRenderer.invoke('revu:open-external',url) as Promise<boolean>,
   windowControl:(action:'minimize'|'maximize'|'close'|'isMaximized')=>ipcRenderer.invoke('revu:window-control',action),
@@ -22,8 +22,14 @@ contextBridge.exposeInMainWorld('revu',{
   },
   agent:{
     listSessions:(projectId:string)=>agentInvoke<PiSessionSummary[]>({action:'listSessions',projectId}),
+    searchSessions:(projectId:string,query:string,sort:PiSessionSort)=>agentInvoke<PiSessionSearchResult[]>({action:'searchSessions',projectId,query,sort}),
     openSession:(projectId:string,sessionId:string)=>agentInvoke<PiSessionSnapshot>({action:'openSession',projectId,sessionId}),
     newSession:(projectId:string)=>agentInvoke<PiSessionSnapshot>({action:'newSession',projectId}),
+    getEntries:(projectId:string,sessionId:string,sinceEntryId?:string)=>agentInvoke<PiEntriesResponse>({action:'getEntries',projectId,sessionId,sinceEntryId}),
+    forkSession:(projectId:string,sessionId:string,entryId:string)=>agentInvoke<PiForkResponse>({action:'forkSession',projectId,sessionId,entryId}),
+    cloneSession:(projectId:string,sessionId:string)=>agentInvoke<PiSessionSnapshot>({action:'cloneSession',projectId,sessionId}),
+    releaseSession:(projectId:string,sessionId:string)=>agentInvoke<void>({action:'releaseSession',projectId,sessionId}),
+    exportHtml:(projectId:string,sessionId:string)=>agentInvoke<string|null>({action:'exportHtml',projectId,sessionId}),
     renameSession:(projectId:string,sessionId:string,name:string)=>agentInvoke<void>({action:'renameSession',projectId,sessionId,name}),
     deleteSession:(projectId:string,sessionId:string)=>agentInvoke<void>({action:'deleteSession',projectId,sessionId}),
     prompt:(projectId:string,sessionId:string,text:string)=>agentInvoke<void>({action:'prompt',projectId,sessionId,text}),

@@ -1,12 +1,19 @@
-import type { PiCompactionResponse, PiModelDefaults, PiModelSummary, PiProviderStatus, PiSessionSnapshot, PiSessionSummary, PiThinkingLevel, RevuPiEvent } from '../shared/piTypes';
+import type { PiCompactionResponse, PiEntriesResponse, PiForkResponse, PiModelDefaults, PiModelSummary, PiProviderStatus, PiSessionSearchResult, PiSessionSnapshot, PiSessionSort, PiSessionSummary, PiThinkingLevel, RevuPiEvent } from '../shared/piTypes';
 interface RevuResponse<T>{ok:boolean;value?:T;status?:number;error?:string}
 type ProjectContextAction='close'|'expandAll'|'collapseAll';
 type DirectoryContextAction='expandAll'|'collapseAll';
 type TabContextAction='close'|'closeOthers'|'closeAll';
+type SessionContextAction='clone'|'export';
 interface RevuAgentApi {
   listSessions(projectId:string):Promise<RevuResponse<PiSessionSummary[]>>;
+  searchSessions(projectId:string,query:string,sort:PiSessionSort):Promise<RevuResponse<PiSessionSearchResult[]>>;
   openSession(projectId:string,sessionId:string):Promise<RevuResponse<PiSessionSnapshot>>;
   newSession(projectId:string):Promise<RevuResponse<PiSessionSnapshot>>;
+  getEntries(projectId:string,sessionId:string,sinceEntryId?:string):Promise<RevuResponse<PiEntriesResponse>>;
+  forkSession(projectId:string,sessionId:string,entryId:string):Promise<RevuResponse<PiForkResponse>>;
+  cloneSession(projectId:string,sessionId:string):Promise<RevuResponse<PiSessionSnapshot>>;
+  releaseSession(projectId:string,sessionId:string):Promise<RevuResponse<void>>;
+  exportHtml(projectId:string,sessionId:string):Promise<RevuResponse<string|null>>;
   renameSession(projectId:string,sessionId:string,name:string):Promise<RevuResponse<void>>;
   deleteSession(projectId:string,sessionId:string):Promise<RevuResponse<void>>;
   prompt(projectId:string,sessionId:string,text:string):Promise<RevuResponse<void>>;
@@ -30,6 +37,7 @@ declare global {
       contextMenu(kind:'project'):Promise<ProjectContextAction|null>;
       contextMenu(kind:'directory'):Promise<DirectoryContextAction|null>;
       contextMenu(kind:'tab'):Promise<TabContextAction|null>;
+      contextMenu(kind:'session',options?:{enabled?:boolean}):Promise<SessionContextAction|null>;
       copyText(text:string):Promise<boolean>;
       openExternal(url:string):Promise<boolean>;
       windowControl(action:'minimize'|'maximize'|'close'|'isMaximized'):Promise<boolean>;

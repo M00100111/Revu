@@ -1,5 +1,6 @@
 export type PiRuntimeStatus='starting'|'idle'|'running'|'stopping'|'error';
 export type PiThinkingLevel='off'|'minimal'|'low'|'medium'|'high'|'xhigh'|'max';
+export type PiSessionSort='relevance'|'recent';
 
 export interface PiSessionSummary {
   id:string;
@@ -10,6 +11,25 @@ export interface PiSessionSummary {
   modifiedAt:number;
   runCount:number;
   status:PiRuntimeStatus;
+  hasSessionFile?:boolean;
+  isCompacting?:boolean;
+}
+
+export interface PiSessionSearchResult extends PiSessionSummary {
+  matchSnippet?:string;
+}
+
+export interface PiSessionEntry {
+  id:string;
+  parentId:string|null;
+  type:string;
+  timestamp:string;
+  [key:string]:unknown;
+}
+
+export interface PiEntriesResponse {
+  entries:PiSessionEntry[];
+  leafId:string|null;
 }
 
 export interface PiProviderStatus {
@@ -67,6 +87,11 @@ export interface PiCompactionResponse {
   result:PiCompactionResult;
 }
 
+export interface PiForkResponse {
+  snapshot:PiSessionSnapshot;
+  selectedText:string;
+}
+
 export interface PiModelDefaults {
   provider?:string;
   modelId?:string;
@@ -82,8 +107,14 @@ export interface RevuPiEvent {
 
 export type PiAgentRequest=
   |{action:'listSessions';projectId:string}
+  |{action:'searchSessions';projectId:string;query:string;sort:PiSessionSort}
   |{action:'openSession';projectId:string;sessionId:string}
   |{action:'newSession';projectId:string}
+  |{action:'getEntries';projectId:string;sessionId:string;sinceEntryId?:string}
+  |{action:'forkSession';projectId:string;sessionId:string;entryId:string}
+  |{action:'cloneSession';projectId:string;sessionId:string}
+  |{action:'releaseSession';projectId:string;sessionId:string}
+  |{action:'exportHtml';projectId:string;sessionId:string}
   |{action:'renameSession';projectId:string;sessionId:string;name:string}
   |{action:'deleteSession';projectId:string;sessionId:string}
   |{action:'closeProject';projectId:string}
