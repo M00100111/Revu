@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import Icon from './Icon';
+import { showContextMenu } from './ContextMenu';
 import { countTabRows, defaultTabExpansion, nextTabExpansion, type FileTabExpansion, type FileTabOverflow } from './tabLayout';
 export type TabContextAction='close'|'closeOthers'|'closeAll';
 export interface EditorTabItem {id:string;name:string;title:string;projectName:string;dirty:boolean}
@@ -46,7 +47,7 @@ export default function TabBar({ tabs, activeId, onSelect, onClose, onContextAct
     <div ref={tabsRef} className="tabs" aria-label="Open files">
       {tabs.map(tab => <div key={tab.id} className={'tab ' + (tab.id === activeId ? 'active' : '')}
         ref={tab.id===activeId?activeRef:undefined}
-        onContextMenu={async event=>{event.preventDefault();const action=await window.revu.contextMenu('tab');if(action)onContextAction(tab,action);}}>
+        onContextMenu={async event=>{const action=await showContextMenu(event,[{id:'close',label:'Close'},{id:'closeOthers',label:'Close Others'},{id:'closeAll',label:'Close All'}] as const);if(action)onContextAction(tab,action);}}>
         <button className="tab-select" title={tab.title}
           aria-pressed={tab.id === activeId} onClick={() => onSelect(tab)}>
           <Icon name="editorDocument" size={14} /><span>{tab.name}</span>

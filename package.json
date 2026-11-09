@@ -49,12 +49,8 @@
         "to": "pi/node/node.exe"
       },
       {
-        "from": "node_modules/@earendil-works/pi-coding-agent/package.json",
-        "to": "pi/app/package.json"
-      },
-      {
-        "from": "node_modules/@earendil-works/pi-coding-agent/dist/bundle",
-        "to": "pi/app/bundle",
+        "from": ".pi-runtime/app",
+        "to": "pi/app",
         "filter": [
           "**/*"
         ]

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -9,6 +9,40 @@ const nodeVersion='22.19.0';
 const nodeArchive=`node-v${nodeVersion}-win-x64.zip`;
 const runtimeRoot=resolve('.pi-runtime');
 const nodeDir=join(runtimeRoot,'node');
+const piSourceRoot=resolve('node_modules','@earendil-works','pi-coding-agent');
+const piAppDir=join(runtimeRoot,'app');
+
+function replaceOnce(source,search,replacement,label){
+  const first=source.indexOf(search);
+  if(first<0||source.indexOf(search,first+search.length)>=0)throw new Error(`Could not apply the Pi ${label} patch for version 1.5.0.`);
+  return source.slice(0,first)+replacement+source.slice(first+search.length);
+}
+
+async function preparePiApp(){
+  const manifest=JSON.parse(await readFile(join(piSourceRoot,'package.json'),'utf8'));
+  if(manifest.version!=='1.5.0')throw new Error(`Unsupported Pi version ${manifest.version}; Revu's RPC patch requires 1.5.0.`);
+  await rm(piAppDir,{recursive:true,force:true});await mkdir(piAppDir,{recursive:true});
+  await cp(join(piSourceRoot,'package.json'),join(piAppDir,'package.json'));
+  await cp(join(piSourceRoot,'dist','bundle'),join(piAppDir,'bundle'),{recursive:true});
+  const chunksDir=join(piAppDir,'bundle','chunks');const chunks=await readdir(chunksDir);
+  let patched=false;
+  for(const name of chunks.filter(value=>value.endsWith('.js'))){
+    const path=join(chunksDir,name);let source=await readFile(path,'utf8');
+    if(!source.includes('case"get_tree"')||!source.includes('async getTree()'))continue;
+    source=replaceOnce(source,
+      'async getTree(){let response=await this.send({type:"get_tree"});return this.getData(response)}async getLastAssistantText()',
+      'async getTree(){let response=await this.send({type:"get_tree"});return this.getData(response)}async navigateTree(entryId,options={}){let response=await this.send({type:"navigate_tree",entryId,summarize:options.summarize??!1,customInstructions:options.customInstructions},6e5);return this.getData(response)}async setEntryLabel(entryId,label){await this.send({type:"set_label",entryId,label})}async abortBranchSummary(){await this.send({type:"abort_branch_summary"})}async getLastAssistantText()',
+      'RpcClient methods');
+    source=replaceOnce(source,'async send(command){let childProcess=', 'async send(command,timeoutMs=3e4){let childProcess=', 'RPC timeout parameter');
+    source=replaceOnce(source,'},3e4);this.pendingRequests.set(id,', '},timeoutMs);this.pendingRequests.set(id,', 'RPC timeout usage');
+    source=replaceOnce(source,
+      'case"get_tree":{let sessionManager=session.sessionManager;return success(id,"get_tree",{tree:sessionManager.getTree(),leafId:sessionManager.getLeafId()})}case"get_last_assistant_text"',
+      'case"get_tree":{let sessionManager=session.sessionManager;return success(id,"get_tree",{tree:sessionManager.getTree(),leafId:sessionManager.getLeafId()})}case"navigate_tree":{let result=await session.navigateTree(command.entryId,{summarize:command.summarize,customInstructions:command.customInstructions});return success(id,"navigate_tree",{editorText:result.editorText,cancelled:result.cancelled,aborted:result.aborted})}case"set_label":{let sessionManager=session.sessionManager;return sessionManager.appendLabelChange(command.entryId,command.label?.trim()||void 0),success(id,"set_label")}case"abort_branch_summary":return session.abortBranchSummary(),success(id,"abort_branch_summary");case"get_last_assistant_text"',
+      'RPC handlers');
+    await writeFile(path,source);patched=true;break;
+  }
+  if(!patched)throw new Error('Could not find Pi 1.5.0 RPC bundle chunk to patch.');
+}
 
 async function download(url){
   const response=await fetch(url);
@@ -35,4 +69,5 @@ async function prepareNode(){
 }
 
 await prepareNode();
-console.log(`Prepared Node ${nodeVersion} for Pi in ${runtimeRoot}`);
+await preparePiApp();
+console.log(`Prepared Node ${nodeVersion} and patched Pi 1.5.0 RPC runtime in ${runtimeRoot}`);

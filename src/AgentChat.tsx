@@ -3,10 +3,13 @@ import { createPortal } from 'react-dom';
 import type { Project } from './editor';
 import Icon from './Icon';
 import MarkdownContent from './MarkdownContent';
+import SessionTreeDialog from './SessionTreeDialog';
+import { showContextMenu } from './ContextMenu';
+import { threadPiSessions,type ThreadedPiSession } from '../shared/piSession';
 import type {
   PiCompactionResult,PiEntriesResponse,PiModelDefaults,PiModelSummary,PiProviderStatus,PiRuntimeStatus,
   PiSessionEntry,PiSessionSearchResult,PiSessionSnapshot,PiSessionSort,PiSessionSummary,PiThinkingLevel,
-  PiUsageStats,RevuPiEvent,
+  PiTreeNavigationResponse,PiUsageStats,RevuPiEvent,
 } from '../shared/piTypes';
 
 export interface ToolState {
@@ -64,7 +67,7 @@ const addUsage=(target:MessageUsage,value?:MessageUsage)=>{if(!value)return;targ
   target.cacheWrite+=value.cacheWrite;target.reasoning+=value.reasoning;target.totalTokens+=value.totalTokens;target.cost+=value.cost;};
 const combinedUsage=(stats:RunStats)=>{const total=emptyMessageUsage();addUsage(total,stats.assistantUsage);addUsage(total,stats.toolUsage);return total;};
 const emptyRunStats=():RunStats=>({modelTimeMs:0,toolTimeMs:0,assistantUsage:emptyMessageUsage(),toolUsage:emptyMessageUsage(),calls:[]});
-const savedSessionSort=():PiSessionSort=>localStorage.getItem('revu-session-sort')==='recent'?'recent':'relevance';
+const savedSessionSort=():PiSessionSort=>{const value=localStorage.getItem('revu-session-sort');return value==='recent'||value==='relevance'?value:'threaded';};
 const runKey=(index:number)=>`run-${Math.max(0,index)}`;
 const lastRunKey=(messages:unknown[])=>runKey(messages.reduce<number>((count,message)=>count+(record(message).role==='user'?1:0),0)-1);
 const toolsFromMessages=(messages:unknown[]):ToolState[]=>{
@@ -273,14 +276,14 @@ function SessionDialog({projects,projectId,selectedSessionId,sessions,doneSessio
     ['Previous 7 Days',(item:PiSessionSummary)=>item.modifiedAt>=today-6*86400000&&item.modifiedAt<today-86400000],
     ['Older',(item:PiSessionSummary)=>item.modifiedAt<today-6*86400000],
   ] as const;
-  const renderSession=(session:PiSessionSummary|PiSessionSearchResult)=>{const tone=sessionTone(session.status,doneSessionIds.has(session.id));const enabled=(session.status==='idle'||session.status==='error')&&session.hasSessionFile!==false&&!session.isCompacting;
-    const contextMenu=async(event:React.MouseEvent)=>{event.preventDefault();const action=await window.revu.contextMenu('session',{enabled});
+  const renderSession=(session:PiSessionSummary|PiSessionSearchResult,thread?:ThreadedPiSession<PiSessionSummary>)=>{const tone=sessionTone(session.status,doneSessionIds.has(session.id));const enabled=(session.status==='idle'||session.status==='error')&&session.hasSessionFile!==false&&!session.isCompacting;
+    const contextMenu=async(event:React.MouseEvent)=>{const action=await showContextMenu(event,[{id:'clone',label:'Clone',disabled:!enabled},{id:'export',label:'Export',disabled:!enabled}] as const);
       if(action==='clone')onClone(session);if(action==='export')onExport(session);};
     return <div className={`session-row status-${tone} ${session.id===selectedSessionId?'active':''}`} key={session.id} onContextMenu={event=>void contextMenu(event)}>
       {renaming===session.id?<form onSubmit={event=>{event.preventDefault();onRename(session,name);setRenaming(null);}}>
         <input autoFocus value={name} onChange={event=>setName(event.target.value)}/><button type="submit">Save</button><button type="button" onClick={()=>setRenaming(null)}>Cancel</button>
       </form>:<>
-        <button className="session-select" onClick={()=>onOpen(session)}><span>{session.name}</span>{'matchSnippet' in session&&session.matchSnippet&&<em>{session.matchSnippet}</em>}<small>{formatTime(session.modifiedAt)} · {session.runCount} {session.runCount===1?'run':'runs'}</small></button>
+        <button className="session-select" onClick={()=>onOpen(session)}><span className="session-title">{thread&&thread.depth>0&&<i className="session-thread-prefix">{thread.ancestorContinues.map(value=>value?'│  ':'   ').join('')}{thread.isLast?'└─ ':'├─ '}</i>}<b>{session.name}</b></span>{'matchSnippet' in session&&session.matchSnippet&&<em>{session.matchSnippet}</em>}<small>{formatTime(session.modifiedAt)} · {session.runCount} {session.runCount===1?'run':'runs'}</small></button>
         <span className={`session-status ${tone}`}><i/>{sessionStatusLabel(tone)}</span>
         <div className="session-actions"><button className="session-action" onClick={()=>{setRenaming(session.id);setName(session.name);}}>Rename</button>
           <button className="session-action" onClick={()=>onDelete(session)}>Delete</button></div>
@@ -293,13 +296,13 @@ function SessionDialog({projects,projectId,selectedSessionId,sessions,doneSessio
       {projects.length>1&&<nav className="session-project-tabs" aria-label="Projects">{projects.map(project=><button key={project.id}
         className={project.id===projectId?'active':''} onClick={()=>onProject(project.id)}>{project.name}</button>)}</nav>}
       <div className="session-search"><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="Search conversations..." aria-label="Search conversations"/>
-        <AgentSelect compact align="end" showCheck={false} value={sort} placeholder="Sort" groups={[{options:[{value:'relevance',label:'Relevant'},{value:'recent',label:'Recent'}]}]}
+        <AgentSelect compact align="end" showCheck={false} value={sort} placeholder="Sort" groups={[{options:[{value:'threaded',label:'Threaded'},{value:'relevance',label:'Relevant'},{value:'recent',label:'Recent'}]}]}
           onChange={value=>setSort(value as PiSessionSort)}/></div>
       <div className="session-groups">{trimmedQuery
-        ?searching?<p className="agent-empty">Searching…</p>:results.length?<section className="session-group search-results">{results.map(renderSession)}</section>:<p className="agent-empty">No matching conversations.</p>
-        :sessions.length===0?<p className="agent-empty">No conversations yet.</p>:groups.map(([label,match])=>{
+        ?searching?<p className="agent-empty">Searching…</p>:results.length?<section className="session-group search-results">{results.map(session=>renderSession(session))}</section>:<p className="agent-empty">No matching conversations.</p>
+        :sessions.length===0?<p className="agent-empty">No conversations yet.</p>:sort==='threaded'?<section className="session-group threaded">{threadPiSessions(sessions).map(item=>renderSession(item.session,item))}</section>:groups.map(([label,match])=>{
         const items=sessions.filter(match);if(!items.length)return null;
-        return <section className="session-group" key={label}><h3>{label}</h3>{items.map(renderSession)}</section>;
+        return <section className="session-group" key={label}><h3>{label}</h3>{items.map(session=>renderSession(session))}</section>;
       })}</div>
     </section>
   </div>;
@@ -366,6 +369,7 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
   const [selectedProjectId,setSelectedProjectId]=useState<string>('');const [selectedSessionId,setSelectedSessionId]=useState<string|null>(null);
   const [sessions,setSessions]=useState<Record<string,PiSessionSummary[]>>({});const [chats,setChats]=useState<Record<string,ChatState>>({});
   const [draft,setDraft]=useState('');const [sessionDialog,setSessionDialog]=useState(false);const [modelDialog,setModelDialog]=useState(false);
+  const [treeDialog,setTreeDialog]=useState(false);
   const [modelMenu,setModelMenu]=useState(false);const [models,setModels]=useState<PiModelSummary[]>([]);const [loading,setLoading]=useState(false);
   const [composerExpanded,setComposerExpanded]=useState(false);
   const [usageOpen,setUsageOpen]=useState(false);const [contextOpen,setContextOpen]=useState(false);const [contextOperation,setContextOperation]=useState<'compact'|'toggle'|null>(null);
@@ -602,7 +606,7 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
   const closeAllSessionTabs=()=>{const tabs=openSessionIds[selectedProjectId]??[];setOpenSessionIds(current=>({...current,[selectedProjectId]:[]}));
     for(const id of tabs)void window.revu.agent.releaseSession(selectedProjectId,id).then(unwrap).catch(error=>notify('error',errorMessage(error)));startNewChat();
   };
-  const sessionTabContext=async(event:React.MouseEvent,sessionId:string)=>{event.preventDefault();const action=await window.revu.contextMenu('tab');
+  const sessionTabContext=async(event:React.MouseEvent,sessionId:string)=>{const action=await showContextMenu(event,[{id:'close',label:'Close'},{id:'closeOthers',label:'Close Others'},{id:'closeAll',label:'Close All'}] as const);
     if(action==='close')closeSessionTab(sessionId);if(action==='closeOthers')closeOtherSessionTabs(sessionId);if(action==='closeAll')closeAllSessionTabs();};
   const closeNewChatTab=()=>{const next=(openSessionIds[selectedProjectId]??[]).at(-1);if(next)void openSessionById(selectedProjectId,next);};
   const send=async()=>{if(!selectedProjectId||!draft.trim()||dirty||(!current&&!newChatModel))return;const text=draft;setDraft('');
@@ -669,6 +673,11 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
     setOpenSessionIds(current=>{const ids=current[projectId]??[];return ids.includes(snapshot.sessionId)?current:{...current,[projectId]:[...ids,snapshot.sessionId]};});
     setSelectedProjectId(projectId);setSelectedSessionId(snapshot.sessionId);setDraft(draftText);setSessionDialog(false);await reloadSessions(projectId);
   };
+  const adoptTreeNavigation=async(response:PiTreeNavigationResponse)=>{
+    const entries=await window.revu.agent.getEntries(response.snapshot.projectId,response.snapshot.sessionId).then(unwrap);
+    setChats(current=>{const next={...current,[response.snapshot.sessionId]:withEntries(withSnapshot(response.snapshot,current[response.snapshot.sessionId]),entries)};chatsRef.current=next;return next;});
+    setDraft(response.editorText??'');setTreeDialog(false);await reloadSessions(response.snapshot.projectId);
+  };
   const forkRun=async(run:ChatRun)=>{
     if(!current||!run.userEntryId)return;
     try{const response=await window.revu.agent.forkSession(current.projectId,current.sessionId,run.userEntryId).then(unwrap);await adoptCreatedSession(current.projectId,response.snapshot,response.selectedText);}
@@ -704,7 +713,8 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
         <nav className="agent-run-rail" aria-label="Runs"><div>{runs.map((run,index)=><button key={run.key}
           className={run.key===activeRunKey?'active':''} aria-label={`Go to run ${index+1}`}
           onMouseEnter={event=>showRunPreview(event,run.key)} onMouseLeave={()=>setPreviewRunKey('')}
-          onFocus={event=>showRunPreview(event,run.key)} onBlur={()=>setPreviewRunKey('')} onClick={()=>{const element=runRefs.current.get(run.key);if(element&&bodyRef.current)bodyRef.current.scrollTo({top:Math.max(0,element.offsetTop-12),behavior:'smooth'});}}/>)}</div></nav>
+          onFocus={event=>showRunPreview(event,run.key)} onBlur={()=>setPreviewRunKey('')} onClick={()=>{const element=runRefs.current.get(run.key);if(element&&bodyRef.current)bodyRef.current.scrollTo({top:Math.max(0,element.offsetTop-12),behavior:'smooth'});}}/>)}
+          <button className="agent-run-tree" disabled={!current} title="Session Tree" aria-label="Open session tree" onClick={()=>setTreeDialog(true)}><Icon name="tree" size={13}/></button></div></nav>
         {previewRun&&<aside className="agent-run-preview" style={{top:previewTop}}><strong>{previewRun.user||'Run'}</strong><p>{finalAnswer(previewRun)||'Pi is still working…'}</p></aside>}
         <div className="agent-chat-body" ref={bodyRef}>{!projects.length?<div className="agent-welcome"><strong>Open a folder to start</strong></div>
         :!current?null
@@ -795,6 +805,8 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
         setChats(current=>{const next={...current};delete next[session.id];return next;});setOpenSessionIds(current=>({...current,[session.projectId]:(current[session.projectId]??[]).filter(id=>id!==session.id)}));
         if(selectedSessionId===session.id)startNewChat();return reloadSessions(session.projectId);
       }).catch(error=>notify('error',errorMessage(error)));}} onClone={session=>void cloneSession(session)} onExport={session=>void exportSession(session)} onClose={()=>setSessionDialog(false)}/>}
+    {treeDialog&&current&&<SessionTreeDialog projectId={current.projectId} sessionId={current.sessionId} onClose={()=>setTreeDialog(false)}
+      onNavigated={response=>void adoptTreeNavigation(response)} notify={notify}/>}
     {modelDialog&&selectedProjectId&&<ModelDialog projectId={selectedProjectId} sessionId={selectedSessionId??undefined} onClose={()=>setModelDialog(false)}
       onChanged={()=>{if(!selectedSessionId)void loadNewChatDefaults(selectedProjectId);}} notify={notify}/>} 
   </>;

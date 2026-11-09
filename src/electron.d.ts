@@ -1,15 +1,15 @@
-import type { PiCompactionResponse, PiEntriesResponse, PiForkResponse, PiModelDefaults, PiModelSummary, PiProviderStatus, PiSessionSearchResult, PiSessionSnapshot, PiSessionSort, PiSessionSummary, PiThinkingLevel, RevuPiEvent } from '../shared/piTypes';
+import type { PiCompactionResponse, PiEntriesResponse, PiForkResponse, PiModelDefaults, PiModelSummary, PiProviderStatus, PiSessionSearchResult, PiSessionSnapshot, PiSessionSort, PiSessionSummary, PiSessionTreeResponse, PiThinkingLevel, PiTreeNavigationResponse, RevuPiEvent } from '../shared/piTypes';
 interface RevuResponse<T>{ok:boolean;value?:T;status?:number;error?:string}
-type ProjectContextAction='close'|'expandAll'|'collapseAll';
-type DirectoryContextAction='expandAll'|'collapseAll';
-type TabContextAction='close'|'closeOthers'|'closeAll';
-type SessionContextAction='clone'|'export';
 interface RevuAgentApi {
   listSessions(projectId:string):Promise<RevuResponse<PiSessionSummary[]>>;
   searchSessions(projectId:string,query:string,sort:PiSessionSort):Promise<RevuResponse<PiSessionSearchResult[]>>;
   openSession(projectId:string,sessionId:string):Promise<RevuResponse<PiSessionSnapshot>>;
   newSession(projectId:string):Promise<RevuResponse<PiSessionSnapshot>>;
   getEntries(projectId:string,sessionId:string,sinceEntryId?:string):Promise<RevuResponse<PiEntriesResponse>>;
+  getSessionTree(projectId:string,sessionId:string):Promise<RevuResponse<PiSessionTreeResponse>>;
+  navigateSessionTree(projectId:string,sessionId:string,entryId:string,summarize:boolean,customInstructions?:string):Promise<RevuResponse<PiTreeNavigationResponse>>;
+  abortSessionTreeNavigation(projectId:string,sessionId:string):Promise<RevuResponse<void>>;
+  setSessionEntryLabel(projectId:string,sessionId:string,entryId:string,label?:string):Promise<RevuResponse<PiSessionTreeResponse>>;
   forkSession(projectId:string,sessionId:string,entryId:string):Promise<RevuResponse<PiForkResponse>>;
   cloneSession(projectId:string,sessionId:string):Promise<RevuResponse<PiSessionSnapshot>>;
   releaseSession(projectId:string,sessionId:string):Promise<RevuResponse<void>>;
@@ -34,10 +34,6 @@ declare global {
   interface Window{
     revu:{
       invoke<T>(body:Record<string,unknown>):Promise<RevuResponse<T>>;
-      contextMenu(kind:'project'):Promise<ProjectContextAction|null>;
-      contextMenu(kind:'directory'):Promise<DirectoryContextAction|null>;
-      contextMenu(kind:'tab'):Promise<TabContextAction|null>;
-      contextMenu(kind:'session',options?:{enabled?:boolean}):Promise<SessionContextAction|null>;
       copyText(text:string):Promise<boolean>;
       openExternal(url:string):Promise<boolean>;
       windowControl(action:'minimize'|'maximize'|'close'|'isMaximized'):Promise<boolean>;

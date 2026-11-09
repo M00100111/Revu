@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api, errorMessage } from './files';
 import type { Entry } from '../shared/types';
 import Icon from './Icon';
+import { showContextMenu } from './ContextMenu';
 type Props = {
   projectId: string; projectRoot:string; activePath: string | null;
   onOpen: (path: string) => void; onError: (message: string) => void;
@@ -44,7 +45,7 @@ function Directory(props:Props & {name:string;path:string;depth:number}){
   const expanded=props.expandedDirectories.has(key);
   return <li><button className="tree-row directory-row" style={{paddingLeft:8+props.depth*14}}
     aria-expanded={expanded} onClick={()=>props.onDirectoryToggle(key)} onContextMenu={async event=>{
-      event.preventDefault();event.stopPropagation();const action=await window.revu.contextMenu('directory');
+      event.stopPropagation();const action=await showContextMenu(event,[{id:'expandAll',label:'Expand Subfolders'},{id:'collapseAll',label:'Collapse Subfolders'}] as const);
       if(action==='expandAll')props.onExpandAllSubfolders(props.path);
       if(action==='collapseAll')props.onCollapseAllSubfolders(props.path);
     }}>

@@ -29,7 +29,7 @@ export default function Sidebar({ panel, setPanel, dark, toggleTheme,showThemeSw
         <Icon name={dark?'sun':'moon'} size={21}/></button>}
       <button className={'activity-button '+(panel==='settings'?'selected':'')} title="Settings"
         aria-label="Settings" aria-pressed={panel==='settings'} onClick={()=>setPanel(panel==='settings'?null:'settings')}>
-        <Icon name="settings" size={21}/></button>
+        <Icon name="settings" size={24}/></button>
     </div>
   </nav>;
 }

@@ -113,6 +113,7 @@ export default function App(){
     {type:'open-agent-session',projectId:notice.projectId,sessionId:notice.sessionId,runKey:notice.runKey}),[notify]);
   const readAllNotifications=useCallback(()=>setNotifications(current=>current.map(item=>
     item.read?item:{...item,read:true})),[]);
+  const clearNotifications=useCallback(()=>setNotifications([]),[]);
   const workspace=useWorkspace(notifyError,notifyWarning);
   const {projects,projectsLoaded,documents,statuses,tick}=workspace;
   const editorRef=useRef<monaco.editor.IStandaloneCodeEditor|null>(null);
@@ -392,7 +393,7 @@ export default function App(){
       toggleNotifications={()=>setNotificationsOpen(open=>!open)}/>
     <NotificationCenter notifications={notifications} open={notificationsOpen}
       onClose={()=>setNotificationsOpen(false)} onDismissToast={dismissToast}
-      onDelete={deleteNotification} onActivate={activateNotification} onReadAll={readAllNotifications}/>
+      onDelete={deleteNotification} onActivate={activateNotification} onReadAll={readAllNotifications} onClear={clearNotifications}/>
     {panel==='files'&&<FileSidebar width={sidebarWidth} projects={projects} projectsLoaded={projectsLoaded}
       openFiles={openFiles} activeFile={activeFile}
       mixed={mixed} picking={picking} collapsedProjects={collapsedProjects} expandedDirectories={expandedDirectories}

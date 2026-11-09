@@ -16,6 +16,7 @@ const assets={
   copy:new URL('../assets/icons/chat/copy.svg',import.meta.url).href,
   expand:new URL('../assets/icons/chat/expandInput.svg',import.meta.url).href,
   fork:new URL('../assets/icons/chat/fork.svg',import.meta.url).href,
+  tree:new URL('../assets/icons/chat/tree.svg',import.meta.url).href,
   format:new URL('../assets/icons/chat/format.svg',import.meta.url).href,
   image:new URL('../assets/icons/chat/image.svg',import.meta.url).href,
   send:new URL('../assets/icons/chat/send.svg',import.meta.url).href,

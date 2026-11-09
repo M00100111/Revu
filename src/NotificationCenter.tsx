@@ -25,16 +25,16 @@ function Toast({notification,onClose,onActivate}:{notification:AppNotification;o
   </article>;
 }
 
-export default function NotificationCenter({notifications,open,onClose,onDismissToast,onDelete,onActivate,onReadAll}:{
+export default function NotificationCenter({notifications,open,onClose,onDismissToast,onDelete,onActivate,onReadAll,onClear}:{
   notifications:AppNotification[];open:boolean;onClose:()=>void;onDismissToast:(id:string)=>void;
-  onDelete:(id:string)=>void;onActivate:(id:string)=>void;onReadAll:()=>void;
+  onDelete:(id:string)=>void;onActivate:(id:string)=>void;onReadAll:()=>void;onClear:()=>void;
 }){
   const toasts=notifications.filter(notification=>notification.toast);
   return <>
     {open&&<section className="notification-center" role="dialog" aria-label="Notifications">
       <header><strong>Notifications</strong><div>
-        {notifications.some(item=>!item.read)&&<button className="notification-mark-read"
-          onClick={onReadAll}>Read all</button>}
+        <button className="notification-header-action" disabled={!notifications.some(item=>!item.read)} onClick={onReadAll}>Read all</button>
+        <button className="notification-header-action" disabled={!notifications.length} onClick={onClear}>Clear</button>
         <button className="icon-button" title="Close" aria-label="Close notifications" onClick={onClose}>
           <Icon name="close" size={14}/>
         </button>

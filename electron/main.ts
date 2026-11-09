@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell, type MenuItemConstructorOptions, type SaveDialogOptions } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell, type SaveDialogOptions } from 'electron';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { diff } from '../server/git';
@@ -84,6 +84,10 @@ async function invokeAgent(body:PiAgentRequest,sourceWindow?:BrowserWindow|null)
     case 'openSession':return piManager.openSession(body.projectId,body.sessionId);
     case 'newSession':return piManager.newSession(body.projectId);
     case 'getEntries':return piManager.getEntries(body.projectId,body.sessionId,body.sinceEntryId);
+    case 'getSessionTree':return piManager.getSessionTree(body.projectId,body.sessionId);
+    case 'navigateSessionTree':return piManager.navigateSessionTree(body.projectId,body.sessionId,body.entryId,body.summarize,body.customInstructions);
+    case 'abortSessionTreeNavigation':return piManager.abortSessionTreeNavigation(body.projectId,body.sessionId);
+    case 'setSessionEntryLabel':return piManager.setSessionEntryLabel(body.projectId,body.sessionId,body.entryId,body.label);
     case 'forkSession':return piManager.forkSession(body.projectId,body.sessionId,body.entryId);
     case 'cloneSession':return piManager.cloneSession(body.projectId,body.sessionId);
     case 'releaseSession':return piManager.releaseSession(body.projectId,body.sessionId);
@@ -121,22 +125,6 @@ ipcMain.handle('revu:agent',async(event,body:PiAgentRequest)=>{
   catch(error){return {ok:false,status:500,error:error instanceof Error?error.message:String(error)};}
 });
 
-ipcMain.handle('revu:context-menu',async(event,kind:'project'|'directory'|'tab'|'session',options?:{enabled?:boolean})=>{
-  const window=BrowserWindow.fromWebContents(event.sender);
-  if(!window)return null;
-  return new Promise<string|null>(resolve=>{
-    let selected:string|null=null;
-    const item=(label:string,id:string):MenuItemConstructorOptions=>({label,click:()=>{selected=id;}});
-    const folderActions=[item('Expand Subfolders','expandAll'),item('Collapse Subfolders','collapseAll')];
-    const template:MenuItemConstructorOptions[]=kind==='project'
-      ? [item('Close Folder','close'),{type:'separator'},...folderActions]
-      : kind==='directory'?folderActions
-      : kind==='session'
-        ? [{...item('Clone','clone'),enabled:options?.enabled!==false},{...item('Export','export'),enabled:options?.enabled!==false}]
-        : [item('Close','close'),item('Close Others','closeOthers'),item('Close All','closeAll')];
-    Menu.buildFromTemplate(template).popup({window,callback:()=>resolve(selected)});
-  });
-});
 ipcMain.handle('revu:open-external',async(_event,value:unknown)=>{
   if(typeof value!=='string')return false;
   try{

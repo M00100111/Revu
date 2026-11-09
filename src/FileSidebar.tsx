@@ -3,6 +3,7 @@ import type { OpenFile, Project } from './editor';
 import FileTree from './FileTree';
 import Icon from './Icon';
 import ResizeHandle from './ResizeHandle';
+import { showContextMenu } from './ContextMenu';
 import { moveFileSidebarItem, OPEN_EDITORS_KEY, reconcileFileSidebarOrder } from './fileSidebarOrder';
 
 const savedOrder=()=>{
@@ -91,7 +92,7 @@ export default function FileSidebar({width,projects,projectsLoaded,openFiles,act
       onDragStart={event=>beginDrag(event,project.root)} onDragEnd={()=>{setDragged(null);setDrop(null);}}
       onDragOver={event=>dragOver(event,project.root)} onDrop={event=>finishDrop(event,project.root)}
       onContextMenu={async event=>{
-        event.preventDefault();const action=await window.revu.contextMenu('project');
+        const action=await showContextMenu(event,[{id:'close',label:'Close Folder'},{id:'expandAll',label:'Expand Subfolders',separatorBefore:true},{id:'collapseAll',label:'Collapse Subfolders'}] as const);
         if(action==='close')onCloseProject(project);
         if(action==='expandAll')onExpandAllSubfolders(project,'');
         if(action==='collapseAll')onCollapseAllSubfolders(project,'');

@@ -20,3 +20,21 @@ export const derivedPiSessionName=(source:string,kind:'Fork'|'Clone',existingNam
     if(!existing.has(candidate.toLocaleLowerCase()))return candidate;
   }
 };
+
+export interface ThreadedPiSession<T> {session:T;depth:number;isLast:boolean;ancestorContinues:boolean[]}
+
+export const threadPiSessions=<T extends {id:string;parentSessionId?:string;modifiedAt:number}>(sessions:T[]):ThreadedPiSession<T>[]=>{
+  interface Node {session:T;children:Node[];latestActivity:number}
+  const byId=new Map(sessions.map(session=>[session.id,{session,children:[],latestActivity:session.modifiedAt} as Node]));
+  const roots:Node[]=[];
+  for(const session of sessions){const node=byId.get(session.id)!;const parent=session.parentSessionId?byId.get(session.parentSessionId):undefined;
+    if(parent&&parent!==node)parent.children.push(node);else roots.push(node);}
+  const update=(node:Node):number=>{node.latestActivity=Math.max(node.session.modifiedAt,...node.children.map(update));return node.latestActivity;};
+  const sort=(nodes:Node[])=>{nodes.sort((a,b)=>b.latestActivity-a.latestActivity);for(const node of nodes)sort(node.children);};
+  roots.forEach(update);sort(roots);
+  const result:ThreadedPiSession<T>[]=[];
+  const walk=(node:Node,depth:number,ancestorContinues:boolean[],isLast:boolean)=>{result.push({session:node.session,depth,isLast,ancestorContinues});
+    const childAncestors=depth===0?[]:[...ancestorContinues,!isLast];
+    node.children.forEach((child,index)=>walk(child,depth+1,childAncestors,index===node.children.length-1));};
+  roots.forEach((root,index)=>walk(root,0,[],index===roots.length-1));return result;
+};

@@ -5,14 +5,18 @@ import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type {
   PiCompactionResponse,PiEntriesResponse,PiForkResponse,PiModelDefaults,PiModelSummary,PiProviderStatus,
-  PiRuntimeStatus,PiSessionSearchResult,PiSessionSnapshot,PiSessionSort,PiSessionSummary,PiThinkingLevel,
-  PiUsageStats,RevuPiEvent,
+  PiRuntimeStatus,PiSessionSearchResult,PiSessionSnapshot,PiSessionSort,PiSessionSummary,PiSessionTreeResponse,
+  PiThinkingLevel,PiTreeNavigationResponse,PiUsageStats,RevuPiEvent,
 } from '../shared/piTypes';
 import { calculatePiCacheHitPercent, countPiSessionRuns, derivedPiSessionName } from '../shared/piSession';
 import { searchPiSessions } from '../shared/piSessionSearch';
 
 type PiModule=typeof import('@earendil-works/pi-coding-agent');
-type RpcClient=InstanceType<PiModule['RpcClient']>;
+type RpcClient=InstanceType<PiModule['RpcClient']>&{
+  navigateTree:(entryId:string,options:{summarize:boolean;customInstructions?:string})=>Promise<{editorText?:string;cancelled:boolean;aborted?:boolean}>;
+  setEntryLabel:(entryId:string,label?:string)=>Promise<void>;
+  abortBranchSummary:()=>Promise<void>;
+};
 type JsonEvent=Parameters<Parameters<RpcClient['onEvent']>[0]>[0];
 
 interface ProviderDefinition {id:string;name:string;env:string}
@@ -45,6 +49,8 @@ interface RuntimeHandle {
   usageRefreshPending?:boolean;
 }
 
+interface TreeOperation {cancelled:boolean;abort?:()=>Promise<void>}
+
 interface PiManagerOptions {
   resolveProject:(projectId:string)=>{id:string;root:string};
   emit:(event:RevuPiEvent)=>void;
@@ -55,6 +61,7 @@ function errorMessage(error:unknown){return error instanceof Error?error.message
 export class PiManager {
   private readonly runtimes=new Map<string,RuntimeHandle>();
   private readonly runCountCache=new Map<string,{modifiedAt:number;count:number}>();
+  private readonly treeOperations=new Map<string,TreeOperation>();
   private selectedSessionId:string|null=null;
   private modulePromise:Promise<PiModule>|null=null;
   private readonly agentDir:string;
@@ -71,7 +78,7 @@ export class PiManager {
     if(!this.modulePromise){
       const path=app.isPackaged
         ?join(process.resourcesPath,'pi','app','bundle','index.js')
-        :join(app.getAppPath(),'node_modules','@earendil-works','pi-coding-agent','dist','bundle','index.js');
+        :join(app.getAppPath(),'.pi-runtime','app','bundle','index.js');
       this.modulePromise=import(pathToFileURL(path).href) as Promise<PiModule>;
     }
     return this.modulePromise;
@@ -129,7 +136,7 @@ export class PiManager {
 
   private cliPath(){
     if(app.isPackaged)return join(process.resourcesPath,'pi','app','bundle','cli.js');
-    return join(app.getAppPath(),'node_modules','@earendil-works','pi-coding-agent','dist','bundle','cli.js');
+    return join(app.getAppPath(),'.pi-runtime','app','bundle','cli.js');
   }
 
   private async childEnv(){
@@ -147,7 +154,7 @@ export class PiManager {
     const args=['--no-extensions','--no-approve'];
     if(sessionPath)args.push('--session',sessionPath);
     else if(ephemeral)args.push('--no-session');
-    return new RpcClient({cwd,cliPath:this.cliPath(),env:await this.childEnv(),args});
+    return new RpcClient({cwd,cliPath:this.cliPath(),env:await this.childEnv(),args}) as RpcClient;
   }
 
   private async findSession(projectId:string,sessionId:string){
@@ -158,15 +165,24 @@ export class PiManager {
     return session;
   }
 
+  private sessionPathKey(path:string){const normalized=path.replace(/\\/g,'/');return process.platform==='win32'?normalized.toLocaleLowerCase():normalized;}
+
+  private summaries(projectId:string,listed:Awaited<ReturnType<PiModule['SessionManager']['list']>>):PiSessionSummary[]{
+    const idsByPath=new Map(listed.map(session=>[this.sessionPathKey(session.path),session.id]));
+    return listed.map(session=>({
+      id:session.id,projectId,name:session.name||session.firstMessage.trim().slice(0,80)||'New Chat',
+      firstMessage:session.firstMessage,createdAt:session.created.getTime(),modifiedAt:session.modified.getTime(),
+      runCount:0,status:this.runtimes.get(session.id)?.status??'idle' as PiRuntimeStatus,hasSessionFile:true,
+      isCompacting:this.runtimes.get(session.id)?.isCompacting,
+      parentSessionId:session.parentSessionPath?idsByPath.get(this.sessionPathKey(session.parentSessionPath)):undefined,
+    }));
+  }
+
   async listSessions(projectId:string):Promise<PiSessionSummary[]>{
     const project=this.project(projectId);const {SessionManager}=await this.module();
     const listed=await SessionManager.list(project.root);
-    const result=listed.map(session=>({
-      id:session.id,projectId,name:session.name||session.firstMessage.trim().slice(0,80)||'New Chat',
-      firstMessage:session.firstMessage,createdAt:session.created.getTime(),modifiedAt:session.modified.getTime(),
-      runCount:this.countRuns(SessionManager,session.path,session.modified.getTime()),status:this.runtimes.get(session.id)?.status??'idle' as PiRuntimeStatus,
-      hasSessionFile:true,isCompacting:this.runtimes.get(session.id)?.isCompacting,
-    }));
+    const result=this.summaries(projectId,listed).map((summary,index)=>({...summary,
+      runCount:this.countRuns(SessionManager,listed[index].path,listed[index].modified.getTime())}));
     for(const runtime of this.runtimes.values()){
       if(runtime.projectId!==projectId||result.some(item=>item.id===runtime.sessionId))continue;
       result.unshift({id:runtime.sessionId,projectId,name:'New Chat',firstMessage:'',createdAt:Date.now(),
@@ -178,14 +194,9 @@ export class PiManager {
   async searchSessions(projectId:string,query:string,sort:PiSessionSort):Promise<PiSessionSearchResult[]>{
     const project=this.project(projectId);const {SessionManager}=await this.module();
     const listed=await SessionManager.list(project.root);
-    return searchPiSessions(listed.map(session=>({
-      summary:{id:session.id,projectId,name:session.name||session.firstMessage.trim().slice(0,80)||'New Chat',
-        firstMessage:session.firstMessage,createdAt:session.created.getTime(),modifiedAt:session.modified.getTime(),
-        runCount:this.countRuns(SessionManager,session.path,session.modified.getTime()),
-        status:this.runtimes.get(session.id)?.status??'idle' as PiRuntimeStatus,hasSessionFile:true,
-        isCompacting:this.runtimes.get(session.id)?.isCompacting},
-      allMessagesText:session.allMessagesText,
-    })),query,sort);
+    const summaries=this.summaries(projectId,listed);
+    return searchPiSessions(listed.map((session,index)=>({summary:{...summaries[index],
+      runCount:this.countRuns(SessionManager,session.path,session.modified.getTime())},allMessagesText:session.allMessagesText})),query,sort);
   }
 
   private countRuns(SessionManager:PiModule['SessionManager'],path:string,modifiedAt:number){
@@ -261,6 +272,46 @@ export class PiManager {
     const handle=await this.ensureRuntime(projectId,sessionId);
     const response=await handle.client.getEntries(sinceEntryId);
     return response as PiEntriesResponse;
+  }
+
+  async getSessionTree(projectId:string,sessionId:string):Promise<PiSessionTreeResponse>{
+    const handle=await this.ensureRuntime(projectId,sessionId);return handle.client.getTree() as Promise<PiSessionTreeResponse>;
+  }
+
+  private async stopForTreeOperation(handle:RuntimeHandle){
+    let state=await handle.client.getState();
+    if(handle.status==='running'||handle.status==='stopping'||state.isStreaming){
+      await handle.client.clearQueue();await handle.client.abort();handle.status='idle';this.emit(handle,'status','idle');
+      state=await handle.client.getState();
+    }
+    if(state.isCompacting)throw new Error('Wait for the current compaction to finish before navigating the session tree.');
+    if(!state.sessionFile||!existsSync(state.sessionFile))throw new Error('Send a message before using the session tree.');
+    handle.sessionPath=state.sessionFile;return state.sessionFile;
+  }
+
+  async navigateSessionTree(projectId:string,sessionId:string,entryId:string,summarize:boolean,customInstructions?:string):Promise<PiTreeNavigationResponse>{
+    if(this.treeOperations.has(sessionId))throw new Error('Session tree navigation is already in progress.');
+    const operation:TreeOperation={cancelled:false};this.treeOperations.set(sessionId,operation);
+    try{
+      const handle=await this.ensureRuntime(projectId,sessionId);await this.stopForTreeOperation(handle);
+      if(operation.cancelled){const tree=await handle.client.getTree() as PiSessionTreeResponse;
+        return {...tree,snapshot:await this.snapshot(handle),cancelled:true,aborted:true};}
+      operation.abort=()=>handle.client.abortBranchSummary();
+      const result=await handle.client.navigateTree(entryId,{summarize,customInstructions});
+      const tree=await handle.client.getTree() as PiSessionTreeResponse;
+      this.emit(handle,'sessions-changed');return {...tree,snapshot:await this.snapshot(handle),editorText:result.editorText,
+        cancelled:result.cancelled,aborted:result.aborted};
+    }finally{this.treeOperations.delete(sessionId);}
+  }
+
+  async abortSessionTreeNavigation(projectId:string,sessionId:string){
+    this.project(projectId);const operation=this.treeOperations.get(sessionId);if(!operation)return;operation.cancelled=true;await operation.abort?.();
+  }
+
+  async setSessionEntryLabel(projectId:string,sessionId:string,entryId:string,label?:string):Promise<PiSessionTreeResponse>{
+    if(this.treeOperations.has(sessionId))throw new Error('Wait for session tree navigation to finish.');
+    const handle=await this.stableRuntime(projectId,sessionId);await handle.client.setEntryLabel(entryId,label?.trim()||undefined);
+    this.emit(handle,'sessions-changed');return handle.client.getTree() as Promise<PiSessionTreeResponse>;
   }
 
   async forkSession(projectId:string,sessionId:string,entryId:string):Promise<PiForkResponse>{

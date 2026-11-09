@@ -1,6 +1,6 @@
 export type PiRuntimeStatus='starting'|'idle'|'running'|'stopping'|'error';
 export type PiThinkingLevel='off'|'minimal'|'low'|'medium'|'high'|'xhigh'|'max';
-export type PiSessionSort='relevance'|'recent';
+export type PiSessionSort='threaded'|'relevance'|'recent';
 
 export interface PiSessionSummary {
   id:string;
@@ -13,6 +13,7 @@ export interface PiSessionSummary {
   status:PiRuntimeStatus;
   hasSessionFile?:boolean;
   isCompacting?:boolean;
+  parentSessionId?:string;
 }
 
 export interface PiSessionSearchResult extends PiSessionSummary {
@@ -30,6 +31,25 @@ export interface PiSessionEntry {
 export interface PiEntriesResponse {
   entries:PiSessionEntry[];
   leafId:string|null;
+}
+
+export interface PiSessionTreeNode {
+  entry:PiSessionEntry;
+  children:PiSessionTreeNode[];
+  label?:string;
+  labelTimestamp?:string;
+}
+
+export interface PiSessionTreeResponse {
+  tree:PiSessionTreeNode[];
+  leafId:string|null;
+}
+
+export interface PiTreeNavigationResponse extends PiSessionTreeResponse {
+  snapshot:PiSessionSnapshot;
+  editorText?:string;
+  cancelled:boolean;
+  aborted?:boolean;
 }
 
 export interface PiProviderStatus {
@@ -111,6 +131,10 @@ export type PiAgentRequest=
   |{action:'openSession';projectId:string;sessionId:string}
   |{action:'newSession';projectId:string}
   |{action:'getEntries';projectId:string;sessionId:string;sinceEntryId?:string}
+  |{action:'getSessionTree';projectId:string;sessionId:string}
+  |{action:'navigateSessionTree';projectId:string;sessionId:string;entryId:string;summarize:boolean;customInstructions?:string}
+  |{action:'abortSessionTreeNavigation';projectId:string;sessionId:string}
+  |{action:'setSessionEntryLabel';projectId:string;sessionId:string;entryId:string;label?:string}
   |{action:'forkSession';projectId:string;sessionId:string;entryId:string}
   |{action:'cloneSession';projectId:string;sessionId:string}
   |{action:'releaseSession';projectId:string;sessionId:string}
