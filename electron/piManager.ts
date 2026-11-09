@@ -1,22 +1,27 @@
 import { app, safeStorage, shell } from 'electron';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type {
   PiCompactionResponse,PiEntriesResponse,PiForkResponse,PiModelDefaults,PiModelSummary,PiProviderStatus,
-  PiRuntimeStatus,PiSessionSearchResult,PiSessionSnapshot,PiSessionSort,PiSessionSummary,PiSessionTreeResponse,
-  PiThinkingLevel,PiTreeNavigationResponse,PiUsageStats,RevuPiEvent,
+  PiRuntimeStatus,PiSessionCatalog,PiSessionInfo,PiSessionScope,PiSessionSearchResult,PiSessionSnapshot,PiSessionSort,
+  PiSessionSummary,PiSessionTreeResponse,PiThinkingLevel,PiTreeNavigationResponse,PiUsageStats,RevuPiEvent,
 } from '../shared/piTypes';
-import { calculatePiCacheHitPercent, countPiSessionRuns, derivedPiSessionName } from '../shared/piSession';
+import { calculatePiCacheHitPercent, countPiSessionRuns, derivedPiSessionName, isReservedPiSessionName } from '../shared/piSession';
 import { searchPiSessions } from '../shared/piSessionSearch';
+import { copyPiSessions, nativePiSessionDir, nativePiSessionsDir } from './piSessionStorage';
 
 type PiModule=typeof import('@earendil-works/pi-coding-agent');
 type RpcClient=InstanceType<PiModule['RpcClient']>&{
   navigateTree:(entryId:string,options:{summarize:boolean;customInstructions?:string})=>Promise<{editorText?:string;cancelled:boolean;aborted?:boolean}>;
   setEntryLabel:(entryId:string,label?:string)=>Promise<void>;
   abortBranchSummary:()=>Promise<void>;
+  getCacheWarmingInfo:()=>Promise<{mode:string;status?:CacheWarmingStatus;cacheWaste:CacheWaste}>;
 };
+interface CacheWarmingDecision {phase:'streaming'|'idle';warmCost:number;missCost:number;continuationProbability:number;expectedSavings:number;economicsAvailable:boolean;action:'warm'|'stop'}
+interface CacheWarmingStatus {state:'inactive'|'scheduled'|'refreshing';reason?:string;nextWarmAt?:number;decision?:CacheWarmingDecision;extensionOverride?:boolean}
+interface CacheWaste {missedTokens:number;missedCost:number;missCount:number}
 type JsonEvent=Parameters<Parameters<RpcClient['onEvent']>[0]>[0];
 
 interface ProviderDefinition {id:string;name:string;env:string}
@@ -57,6 +62,48 @@ interface PiManagerOptions {
 }
 
 function errorMessage(error:unknown){return error instanceof Error?error.message:String(error);}
+const valueRecord=(value:unknown):Record<string,unknown>=>value&&typeof value==='object'?value as Record<string,unknown>:{};
+const numberValue=(value:unknown)=>typeof value==='number'&&Number.isFinite(value)?value:0;
+function usageCostBreakdown(entries:unknown[]){
+  const totals=new Map<string,{key:string;cost:number;tokens:number}>();
+  for(const rawEntry of entries){
+    const entry=valueRecord(rawEntry);const message=valueRecord(entry.message);let key:string|undefined;let usage:Record<string,unknown>|undefined;
+    if(entry.type==='message'&&message.role==='assistant'){
+      key=`${String(message.provider??'')}/${String(message.responseModel??message.model??'')}`;usage=valueRecord(message.usage);
+    }else if(entry.type==='usage'){
+      key=`${String(entry.provider??'')}/${String(entry.model??'')}`;usage=valueRecord(entry.usage);
+    }else if(entry.type==='message'&&message.role==='toolResult'&&message.usage){key='Tools/summaries';usage=valueRecord(message.usage);
+    }else if((entry.type==='branch_summary'||entry.type==='compaction')&&entry.usage){key='Tools/summaries';usage=valueRecord(entry.usage);}
+    if(!key||!usage)continue;
+    const current=totals.get(key)??{key,cost:0,tokens:0};
+    current.cost+=numberValue(valueRecord(usage.cost).total);
+    current.tokens+=numberValue(usage.input)+numberValue(usage.output)+numberValue(usage.cacheRead)+numberValue(usage.cacheWrite);
+    totals.set(key,current);
+  }
+  return [...totals.values()].filter(item=>item.cost>0||item.tokens>0).sort((a,b)=>b.cost-a.cost);
+}
+function warmingDollars(value:number){return value<0?`-$${Math.abs(value).toFixed(3)}`:`$${value.toFixed(3)}`;}
+function warmingEconomics(decision:CacheWarmingDecision){
+  if(!decision.economicsAvailable)return 'cache economics unavailable';
+  const probability=Math.round(decision.continuationProbability*100);const probabilityText=decision.phase==='streaming'
+    ?`${probability}% continuation probability while agent is running`:`${probability}% continuation probability`;
+  return `${probabilityText}, expected savings ${warmingDollars(decision.expectedSavings)} ${decision.action==='warm'?'>=':'<'} $0.050`;
+}
+function warmingDecisionTime(nextWarmAt?:number){
+  if(nextWarmAt===undefined||nextWarmAt<=Date.now())return 'Decision now';
+  let remaining=Math.ceil((nextWarmAt-Date.now())/1000);const hours=Math.floor(remaining/3600);remaining%=3600;
+  const minutes=Math.floor(remaining/60);const seconds=remaining%60;const parts:string[]=[];
+  if(hours)parts.push(`${hours}h`);if(minutes)parts.push(`${minutes}m`);if(seconds||!parts.length)parts.push(`${seconds}s`);
+  return `Decision in ${parts.join(' ')}`;
+}
+function formatWarmingStatus(status?:CacheWarmingStatus){
+  if(!status)return 'Inactive (cache warming unavailable)';const decision=status.decision;
+  if(!decision||(status.state==='inactive'&&!decision.economicsAvailable&&!status.extensionOverride))return `Inactive (${status.reason??'unknown reason'})`;
+  const details=status.extensionOverride?`extension override, ${warmingEconomics(decision)}`:`${warmingEconomics(decision)} -> ${decision.action}`;
+  if(status.state==='inactive')return `Stopped (${details})`;
+  if(status.state==='refreshing')return `Warming cache (${details})`;
+  return `${warmingDecisionTime(status.nextWarmAt)} (${details})`;
+}
 
 export class PiManager {
   private readonly runtimes=new Map<string,RuntimeHandle>();
@@ -65,13 +112,23 @@ export class PiManager {
   private selectedSessionId:string|null=null;
   private modulePromise:Promise<PiModule>|null=null;
   private readonly agentDir:string;
+  private readonly nativeSessionsDir=nativePiSessionsDir();
   private readonly secretsPath:string;
+  private readonly sessionFolderSettingsPath:string;
+  private sessionFolder?:string;
 
   constructor(private readonly options:PiManagerOptions){
     this.agentDir=join(app.getPath('userData'),'pi-agent');
     this.secretsPath=join(app.getPath('userData'),'pi-api-keys.bin');
-    process.env.PI_CODING_AGENT_DIR=this.agentDir;
+    this.sessionFolderSettingsPath=join(app.getPath('userData'),'pi-session-folder.json');
     process.env.PI_SKIP_VERSION_CHECK='1';
+  }
+
+  async initialize(){
+    try{
+      const saved=JSON.parse(await readFile(this.sessionFolderSettingsPath,'utf8')) as {sessionDir?:unknown};
+      if(typeof saved.sessionDir==='string'&&saved.sessionDir.trim())this.sessionFolder=resolve(saved.sessionDir);
+    }catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')console.warn('Could not load the Pi session folder setting.',error);}
   }
 
   private module(){
@@ -149,17 +206,38 @@ export class PiManager {
     return env;
   }
 
+  private async sessionLocation(cwd:string){
+    const {SettingsManager}=await this.module();
+    const configured=process.env.PI_CODING_AGENT_SESSION_DIR?.trim()||SettingsManager.create(cwd,this.agentDir).getSessionDir()?.trim()||this.sessionFolder;
+    if(configured)return {dir:isAbsolute(configured)?configured:resolve(cwd,configured),custom:true};
+    return {dir:nativePiSessionDir(cwd),custom:false};
+  }
+
   private async createClient(cwd:string,sessionPath?:string,ephemeral=false){
     const {RpcClient}=await this.module();
     const args=['--no-extensions','--no-approve'];
+    const {dir}=await this.sessionLocation(cwd);args.push('--session-dir',dir);
     if(sessionPath)args.push('--session',sessionPath);
     else if(ephemeral)args.push('--no-session');
     return new RpcClient({cwd,cliPath:this.cliPath(),env:await this.childEnv(),args}) as RpcClient;
   }
 
-  private async findSession(projectId:string,sessionId:string){
-    const project=this.project(projectId);const {SessionManager}=await this.module();
-    const sessions=await SessionManager.list(project.root);
+  private async listedSessions(projectId:string,scope:PiSessionScope){
+    const project=this.project(projectId);const {SessionManager}=await this.module();const location=await this.sessionLocation(project.root);
+    if(scope==='current')return SessionManager.list(project.root,location.dir);
+    if(location.custom)return SessionManager.listAll(location.dir);
+    let entries;
+    try{entries=await readdir(this.nativeSessionsDir,{withFileTypes:true});}
+    catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return [];throw error;}
+    const batches=await Promise.all(entries.filter(entry=>entry.isDirectory()||entry.isSymbolicLink())
+      .map(entry=>SessionManager.listAll(join(this.nativeSessionsDir,entry.name))));
+    const byPath=new Map<string,(typeof batches)[number][number]>();
+    for(const session of batches.flat())byPath.set(this.sessionPathKey(session.path),session);
+    return [...byPath.values()].sort((a,b)=>b.modified.getTime()-a.modified.getTime());
+  }
+
+  private async findSession(projectId:string,sessionId:string,scope:PiSessionScope='current'){
+    const sessions=await this.listedSessions(projectId,scope);
     const session=sessions.find(item=>item.id===sessionId);
     if(!session)throw new Error('Session not found.');
     return session;
@@ -167,10 +245,12 @@ export class PiManager {
 
   private sessionPathKey(path:string){const normalized=path.replace(/\\/g,'/');return process.platform==='win32'?normalized.toLocaleLowerCase():normalized;}
 
-  private summaries(projectId:string,listed:Awaited<ReturnType<PiModule['SessionManager']['list']>>):PiSessionSummary[]{
+  private cwdKey(path:string){const normalized=resolve(path).replace(/\\/g,'/');return process.platform==='win32'?normalized.toLocaleLowerCase():normalized;}
+
+  private summaries(projectId:string,scope:PiSessionScope,listed:Awaited<ReturnType<PiModule['SessionManager']['list']>>):PiSessionSummary[]{
     const idsByPath=new Map(listed.map(session=>[this.sessionPathKey(session.path),session.id]));
     return listed.map(session=>({
-      id:session.id,projectId,name:session.name||session.firstMessage.trim().slice(0,80)||'New Chat',
+      id:session.id,projectId,cwd:session.cwd,name:session.name||session.firstMessage.trim().slice(0,80)||'New Chat',hasName:!!session.name,scope,
       firstMessage:session.firstMessage,createdAt:session.created.getTime(),modifiedAt:session.modified.getTime(),
       runCount:0,status:this.runtimes.get(session.id)?.status??'idle' as PiRuntimeStatus,hasSessionFile:true,
       isCompacting:this.runtimes.get(session.id)?.isCompacting,
@@ -178,23 +258,25 @@ export class PiManager {
     }));
   }
 
-  async listSessions(projectId:string):Promise<PiSessionSummary[]>{
+  async listSessions(projectId:string,scope:PiSessionScope='current'):Promise<PiSessionCatalog>{
     const project=this.project(projectId);const {SessionManager}=await this.module();
-    const listed=await SessionManager.list(project.root);
-    const result=this.summaries(projectId,listed).map((summary,index)=>({...summary,
+    const listed=await this.listedSessions(projectId,scope);
+    const result=this.summaries(projectId,scope,listed).map((summary,index)=>({...summary,
       runCount:this.countRuns(SessionManager,listed[index].path,listed[index].modified.getTime())}));
-    for(const runtime of this.runtimes.values()){
+    if(scope==='current')for(const runtime of this.runtimes.values()){
       if(runtime.projectId!==projectId||result.some(item=>item.id===runtime.sessionId))continue;
-      result.unshift({id:runtime.sessionId,projectId,name:'New Chat',firstMessage:'',createdAt:Date.now(),
+      result.unshift({id:runtime.sessionId,projectId,cwd:project.root,name:'New Chat',hasName:false,scope,firstMessage:'',createdAt:Date.now(),
         modifiedAt:Date.now(),runCount:0,status:runtime.status,hasSessionFile:!!runtime.sessionPath&&existsSync(runtime.sessionPath),isCompacting:runtime.isCompacting});
     }
-    return result.sort((a,b)=>b.modifiedAt-a.modifiedAt);
+    const groups=[...new Map(result.filter(item=>item.cwd).map(item=>[this.cwdKey(item.cwd),{
+      key:this.cwdKey(item.cwd),name:basename(item.cwd)||item.cwd,cwd:item.cwd,available:existsSync(item.cwd),
+    }])).values()].sort((a,b)=>a.name.localeCompare(b.name)||a.cwd.localeCompare(b.cwd));
+    return {groups,sessions:result.sort((a,b)=>b.modifiedAt-a.modifiedAt)};
   }
 
-  async searchSessions(projectId:string,query:string,sort:PiSessionSort):Promise<PiSessionSearchResult[]>{
-    const project=this.project(projectId);const {SessionManager}=await this.module();
-    const listed=await SessionManager.list(project.root);
-    const summaries=this.summaries(projectId,listed);
+  async searchSessions(projectId:string,query:string,sort:PiSessionSort,scope:PiSessionScope='current'):Promise<PiSessionSearchResult[]>{
+    const {SessionManager}=await this.module();const listed=await this.listedSessions(projectId,scope);
+    const summaries=this.summaries(projectId,scope,listed);
     return searchPiSessions(listed.map((session,index)=>({summary:{...summaries[index],
       runCount:this.countRuns(SessionManager,session.path,session.modified.getTime())},allMessagesText:session.allMessagesText})),query,sort);
   }
@@ -260,6 +342,34 @@ export class PiManager {
     return this.snapshot(handle);
   }
 
+  async discoveredSession(projectId:string,sessionId:string){return this.findSession(projectId,sessionId,'all');}
+
+  async openSessionFile(projectId:string,sessionId:string,path:string){
+    this.selectedSessionId=sessionId;const existing=this.runtimes.get(sessionId);
+    const handle=existing??await this.startRuntime(projectId,sessionId,path);
+    if(handle.projectId!==projectId)throw new Error('Session is already open in another project.');
+    await this.disposeUnselectedIdleRuntimes();return this.snapshot(handle);
+  }
+
+  async getSessionInfo(projectId:string,sessionId:string):Promise<PiSessionInfo>{
+    const handle=await this.ensureRuntime(projectId,sessionId);
+    const [stats,warming,state,entryResponse]=await Promise.all([
+      handle.client.getSessionStats(),handle.client.getCacheWarmingInfo(),handle.client.getState(),handle.client.getEntries(),
+    ]);
+    const input=stats.tokens.input+stats.tokens.cacheRead+stats.tokens.cacheWrite;
+    const breakdown=usageCostBreakdown(entryResponse.entries as unknown[]);const selectedModelKey=`${state.model?.provider}/${state.model?.id}`;
+    const costBreakdown=breakdown.length>1||breakdown[0]?.key!==selectedModelKey?breakdown:[];
+    const decision=warming.status?.decision;const waste=warming.cacheWaste;
+    return {file:stats.sessionFile??'In-memory',id:stats.sessionId,name:state.sessionName||undefined,
+      messages:{total:stats.totalMessages,user:stats.userMessages,assistant:stats.assistantMessages,toolCalls:stats.toolCalls,toolResults:stats.toolResults},
+      tokens:{input,cached:stats.tokens.cacheRead,uncached:stats.tokens.input+stats.tokens.cacheWrite,cacheWrite:stats.tokens.cacheWrite,
+        output:stats.tokens.output,total:stats.tokens.total,cachePercent:input?stats.tokens.cacheRead/input*100:0},
+      cacheWarming:{mode:warming.mode,status:formatWarmingStatus(warming.status),
+        missPenalty:decision?.economicsAvailable?decision.missCost:undefined,refreshCost:decision?.economicsAvailable?decision.warmCost:undefined},
+      cost:stats.cost,costBreakdown,
+      cacheRebilled:waste.missedTokens>0?{cost:waste.missedCost,tokens:waste.missedTokens,missCount:waste.missCount}:undefined};
+  }
+
   async newSession(projectId:string){
     const handle=await this.startRuntime(projectId);
     this.selectedSessionId=handle.sessionId;
@@ -315,7 +425,7 @@ export class PiManager {
   }
 
   async forkSession(projectId:string,sessionId:string,entryId:string):Promise<PiForkResponse>{
-    const sessions=await this.listSessions(projectId);const source=sessions.find(item=>item.id===sessionId);
+    const sessions=(await this.listSessions(projectId)).sessions;const source=sessions.find(item=>item.id===sessionId);
     if(!source)throw new Error('Session not found.');
     const handle=await this.stableRuntime(projectId,sessionId);const result=await handle.client.fork(entryId);
     if(result.cancelled)throw new Error('Fork was cancelled.');
@@ -326,7 +436,7 @@ export class PiManager {
   }
 
   async cloneSession(projectId:string,sessionId:string){
-    const sessions=await this.listSessions(projectId);const source=sessions.find(item=>item.id===sessionId);
+    const sessions=(await this.listSessions(projectId)).sessions;const source=sessions.find(item=>item.id===sessionId);
     if(!source)throw new Error('Session not found.');
     const handle=await this.stableRuntime(projectId,sessionId);const result=await handle.client.clone();
     if(result.cancelled)throw new Error('Clone was cancelled.');
@@ -441,22 +551,38 @@ export class PiManager {
       contextPercent:stats.contextUsage?.percent};
   }
 
-  async renameSession(projectId:string,sessionId:string,name:string){
+  async renameSession(projectId:string,sessionId:string,name:string,scope:PiSessionScope='current'){
     const normalized=name.trim();if(!normalized)throw new Error('Session name is required.');
+    if(isReservedPiSessionName(normalized))throw new Error('Names ending in (Fork), (Clone), or a numbered variant are reserved.');
     const runtime=this.runtimes.get(sessionId);
     if(runtime)await runtime.client.setSessionName(normalized);
     else{
-      const session=await this.findSession(projectId,sessionId);
-      const client=await this.createClient(this.project(projectId).root,session.path);
+      const session=await this.findSession(projectId,sessionId,scope);
+      const client=await this.createClient(session.cwd||this.project(projectId).root,session.path);
       try{await client.start();await client.setSessionName(normalized);}
       finally{await client.stop().catch(()=>{});}
     }
     this.options.emit({sessionId,projectId,type:'sessions-changed'});
   }
 
-  async deleteSession(projectId:string,sessionId:string){
+  async getSessionDirectory(projectId:string){return (await this.sessionLocation(this.project(projectId).root)).dir;}
+
+  async setSessionFolder(projectId:string,directory:string,copyExisting:boolean){
+    this.project(projectId);const target=resolve(directory);const targetStats=await stat(target);
+    if(!targetStats.isDirectory())throw new Error('The selected session folder is not a directory.');
+    if([...this.runtimes.values()].some(item=>item.status==='starting'||item.status==='running'||item.status==='stopping'||item.isCompacting))
+      throw new Error('Stop active responses before changing the session folder.');
+    const sessions=copyExisting?await this.listedSessions(projectId,'all'):[];
+    if(copyExisting)await this.disposeIdleRuntimes();
+    const result=copyExisting?await copyPiSessions(sessions.map(session=>({path:session.path,parentSessionPath:session.parentSessionPath})),target):{copied:0,skipped:0};
+    await writeFile(this.sessionFolderSettingsPath,JSON.stringify({sessionDir:target},null,2),'utf8');this.sessionFolder=target;
+    for(const runtime of this.runtimes.values())this.emit(runtime,'sessions-changed');
+    return {path:target,...result};
+  }
+
+  async deleteSession(projectId:string,sessionId:string,scope:PiSessionScope='current'){
     const runtime=this.runtimes.get(sessionId);let path=runtime?.sessionPath;
-    if(!path){try{path=(await this.findSession(projectId,sessionId)).path;}catch{path=undefined;}}
+    if(!path){try{path=(await this.findSession(projectId,sessionId,scope)).path;}catch{path=undefined;}}
     await this.disposeRuntime(sessionId);
     if(path){this.runCountCache.delete(path);await shell.trashItem(path);}
     if(this.selectedSessionId===sessionId)this.selectedSessionId=null;

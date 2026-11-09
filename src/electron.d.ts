@@ -1,10 +1,13 @@
-import type { PiCompactionResponse, PiEntriesResponse, PiForkResponse, PiModelDefaults, PiModelSummary, PiProviderStatus, PiSessionSearchResult, PiSessionSnapshot, PiSessionSort, PiSessionSummary, PiSessionTreeResponse, PiThinkingLevel, PiTreeNavigationResponse, RevuPiEvent } from '../shared/piTypes';
+import type { PiCompactionResponse, PiDiscoveredSessionResponse, PiEntriesResponse, PiForkResponse, PiModelDefaults, PiModelSummary, PiProviderStatus, PiSessionCatalog, PiSessionFolderResult, PiSessionInfo, PiSessionScope, PiSessionSearchResult, PiSessionSnapshot, PiSessionSort, PiSessionTreeResponse, PiThinkingLevel, PiTreeNavigationResponse, RevuPiEvent } from '../shared/piTypes';
 interface RevuResponse<T>{ok:boolean;value?:T;status?:number;error?:string}
 interface RevuAgentApi {
-  listSessions(projectId:string):Promise<RevuResponse<PiSessionSummary[]>>;
-  searchSessions(projectId:string,query:string,sort:PiSessionSort):Promise<RevuResponse<PiSessionSearchResult[]>>;
+  listSessions(projectId:string,scope?:PiSessionScope):Promise<RevuResponse<PiSessionCatalog>>;
+  searchSessions(projectId:string,query:string,sort:PiSessionSort,scope?:PiSessionScope):Promise<RevuResponse<PiSessionSearchResult[]>>;
   openSession(projectId:string,sessionId:string):Promise<RevuResponse<PiSessionSnapshot>>;
+  openDiscoveredSession(projectId:string,sessionId:string):Promise<RevuResponse<PiDiscoveredSessionResponse>>;
   newSession(projectId:string):Promise<RevuResponse<PiSessionSnapshot>>;
+  getSessionInfo(projectId:string,sessionId:string):Promise<RevuResponse<PiSessionInfo>>;
+  chooseSessionFolder(projectId:string):Promise<RevuResponse<PiSessionFolderResult|null>>;
   getEntries(projectId:string,sessionId:string,sinceEntryId?:string):Promise<RevuResponse<PiEntriesResponse>>;
   getSessionTree(projectId:string,sessionId:string):Promise<RevuResponse<PiSessionTreeResponse>>;
   navigateSessionTree(projectId:string,sessionId:string,entryId:string,summarize:boolean,customInstructions?:string):Promise<RevuResponse<PiTreeNavigationResponse>>;
@@ -14,8 +17,8 @@ interface RevuAgentApi {
   cloneSession(projectId:string,sessionId:string):Promise<RevuResponse<PiSessionSnapshot>>;
   releaseSession(projectId:string,sessionId:string):Promise<RevuResponse<void>>;
   exportHtml(projectId:string,sessionId:string):Promise<RevuResponse<string|null>>;
-  renameSession(projectId:string,sessionId:string,name:string):Promise<RevuResponse<void>>;
-  deleteSession(projectId:string,sessionId:string):Promise<RevuResponse<void>>;
+  renameSession(projectId:string,sessionId:string,name:string,scope?:PiSessionScope):Promise<RevuResponse<void>>;
+  deleteSession(projectId:string,sessionId:string,scope?:PiSessionScope):Promise<RevuResponse<void>>;
   prompt(projectId:string,sessionId:string,text:string):Promise<RevuResponse<void>>;
   stop(projectId:string,sessionId:string):Promise<RevuResponse<void>>;
   compact(projectId:string,sessionId:string):Promise<RevuResponse<PiCompactionResponse>>;

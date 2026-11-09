@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { derivedPiSessionName, threadPiSessions } from '../shared/piSession';
+import { derivedPiSessionName, isReservedPiSessionName, threadPiSessions } from '../shared/piSession';
 import { searchPiSessions, type PiSessionSearchDocument } from '../shared/piSessionSearch';
 
 const document=(id:string,name:string,firstMessage:string,allMessagesText:string,modifiedAt:number):PiSessionSearchDocument=>({
-  summary:{id,projectId:'project-a',name,firstMessage,createdAt:modifiedAt-100,modifiedAt,runCount:1,status:'idle'},
+  summary:{id,projectId:'project-a',cwd:'D:/project-a',name,hasName:!!name,scope:'current',firstMessage,createdAt:modifiedAt-100,modifiedAt,runCount:1,status:'idle'},
   allMessagesText,
 });
 
@@ -12,6 +12,13 @@ test('fork and clone names use unique parenthesized suffixes',()=>{
   assert.equal(derivedPiSessionName('Review API','Fork',[]),'Review API (Fork)');
   assert.equal(derivedPiSessionName('Review API (Fork)','Fork',['Review API (Fork)']),'Review API (Fork 2)');
   assert.equal(derivedPiSessionName('Review API','Clone',['Review API (Clone)','Review API (Clone 2)']),'Review API (Clone 3)');
+});
+
+test('generated fork and clone suffixes are reserved for named filtering and rename validation',()=>{
+  assert.equal(isReservedPiSessionName('Review API (Fork)'),true);
+  assert.equal(isReservedPiSessionName('Review API (clone 12)  '),true);
+  assert.equal(isReservedPiSessionName('Review API Fork'),false);
+  assert.equal(isReservedPiSessionName('Clone notes (manual)'),false);
 });
 
 test('relevant conversation search ranks title, content, then fuzzy title matches',()=>{

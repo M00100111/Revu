@@ -1,4 +1,5 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell, type SaveDialogOptions } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell, type OpenDialogOptions, type SaveDialogOptions } from 'electron';
+import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { diff } from '../server/git';
@@ -79,10 +80,28 @@ ipcMain.handle('revu:invoke',async(_event,body)=>{
 async function invokeAgent(body:PiAgentRequest,sourceWindow?:BrowserWindow|null){
   if(!piManager)throw new Error('Pi Agent is not ready.');
   switch(body.action){
-    case 'listSessions':return piManager.listSessions(body.projectId);
-    case 'searchSessions':return piManager.searchSessions(body.projectId,body.query,body.sort);
+    case 'listSessions':return piManager.listSessions(body.projectId,body.scope);
+    case 'searchSessions':return piManager.searchSessions(body.projectId,body.query,body.sort,body.scope);
     case 'openSession':return piManager.openSession(body.projectId,body.sessionId);
+    case 'openDiscoveredSession':{
+      const session=await piManager.discoveredSession(body.projectId,body.sessionId);
+      if(!session.cwd||!existsSync(session.cwd))throw new Error('The session project folder no longer exists.');
+      const project=await workspace.add(session.cwd);await persistOpenFolders();
+      return {project,snapshot:await piManager.openSessionFile(project.id,session.id,session.path)};
+    }
     case 'newSession':return piManager.newSession(body.projectId);
+    case 'getSessionInfo':return piManager.getSessionInfo(body.projectId,body.sessionId);
+    case 'chooseSessionFolder':{
+      const owner=sourceWindow??mainWindow;const options:OpenDialogOptions={title:'Select Session Folder',defaultPath:await piManager.getSessionDirectory(body.projectId),
+        properties:['openDirectory','createDirectory']};
+      const selected=owner?await dialog.showOpenDialog(owner,options):await dialog.showOpenDialog(options);
+      if(selected.canceled||!selected.filePaths[0])return null;
+      const confirmation={type:'question' as const,title:'Session Folder',message:'Copy existing sessions to the new folder?',
+        detail:'Existing session files will remain in their current location.',buttons:['Cancel',"Don't Copy",'Copy'],cancelId:0,defaultId:2};
+      const choice=owner?await dialog.showMessageBox(owner,confirmation):await dialog.showMessageBox(confirmation);
+      if(choice.response===0)return null;
+      return piManager.setSessionFolder(body.projectId,selected.filePaths[0],choice.response===2);
+    }
     case 'getEntries':return piManager.getEntries(body.projectId,body.sessionId,body.sinceEntryId);
     case 'getSessionTree':return piManager.getSessionTree(body.projectId,body.sessionId);
     case 'navigateSessionTree':return piManager.navigateSessionTree(body.projectId,body.sessionId,body.entryId,body.summarize,body.customInstructions);
@@ -102,8 +121,8 @@ async function invokeAgent(body:PiAgentRequest,sourceWindow?:BrowserWindow|null)
       if(result.canceled||!result.filePath)return null;
       return piManager.exportHtml(body.projectId,body.sessionId,result.filePath);
     }
-    case 'renameSession':return piManager.renameSession(body.projectId,body.sessionId,body.name);
-    case 'deleteSession':return piManager.deleteSession(body.projectId,body.sessionId);
+    case 'renameSession':return piManager.renameSession(body.projectId,body.sessionId,body.name,body.scope);
+    case 'deleteSession':return piManager.deleteSession(body.projectId,body.sessionId,body.scope);
     case 'closeProject':return piManager.closeProject(body.projectId);
     case 'prompt':return piManager.prompt(body.projectId,body.sessionId,body.text);
     case 'stop':return piManager.stop(body.projectId,body.sessionId);
@@ -193,6 +212,7 @@ app.whenReady().then(async()=>{
     },
     emit:event=>mainWindow?.webContents.send('revu:agent-event',event),
   });
+  await piManager.initialize();
   await restoreOpenFolders();
   createWindow();
   app.on('activate',()=>{if(BrowserWindow.getAllWindows().length===0)createWindow();});

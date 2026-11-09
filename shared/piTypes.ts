@@ -1,11 +1,17 @@
+import type { Project } from './types';
+
 export type PiRuntimeStatus='starting'|'idle'|'running'|'stopping'|'error';
 export type PiThinkingLevel='off'|'minimal'|'low'|'medium'|'high'|'xhigh'|'max';
 export type PiSessionSort='threaded'|'relevance'|'recent';
+export type PiSessionScope='current'|'all';
 
 export interface PiSessionSummary {
   id:string;
   projectId:string;
+  cwd:string;
   name:string;
+  hasName:boolean;
+  scope:PiSessionScope;
   firstMessage:string;
   createdAt:number;
   modifiedAt:number;
@@ -14,6 +20,37 @@ export interface PiSessionSummary {
   hasSessionFile?:boolean;
   isCompacting?:boolean;
   parentSessionId?:string;
+}
+
+export interface PiSessionGroup {
+  key:string;
+  name:string;
+  cwd:string;
+  available:boolean;
+}
+
+export interface PiSessionCatalog {
+  groups:PiSessionGroup[];
+  sessions:PiSessionSummary[];
+}
+
+export interface PiSessionInfo {
+  file:string;
+  id:string;
+  name?:string;
+  messages:{total:number;user:number;assistant:number;toolCalls:number;toolResults:number};
+  tokens:{input:number;cached:number;uncached:number;cacheWrite:number;output:number;total:number;cachePercent:number};
+  cacheWarming:{mode:string;status:string;missPenalty?:number;refreshCost?:number};
+  cost:number;
+  costBreakdown:{key:string;cost:number;tokens:number}[];
+  cacheRebilled?:{cost:number;tokens:number;missCount:number};
+}
+
+export interface PiSessionFolderResult {path:string;copied:number;skipped:number}
+
+export interface PiDiscoveredSessionResponse {
+  project:Project;
+  snapshot:PiSessionSnapshot;
 }
 
 export interface PiSessionSearchResult extends PiSessionSummary {
@@ -126,10 +163,13 @@ export interface RevuPiEvent {
 }
 
 export type PiAgentRequest=
-  |{action:'listSessions';projectId:string}
-  |{action:'searchSessions';projectId:string;query:string;sort:PiSessionSort}
+  |{action:'listSessions';projectId:string;scope?:PiSessionScope}
+  |{action:'searchSessions';projectId:string;query:string;sort:PiSessionSort;scope?:PiSessionScope}
   |{action:'openSession';projectId:string;sessionId:string}
+  |{action:'openDiscoveredSession';projectId:string;sessionId:string}
   |{action:'newSession';projectId:string}
+  |{action:'getSessionInfo';projectId:string;sessionId:string}
+  |{action:'chooseSessionFolder';projectId:string}
   |{action:'getEntries';projectId:string;sessionId:string;sinceEntryId?:string}
   |{action:'getSessionTree';projectId:string;sessionId:string}
   |{action:'navigateSessionTree';projectId:string;sessionId:string;entryId:string;summarize:boolean;customInstructions?:string}
@@ -139,8 +179,8 @@ export type PiAgentRequest=
   |{action:'cloneSession';projectId:string;sessionId:string}
   |{action:'releaseSession';projectId:string;sessionId:string}
   |{action:'exportHtml';projectId:string;sessionId:string}
-  |{action:'renameSession';projectId:string;sessionId:string;name:string}
-  |{action:'deleteSession';projectId:string;sessionId:string}
+  |{action:'renameSession';projectId:string;sessionId:string;name:string;scope?:PiSessionScope}
+  |{action:'deleteSession';projectId:string;sessionId:string;scope?:PiSessionScope}
   |{action:'closeProject';projectId:string}
   |{action:'prompt';projectId:string;sessionId:string;text:string}
   |{action:'stop';projectId:string;sessionId:string}

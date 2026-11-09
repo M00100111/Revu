@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { PiAgentRequest, PiCompactionResponse, PiEntriesResponse, PiForkResponse, PiModelDefaults, PiModelSummary, PiProviderStatus, PiSessionSearchResult, PiSessionSnapshot, PiSessionSort, PiSessionSummary, PiSessionTreeResponse, PiThinkingLevel, PiTreeNavigationResponse, RevuPiEvent } from '../shared/piTypes';
+import type { PiAgentRequest, PiCompactionResponse, PiDiscoveredSessionResponse, PiEntriesResponse, PiForkResponse, PiModelDefaults, PiModelSummary, PiProviderStatus, PiSessionCatalog, PiSessionFolderResult, PiSessionInfo, PiSessionScope, PiSessionSearchResult, PiSessionSnapshot, PiSessionSort, PiSessionTreeResponse, PiThinkingLevel, PiTreeNavigationResponse, RevuPiEvent } from '../shared/piTypes';
 
 const agentInvoke=<T>(body:PiAgentRequest)=>ipcRenderer.invoke('revu:agent',body) as Promise<{ok:boolean;value?:T;error?:string}>;
 
@@ -20,10 +20,13 @@ contextBridge.exposeInMainWorld('revu',{
     return()=>ipcRenderer.removeListener('revu:project-changed',receive);
   },
   agent:{
-    listSessions:(projectId:string)=>agentInvoke<PiSessionSummary[]>({action:'listSessions',projectId}),
-    searchSessions:(projectId:string,query:string,sort:PiSessionSort)=>agentInvoke<PiSessionSearchResult[]>({action:'searchSessions',projectId,query,sort}),
+    listSessions:(projectId:string,scope:PiSessionScope='current')=>agentInvoke<PiSessionCatalog>({action:'listSessions',projectId,scope}),
+    searchSessions:(projectId:string,query:string,sort:PiSessionSort,scope:PiSessionScope='current')=>agentInvoke<PiSessionSearchResult[]>({action:'searchSessions',projectId,query,sort,scope}),
     openSession:(projectId:string,sessionId:string)=>agentInvoke<PiSessionSnapshot>({action:'openSession',projectId,sessionId}),
+    openDiscoveredSession:(projectId:string,sessionId:string)=>agentInvoke<PiDiscoveredSessionResponse>({action:'openDiscoveredSession',projectId,sessionId}),
     newSession:(projectId:string)=>agentInvoke<PiSessionSnapshot>({action:'newSession',projectId}),
+    getSessionInfo:(projectId:string,sessionId:string)=>agentInvoke<PiSessionInfo>({action:'getSessionInfo',projectId,sessionId}),
+    chooseSessionFolder:(projectId:string)=>agentInvoke<PiSessionFolderResult|null>({action:'chooseSessionFolder',projectId}),
     getEntries:(projectId:string,sessionId:string,sinceEntryId?:string)=>agentInvoke<PiEntriesResponse>({action:'getEntries',projectId,sessionId,sinceEntryId}),
     getSessionTree:(projectId:string,sessionId:string)=>agentInvoke<PiSessionTreeResponse>({action:'getSessionTree',projectId,sessionId}),
     navigateSessionTree:(projectId:string,sessionId:string,entryId:string,summarize:boolean,customInstructions?:string)=>
@@ -35,8 +38,8 @@ contextBridge.exposeInMainWorld('revu',{
     cloneSession:(projectId:string,sessionId:string)=>agentInvoke<PiSessionSnapshot>({action:'cloneSession',projectId,sessionId}),
     releaseSession:(projectId:string,sessionId:string)=>agentInvoke<void>({action:'releaseSession',projectId,sessionId}),
     exportHtml:(projectId:string,sessionId:string)=>agentInvoke<string|null>({action:'exportHtml',projectId,sessionId}),
-    renameSession:(projectId:string,sessionId:string,name:string)=>agentInvoke<void>({action:'renameSession',projectId,sessionId,name}),
-    deleteSession:(projectId:string,sessionId:string)=>agentInvoke<void>({action:'deleteSession',projectId,sessionId}),
+    renameSession:(projectId:string,sessionId:string,name:string,scope:PiSessionScope='current')=>agentInvoke<void>({action:'renameSession',projectId,sessionId,name,scope}),
+    deleteSession:(projectId:string,sessionId:string,scope:PiSessionScope='current')=>agentInvoke<void>({action:'deleteSession',projectId,sessionId,scope}),
     prompt:(projectId:string,sessionId:string,text:string)=>agentInvoke<void>({action:'prompt',projectId,sessionId,text}),
     stop:(projectId:string,sessionId:string)=>agentInvoke<void>({action:'stop',projectId,sessionId}),
     compact:(projectId:string,sessionId:string)=>agentInvoke<PiCompactionResponse>({action:'compact',projectId,sessionId}),

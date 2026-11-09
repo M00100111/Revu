@@ -347,6 +347,11 @@ export function useWorkspace(onError: (message: string) => void,onNotice:(messag
     return project;
   }
 
+  function adoptProject(project:Project){
+    const existing=projectRef.current.find(item=>item.id===project.id);if(existing)return existing;
+    projectRef.current=[...projectRef.current,project];setProjects(projectRef.current);void refresh(project);return project;
+  }
+
   async function removeProject(project:Project) {
     await api('removeProject',{projectId:project.id});
     for(const [id,file] of docs.current){
@@ -377,5 +382,5 @@ export function useWorkspace(onError: (message: string) => void,onNotice:(messag
     return ()=>{live=false;unsubscribe();window.removeEventListener('focus',refreshAll);};
   },[onError]);
 
-  return { projects, projectsLoaded, documents, statuses, tick, load, addProject, removeProject, save, act, bulk, bulkFile, refresh };
+  return { projects, projectsLoaded, documents, statuses, tick, load, addProject, adoptProject, removeProject, save, act, bulk, bulkFile, refresh };
 }

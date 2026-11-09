@@ -10,9 +10,12 @@ export const calculatePiCacheHitPercent=(input:number,cacheRead:number,cacheWrit
   return total?cacheRead/total*100:0;
 };
 
+const reservedPiSessionNameSuffix=/\((?:Fork|Clone)(?:\s+\d+)?\)$/i;
+export const isReservedPiSessionName=(name:string)=>reservedPiSessionNameSuffix.test(name.trim());
+
 export const derivedPiSessionName=(source:string,kind:'Fork'|'Clone',existingNames:Iterable<string>)=>{
   const clean=source.trim()||'New Chat';
-  const base=clean.replace(/ \((?:Fork|Clone)(?: \d+)?\)$/,'');
+  const base=clean.replace(/\s+\((?:Fork|Clone)(?:\s+\d+)?\)$/i,'');
   const existing=new Set([...existingNames].map(name=>name.toLocaleLowerCase()));
   for(let index=1;;index++){
     const suffix=index===1?kind:`${kind} ${index}`;

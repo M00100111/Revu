@@ -5,10 +5,10 @@ import Icon from './Icon';
 import MarkdownContent from './MarkdownContent';
 import SessionTreeDialog from './SessionTreeDialog';
 import { showContextMenu } from './ContextMenu';
-import { threadPiSessions,type ThreadedPiSession } from '../shared/piSession';
+import { isReservedPiSessionName, threadPiSessions,type ThreadedPiSession } from '../shared/piSession';
 import type {
   PiCompactionResult,PiEntriesResponse,PiModelDefaults,PiModelSummary,PiProviderStatus,PiRuntimeStatus,
-  PiSessionEntry,PiSessionSearchResult,PiSessionSnapshot,PiSessionSort,PiSessionSummary,PiThinkingLevel,
+  PiSessionCatalog,PiSessionEntry,PiSessionGroup,PiSessionInfo,PiSessionScope,PiSessionSearchResult,PiSessionSnapshot,PiSessionSort,PiSessionSummary,PiThinkingLevel,
   PiTreeNavigationResponse,PiUsageStats,RevuPiEvent,
 } from '../shared/piTypes';
 
@@ -251,24 +251,51 @@ export function updateEvent(current:ChatState,event:unknown):ChatState{
   return current;
 }
 
-function SessionDialog({projects,projectId,selectedSessionId,sessions,doneSessionIds,onProject,onOpen,onNew,onRename,onDelete,onClone,onExport,onClose}:{
+function sessionCwdKey(path:string){const value=path.replace(/\\/g,'/').replace(/\/$/,'');return /^[A-Za-z]:\//.test(value)?value.toLocaleLowerCase():value;}
+
+function SessionDialog({projects,projectId,selectedSessionId,sessions,doneSessionIds,onProject,onOpen,onNew,onRename,onDelete,onClone,onExport,onFolderChanged,onClose,notify}:{
   projects:Project[];projectId:string;sessions:PiSessionSummary[];onProject:(id:string)=>void;
   selectedSessionId:string|null;doneSessionIds:ReadonlySet<string>;
   onOpen:(session:PiSessionSummary)=>void;onNew:()=>void;onRename:(session:PiSessionSummary,name:string)=>void;
-  onDelete:(session:PiSessionSummary)=>void;onClone:(session:PiSessionSummary)=>void;onExport:(session:PiSessionSummary)=>void;onClose:()=>void;
+  onDelete:(session:PiSessionSummary)=>void;onClone:(session:PiSessionSummary)=>void;onExport:(session:PiSessionSummary)=>void;
+  onFolderChanged:()=>void;onClose:()=>void;notify:Notify;
 }){
   const [renaming,setRenaming]=useState<string|null>(null);const [name,setName]=useState('');const [query,setQuery]=useState('');
   const [sort,setSort]=useState<PiSessionSort>(savedSessionSort);const [results,setResults]=useState<PiSessionSearchResult[]>([]);const [searching,setSearching]=useState(false);
+  const [scope,setScope]=useState<PiSessionScope>('current');const [namedOnly,setNamedOnly]=useState(false);
+  const [catalog,setCatalog]=useState<PiSessionCatalog>({groups:[],sessions:[]});const [catalogLoading,setCatalogLoading]=useState(false);
+  const [folderMenuOpen,setFolderMenuOpen]=useState(false);const folderMenuRef=useRef<HTMLDivElement>(null);
+  const selectedProject=projects.find(project=>project.id===projectId)??projects[0];const [selectedCwd,setSelectedCwd]=useState(()=>sessionCwdKey(selectedProject?.root??''));
   const trimmedQuery=query.trim();
   useEffect(()=>localStorage.setItem('revu-session-sort',sort),[sort]);
+  useEffect(()=>{if(!folderMenuOpen)return;const close=(event:MouseEvent)=>{if(!folderMenuRef.current?.contains(event.target as Node))setFolderMenuOpen(false);};
+    document.addEventListener('mousedown',close);return()=>document.removeEventListener('mousedown',close);},[folderMenuOpen]);
+  useEffect(()=>{if(scope==='current'&&selectedProject)setSelectedCwd(sessionCwdKey(selectedProject.root));},[scope,selectedProject?.root]);
+  useEffect(()=>{
+    if(scope!=='all'){setCatalog({groups:[],sessions:[]});setCatalogLoading(false);return;}
+    let cancelled=false;setCatalogLoading(true);
+    void window.revu.agent.listSessions(projectId,'all').then(unwrap).then(value=>{if(!cancelled){setCatalog(value);
+      setSelectedCwd(current=>value.groups.some(group=>group.key===current)?current:sessionCwdKey(selectedProject?.root??value.groups[0]?.cwd??''));}})
+      .catch(error=>{if(!cancelled){setCatalog({groups:[],sessions:[]});notify('error',errorMessage(error));}})
+      .finally(()=>{if(!cancelled)setCatalogLoading(false);});
+    return()=>{cancelled=true;};
+  },[scope,projectId,sessions]);
   useEffect(()=>{
     if(!trimmedQuery){setResults([]);setSearching(false);return;}
     let cancelled=false;setSearching(true);
-    const timer=setTimeout(()=>void window.revu.agent.searchSessions(projectId,trimmedQuery,sort).then(unwrap).then(items=>{
+    const timer=setTimeout(()=>void window.revu.agent.searchSessions(projectId,trimmedQuery,sort,scope).then(unwrap).then(items=>{
       if(!cancelled)setResults(items);
     }).catch(()=>{if(!cancelled)setResults([]);}).finally(()=>{if(!cancelled)setSearching(false);}),150);
     return()=>{cancelled=true;clearTimeout(timer);};
-  },[projectId,trimmedQuery,sort]);
+  },[projectId,trimmedQuery,sort,scope]);
+  const openGroups:PiSessionGroup[]=projects.map(project=>({key:sessionCwdKey(project.root),name:project.name,cwd:project.root,available:true}));
+  const projectGroups=scope==='current'?openGroups:[...new Map([...openGroups,...catalog.groups].map(group=>[group.key,group])).values()];
+  const sourceSessions=scope==='current'?sessions:catalog.sessions;
+  const visibleSessions=sourceSessions.filter(session=>sessionCwdKey(session.cwd)===selectedCwd&&(!namedOnly||(session.hasName&&!isReservedPiSessionName(session.name))));
+  const visibleResults=results.filter(session=>sessionCwdKey(session.cwd)===selectedCwd&&(!namedOnly||(session.hasName&&!isReservedPiSessionName(session.name))));
+  const chooseSessionFolder=async()=>{setFolderMenuOpen(false);try{const result=await window.revu.agent.chooseSessionFolder(projectId).then(unwrap);if(!result)return;
+    onFolderChanged();notify('info',result.copied?`Session folder changed. Copied ${result.copied} ${result.copied===1?'session':'sessions'}.`:'Session folder changed.');
+  }catch(error){notify('error',errorMessage(error));}};
   const now=new Date();const today=new Date(now.getFullYear(),now.getMonth(),now.getDate()).getTime();
   const groups=[
     ['Today',(item:PiSessionSummary)=>item.modifiedAt>=today],
@@ -277,10 +304,13 @@ function SessionDialog({projects,projectId,selectedSessionId,sessions,doneSessio
     ['Older',(item:PiSessionSummary)=>item.modifiedAt<today-6*86400000],
   ] as const;
   const renderSession=(session:PiSessionSummary|PiSessionSearchResult,thread?:ThreadedPiSession<PiSessionSummary>)=>{const tone=sessionTone(session.status,doneSessionIds.has(session.id));const enabled=(session.status==='idle'||session.status==='error')&&session.hasSessionFile!==false&&!session.isCompacting;
-    const contextMenu=async(event:React.MouseEvent)=>{const action=await showContextMenu(event,[{id:'clone',label:'Clone',disabled:!enabled},{id:'export',label:'Export',disabled:!enabled}] as const);
-      if(action==='clone')onClone(session);if(action==='export')onExport(session);};
+    const openProject=projects.find(project=>sessionCwdKey(project.root)===sessionCwdKey(session.cwd));const canRuntimeAction=enabled&&!!openProject;
+    const actionSession=openProject?{...session,projectId:openProject.id,scope:'current' as const}:session;
+    const contextMenu=async(event:React.MouseEvent)=>{const action=await showContextMenu(event,[{id:'clone',label:'Clone',disabled:!canRuntimeAction},{id:'export',label:'Export',disabled:!canRuntimeAction}] as const);
+      if(action==='clone')onClone(actionSession);if(action==='export')onExport(actionSession);};
     return <div className={`session-row status-${tone} ${session.id===selectedSessionId?'active':''}`} key={session.id} onContextMenu={event=>void contextMenu(event)}>
-      {renaming===session.id?<form onSubmit={event=>{event.preventDefault();onRename(session,name);setRenaming(null);}}>
+      {renaming===session.id?<form onSubmit={event=>{event.preventDefault();const normalized=name.trim();if(!normalized){notify('error','Session name is required.');return;}
+        if(isReservedPiSessionName(normalized)){notify('error','Names ending in (Fork), (Clone), or a numbered variant are reserved.');return;}onRename(session,normalized);setRenaming(null);}}>
         <input autoFocus value={name} onChange={event=>setName(event.target.value)}/><button type="submit">Save</button><button type="button" onClick={()=>setRenaming(null)}>Cancel</button>
       </form>:<>
         <button className="session-select" onClick={()=>onOpen(session)}><span className="session-title">{thread&&thread.depth>0&&<i className="session-thread-prefix">{thread.ancestorContinues.map(value=>value?'│  ':'   ').join('')}{thread.isLast?'└─ ':'├─ '}</i>}<b>{session.name}</b></span>{'matchSnippet' in session&&session.matchSnippet&&<em>{session.matchSnippet}</em>}<small>{formatTime(session.modifiedAt)} · {session.runCount} {session.runCount===1?'run':'runs'}</small></button>
@@ -292,16 +322,20 @@ function SessionDialog({projects,projectId,selectedSessionId,sessions,doneSessio
   };
   return <div className="agent-modal-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)onClose();}}>
     <section className="agent-modal session-dialog" role="dialog" aria-modal="true" aria-label="Sessions">
-      <header><strong>Sessions</strong><div><button className="agent-primary" onClick={onNew}>New Chat</button><button className="agent-icon-button" onClick={onClose} aria-label="Close"><Icon name="close" size={15}/></button></div></header>
-      {projects.length>1&&<nav className="session-project-tabs" aria-label="Projects">{projects.map(project=><button key={project.id}
-        className={project.id===projectId?'active':''} onClick={()=>onProject(project.id)}>{project.name}</button>)}</nav>}
+      <header><strong>Sessions</strong><div><button className="agent-primary" onClick={onNew}>New Chat</button><div className="session-folder-settings" ref={folderMenuRef}>
+        <button className="agent-icon-button" title="Session settings" aria-label="Session settings" aria-expanded={folderMenuOpen} onClick={()=>setFolderMenuOpen(value=>!value)}><Icon name="sessionSettings" size={15}/></button>
+        {folderMenuOpen&&<div className="session-folder-menu" role="menu"><button role="menuitem" onClick={()=>void chooseSessionFolder()}>Session Folder</button></div>}
+      </div><button className="agent-icon-button" onClick={onClose} aria-label="Close"><Icon name="close" size={15}/></button></div></header>
+      <div className="session-project-bar"><nav className="session-project-tabs" aria-label="Projects">{projectGroups.map(group=><button key={group.key} title={group.cwd}
+        className={group.key===selectedCwd?'active':''} onClick={()=>{setSelectedCwd(group.key);if(scope==='current'){const project=projects.find(item=>sessionCwdKey(item.root)===group.key);if(project)onProject(project.id);}}}>{group.name}</button>)}</nav>
+        <div className="session-scope-switch" role="group" aria-label="Session scope"><button className={scope==='current'?'active':''} onClick={()=>setScope('current')}>Current</button><button className={scope==='all'?'active':''} onClick={()=>setScope('all')}>All</button></div></div>
       <div className="session-search"><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="Search conversations..." aria-label="Search conversations"/>
         <AgentSelect compact align="end" showCheck={false} value={sort} placeholder="Sort" groups={[{options:[{value:'threaded',label:'Threaded'},{value:'relevance',label:'Relevant'},{value:'recent',label:'Recent'}]}]}
-          onChange={value=>setSort(value as PiSessionSort)}/></div>
+          onChange={value=>setSort(value as PiSessionSort)}/><label className="session-named-filter"><input type="checkbox" checked={namedOnly} onChange={event=>setNamedOnly(event.target.checked)}/><span>Named</span></label></div>
       <div className="session-groups">{trimmedQuery
-        ?searching?<p className="agent-empty">Searching…</p>:results.length?<section className="session-group search-results">{results.map(session=>renderSession(session))}</section>:<p className="agent-empty">No matching conversations.</p>
-        :sessions.length===0?<p className="agent-empty">No conversations yet.</p>:sort==='threaded'?<section className="session-group threaded">{threadPiSessions(sessions).map(item=>renderSession(item.session,item))}</section>:groups.map(([label,match])=>{
-        const items=sessions.filter(match);if(!items.length)return null;
+        ?searching?<p className="agent-empty">Searching…</p>:visibleResults.length?<section className="session-group search-results">{visibleResults.map(session=>renderSession(session))}</section>:<p className="agent-empty">No matching conversations.</p>
+        :catalogLoading&&scope==='all'?<p className="agent-empty">Loading conversations…</p>:visibleSessions.length===0?<p className="agent-empty">No conversations yet.</p>:sort==='threaded'?<section className="session-group threaded">{threadPiSessions(visibleSessions).map(item=>renderSession(item.session,item))}</section>:groups.map(([label,match])=>{
+        const items=visibleSessions.filter(match);if(!items.length)return null;
         return <section className="session-group" key={label}><h3>{label}</h3>{items.map(session=>renderSession(session))}</section>;
       })}</div>
     </section>
@@ -360,10 +394,11 @@ function ModelDialog({projectId,sessionId,onClose,onChanged,notify}:{projectId:s
   </div>;
 }
 
-export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds,width,onResize,onResizeEnd,notify,navigationRequest,onNotice,onOpenToolDetail,onUpdateToolDetail}:{
+export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds,width,onResize,onResizeEnd,notify,navigationRequest,onNotice,onProjectAdded,onOpenToolDetail,onUpdateToolDetail}:{
   open:boolean;projects:Project[];activeProjectId:string|null;dirtyProjectIds:ReadonlySet<string>;width:number;
   onResize:(width:number)=>void;onResizeEnd:(width:number)=>void;notify:Notify;
   navigationRequest:AgentNavigationRequest|null;onNotice:(notice:AgentNotice)=>void;
+  onProjectAdded:(project:Project)=>Project;
   onOpenToolDetail:(detail:ToolDetailRequest)=>void;onUpdateToolDetail:(detail:ToolDetailRequest)=>void;
 }){
   const [selectedProjectId,setSelectedProjectId]=useState<string>('');const [selectedSessionId,setSelectedSessionId]=useState<string|null>(null);
@@ -373,6 +408,7 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
   const [modelMenu,setModelMenu]=useState(false);const [models,setModels]=useState<PiModelSummary[]>([]);const [loading,setLoading]=useState(false);
   const [composerExpanded,setComposerExpanded]=useState(false);
   const [usageOpen,setUsageOpen]=useState(false);const [contextOpen,setContextOpen]=useState(false);const [contextOperation,setContextOperation]=useState<'compact'|'toggle'|null>(null);
+  const [sessionInfoOpen,setSessionInfoOpen]=useState(false);const [sessionInfo,setSessionInfo]=useState<PiSessionInfo|undefined>();const [sessionInfoError,setSessionInfoError]=useState('');
   const [compactionResult,setCompactionResult]=useState<PiCompactionResult|undefined>();const [activeRunKey,setActiveRunKey]=useState('');
   const [toolClock,setToolClock]=useState(Date.now());
   const [previewRunKey,setPreviewRunKey]=useState('');const [previewTop,setPreviewTop]=useState(8);
@@ -425,7 +461,7 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
   },[current,toolClock,onUpdateToolDetail]);
   const dirty=selectedProjectId?dirtyProjectIds.has(selectedProjectId):false;
   const reloadSessions=async(projectId:string)=>{
-    try{const items=await window.revu.agent.listSessions(projectId).then(unwrap);setSessions(current=>({...current,[projectId]:items}));return items;}
+    try{const catalog=await window.revu.agent.listSessions(projectId).then(unwrap);const items=catalog.sessions;setSessions(current=>({...current,[projectId]:items}));return items;}
     catch(error){notify('error',error instanceof Error?error.message:String(error));return [];}
   };
   const openSessionById=async(projectId:string,sessionId:string,targetRunKey?:string)=>{setLoading(true);try{
@@ -436,6 +472,22 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
     setSelectedProjectId(projectId);setSelectedSessionId(snapshot.sessionId);setDraft('');setSessionDialog(false);
   }catch(error){notify('error',error instanceof Error?error.message:String(error));setModelDialog(true);}finally{setLoading(false);}};
   const openSession=async(session:PiSessionSummary,targetRunKey?:string)=>openSessionById(session.projectId,session.id,targetRunKey);
+  const openCatalogSession=async(session:PiSessionSummary)=>{
+    const project=projects.find(item=>sessionCwdKey(item.root)===sessionCwdKey(session.cwd));
+    if(session.scope==='current'&&project){await openSessionById(project.id,session.id);return;}
+    setLoading(true);try{
+      const response=await window.revu.agent.openDiscoveredSession(session.projectId,session.id).then(unwrap);onProjectAdded(response.project);
+      const snapshot=response.snapshot;const entries=await window.revu.agent.getEntries(response.project.id,snapshot.sessionId).then(unwrap);
+      setChats(current=>{const next={...current,[snapshot.sessionId]:withEntries(withSnapshot(snapshot,current[snapshot.sessionId]),entries)};chatsRef.current=next;return next;});
+      setOpenSessionIds(current=>({...current,[response.project.id]:[...(current[response.project.id]??[]).filter(id=>id!==snapshot.sessionId),snapshot.sessionId]}));
+      setSelectedProjectId(response.project.id);setSelectedSessionId(snapshot.sessionId);setDraft('');setSessionDialog(false);
+    }catch(error){notify('error',errorMessage(error));}finally{setLoading(false);}
+  };
+  const openSessionInfo=async()=>{
+    if(!current)return;setUsageOpen(false);setSessionInfo(undefined);setSessionInfoError('');setSessionInfoOpen(true);
+    try{setSessionInfo(await window.revu.agent.getSessionInfo(current.projectId,current.sessionId).then(unwrap));}
+    catch(error){setSessionInfoError(errorMessage(error));}
+  };
   const loadNewChatDefaults=async(projectId:string)=>{
     const request=++draftConfigRequest.current;
     setModels([]);
@@ -462,6 +514,8 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
   useEffect(()=>{if(open&&selectedSessionId)clearDone(selectedSessionId);},[open,selectedSessionId,clearDone]);
   useEffect(()=>()=>{for(const timer of doneTimers.current.values())clearTimeout(timer);if(copiedTimer.current)clearTimeout(copiedTimer.current);},[]);
   useEffect(()=>{if(selectedSessionId)draftConfigRequest.current++;setComposerExpanded(false);setModelMenu(false);setSessionMenuOpen(false);setStatsRunKey('');setContextOpen(false);setUsageOpen(false);setCompactionResult(undefined);},[selectedSessionId]);
+  useEffect(()=>{setSessionInfoOpen(false);setSessionInfo(undefined);setSessionInfoError('');},[selectedSessionId]);
+  useEffect(()=>{if(!sessionInfoOpen)return;const keydown=(event:KeyboardEvent)=>{if(event.key==='Escape')setSessionInfoOpen(false);};window.addEventListener('keydown',keydown);return()=>window.removeEventListener('keydown',keydown);},[sessionInfoOpen]);
   useEffect(()=>{
     const opening=open&&!wasOpen.current;wasOpen.current=open;
     if(!opening||hasPendingNavigation)return;
@@ -774,12 +828,29 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
         <div className="agent-usage-control" ref={usageRef}><button className="agent-usage-summary" aria-haspopup="dialog" aria-expanded={usageOpen} onClick={()=>setUsageOpen(value=>!value)}>
           In {formatAgentTokens(usage.input)} <span>Out {formatAgentTokens(usage.output)}</span> <span>R {formatAgentTokens(usage.cacheRead)}</span> <span>CH {usage.cacheHitPercent.toFixed(2)}%</span> <span>${usage.cost.toFixed(4)}</span>
         </button>{usageOpen&&<section className="agent-usage-popover" role="dialog" aria-label="Session usage">
-          <header><strong>Session Usage</strong></header><dl>
+          <header><strong>Session Usage</strong><button className="agent-icon-button session-info-trigger" title="Session Info" aria-label="Open session info" onClick={()=>void openSessionInfo()}><Icon name="detail" size={14}/></button></header><dl>
             <div><dt>Input</dt><dd>{usage.input.toLocaleString()}</dd></div><div><dt>Output</dt><dd>{usage.output.toLocaleString()}</dd></div>
             <div><dt>Cache read</dt><dd>{usage.cacheRead.toLocaleString()}</dd></div><div><dt>Cache write</dt><dd>{usage.cacheWrite.toLocaleString()}</dd></div>
             <div><dt>Cache hit</dt><dd>{usage.cacheHitPercent.toFixed(2)}%</dd></div><div><dt>Total tokens</dt><dd>{usage.total.toLocaleString()}</dd></div>
             <div><dt>Runs</dt><dd>{usage.runs}</dd></div><div><dt>Tool calls</dt><dd>{usage.toolCalls}</dd></div><div><dt>Cost</dt><dd>${usage.cost.toFixed(6)}</dd></div>
           </dl></section>}</div>
+      </div>}
+      {sessionInfoOpen&&<div className="agent-chat-modal-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)setSessionInfoOpen(false);}}>
+        <section className="agent-chat-modal session-info-dialog" role="dialog" aria-modal="true" aria-label="Session Info">
+          <header><strong>Session Info</strong><button className="agent-icon-button" onClick={()=>setSessionInfoOpen(false)} aria-label="Close"><Icon name="close" size={14}/></button></header>
+          <div className="session-info-content">{sessionInfoError?<p className="agent-empty">{sessionInfoError}</p>:!sessionInfo?<p className="agent-empty">Loading session information…</p>:<>
+            <section className="session-info-identity"><dl>{sessionInfo.name&&<div><dt>Name</dt><dd>{sessionInfo.name}</dd></div>}<div><dt>File</dt><dd className="session-info-file" title={sessionInfo.file}>{sessionInfo.file}</dd></div><div><dt>ID</dt><dd>{sessionInfo.id}</dd></div></dl></section>
+            <section><h3>Messages</h3><dl><div><dt>Total</dt><dd>{sessionInfo.messages.total.toLocaleString()}</dd></div><div><dt>User</dt><dd>{sessionInfo.messages.user.toLocaleString()}</dd></div><div><dt>Assistant</dt><dd>{sessionInfo.messages.assistant.toLocaleString()}</dd></div><div><dt>Tools</dt><dd>{sessionInfo.messages.toolCalls.toLocaleString()} calls, {sessionInfo.messages.toolResults.toLocaleString()} results</dd></div></dl></section>
+            <section><h3>Tokens</h3><dl><div><dt>Input</dt><dd>{sessionInfo.tokens.input.toLocaleString()}</dd></div>{(sessionInfo.tokens.cached>0||sessionInfo.tokens.cacheWrite>0)&&<><div className="nested"><dt>Cached</dt><dd>{sessionInfo.tokens.cached.toLocaleString()} ({sessionInfo.tokens.cachePercent.toFixed(1)}%)</dd></div><div className="nested"><dt>Uncached</dt><dd>{sessionInfo.tokens.uncached.toLocaleString()}{sessionInfo.tokens.cacheWrite>0&&<span> ({sessionInfo.tokens.cacheWrite.toLocaleString()} written to cache)</span>}</dd></div></>}<div><dt>Output</dt><dd>{sessionInfo.tokens.output.toLocaleString()}</dd></div><div><dt>Total</dt><dd>{sessionInfo.tokens.total.toLocaleString()}</dd></div></dl></section>
+            <section><h3>Cache Warming</h3><dl><div><dt>Mode</dt><dd>{sessionInfo.cacheWarming.mode}</dd></div><div><dt>Status</dt><dd>{sessionInfo.cacheWarming.status}</dd></div>
+              {sessionInfo.cacheWarming.missPenalty!==undefined&&<div><dt>Cache miss penalty</dt><dd>${sessionInfo.cacheWarming.missPenalty.toFixed(3)}</dd></div>}
+              {sessionInfo.cacheWarming.refreshCost!==undefined&&<div><dt>Refresh cost</dt><dd>${sessionInfo.cacheWarming.refreshCost.toFixed(3)}</dd></div>}</dl></section>
+            {(sessionInfo.cost>0||sessionInfo.cacheRebilled)&&<section><h3>Cost</h3><dl><div><dt>Total</dt><dd>${sessionInfo.cost.toFixed(3)}</dd></div>
+              {sessionInfo.costBreakdown.map(item=><div className="nested" key={item.key}><dt>{item.key}</dt><dd>${item.cost.toFixed(3)} <span>({formatAgentTokens(item.tokens)} tokens)</span></dd></div>)}
+              {sessionInfo.cacheRebilled&&<div><dt>Cache Re-billed</dt><dd>{sessionInfo.cacheRebilled.cost>=.0001?<><span className="session-info-cost">${sessionInfo.cacheRebilled.cost.toFixed(3)}</span>{' '}<span>({sessionInfo.cacheRebilled.tokens.toLocaleString()} tokens, {sessionInfo.cacheRebilled.missCount} {sessionInfo.cacheRebilled.missCount===1?'miss':'misses'})</span></>:<>{sessionInfo.cacheRebilled.tokens.toLocaleString()} tokens, {sessionInfo.cacheRebilled.missCount} {sessionInfo.cacheRebilled.missCount===1?'miss':'misses'}</>}</dd></div>}
+            </dl></section>}
+          </>}</div>
+        </section>
       </div>}
     </aside>
     {sessionMenuOpen&&createPortal(<div ref={sessionMoreMenuRef} style={sessionMenuStyle} className="agent-session-more-menu" role="listbox" aria-label="Open chats">
@@ -797,14 +868,15 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
       <button className="configure-models" onClick={()=>{setModelMenu(false);setModelDialog(true);}}><Icon name="settings" size={13}/>Configure Models</button>
     </div>,document.body)}
     {sessionDialog&&selectedProjectId&&<SessionDialog projects={projects} projectId={selectedProjectId} selectedSessionId={selectedSessionId}
-      sessions={sessions[selectedProjectId]??[]} doneSessionIds={doneSessionIds}
-      onProject={id=>{setSelectedProjectId(id);setSelectedSessionId(null);setNewChatModel(undefined);setDraft('');void reloadSessions(id);}} onOpen={session=>void openSession(session)} onNew={startNewChat}
-      onRename={(session,name)=>void window.revu.agent.renameSession(session.projectId,session.id,name).then(unwrap).then(()=>{setChats(current=>{
+      sessions={sessions[selectedProjectId]??[]} doneSessionIds={doneSessionIds} notify={notify}
+      onProject={id=>{setSelectedProjectId(id);setSelectedSessionId(null);setNewChatModel(undefined);setDraft('');void reloadSessions(id);}} onOpen={session=>void openCatalogSession(session)} onNew={startNewChat}
+      onRename={(session,name)=>void window.revu.agent.renameSession(session.projectId,session.id,name,session.scope).then(unwrap).then(()=>{setChats(current=>{
         const chat=current[session.id];return chat?{...current,[session.id]:{...chat,name}}:current;});return reloadSessions(session.projectId);}).catch(error=>notify('error',errorMessage(error)))}
-      onDelete={session=>{if(window.confirm(`Delete “${session.name}”? The session will be moved to the Recycle Bin.`))void window.revu.agent.deleteSession(session.projectId,session.id).then(unwrap).then(()=>{
+      onDelete={session=>{if(window.confirm(`Delete “${session.name}”? The session will be moved to the Recycle Bin.`))void window.revu.agent.deleteSession(session.projectId,session.id,session.scope).then(unwrap).then(()=>{
         setChats(current=>{const next={...current};delete next[session.id];return next;});setOpenSessionIds(current=>({...current,[session.projectId]:(current[session.projectId]??[]).filter(id=>id!==session.id)}));
         if(selectedSessionId===session.id)startNewChat();return reloadSessions(session.projectId);
-      }).catch(error=>notify('error',errorMessage(error)));}} onClone={session=>void cloneSession(session)} onExport={session=>void exportSession(session)} onClose={()=>setSessionDialog(false)}/>}
+      }).catch(error=>notify('error',errorMessage(error)));}} onClone={session=>void cloneSession(session)} onExport={session=>void exportSession(session)}
+      onFolderChanged={()=>void reloadSessions(selectedProjectId)} onClose={()=>setSessionDialog(false)}/>}
     {treeDialog&&current&&<SessionTreeDialog projectId={current.projectId} sessionId={current.sessionId} onClose={()=>setTreeDialog(false)}
       onNavigated={response=>void adoptTreeNavigation(response)} notify={notify}/>}
     {modelDialog&&selectedProjectId&&<ModelDialog projectId={selectedProjectId} sessionId={selectedSessionId??undefined} onClose={()=>setModelDialog(false)}

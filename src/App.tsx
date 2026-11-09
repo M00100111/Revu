@@ -473,6 +473,7 @@ export default function App(){
       width={agentWidth} onResize={setAgentWidth}
       onResizeEnd={value=>localStorage.setItem('revu-agent-width',String(value))} notify={notify}
       navigationRequest={agentNavigation} onNotice={handleAgentNotice}
+      onProjectAdded={workspace.adoptProject}
       onOpenToolDetail={openToolDetail} onUpdateToolDetail={updateToolDetail}/>
   </div>;
 }
