@@ -118,6 +118,11 @@ export interface PiUsageStats {
   contextPercent?:number|null;
 }
 
+export interface PiQueueState {
+  steering:string[];
+  followUp:string[];
+}
+
 export interface PiSessionSnapshot {
   sessionId:string;
   projectId:string;
@@ -129,6 +134,7 @@ export interface PiSessionSnapshot {
   availableThinkingLevels:PiThinkingLevel[];
   autoCompactionEnabled:boolean;
   isCompacting:boolean;
+  queue?:PiQueueState;
   usage?:PiUsageStats;
   error?:string;
 }
@@ -183,6 +189,9 @@ export type PiAgentRequest=
   |{action:'deleteSession';projectId:string;sessionId:string;scope?:PiSessionScope}
   |{action:'closeProject';projectId:string}
   |{action:'prompt';projectId:string;sessionId:string;text:string}
+  |{action:'steer';projectId:string;sessionId:string;text:string}
+  |{action:'followUp';projectId:string;sessionId:string;text:string}
+  |{action:'clearQueue';projectId:string;sessionId:string}
   |{action:'stop';projectId:string;sessionId:string}
   |{action:'compact';projectId:string;sessionId:string}
   |{action:'setAutoCompaction';projectId:string;sessionId:string;enabled:boolean}

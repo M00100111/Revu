@@ -127,6 +127,9 @@ async function invokeAgent(body:PiAgentRequest,sourceWindow?:BrowserWindow|null)
     case 'deleteSession':return piManager.deleteSession(body.projectId,body.sessionId,body.scope);
     case 'closeProject':return piManager.closeProject(body.projectId);
     case 'prompt':return piManager.prompt(body.projectId,body.sessionId,body.text);
+    case 'steer':return piManager.steer(body.projectId,body.sessionId,body.text);
+    case 'followUp':return piManager.followUp(body.projectId,body.sessionId,body.text);
+    case 'clearQueue':return piManager.clearQueue(body.projectId,body.sessionId);
     case 'stop':return piManager.stop(body.projectId,body.sessionId);
     case 'compact':return piManager.compact(body.projectId,body.sessionId);
     case 'setAutoCompaction':return piManager.setAutoCompaction(body.projectId,body.sessionId,body.enabled);

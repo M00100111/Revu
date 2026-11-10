@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
-import type { PiAgentRequest, PiCompactionResponse, PiDiscoveredSessionResponse, PiEntriesResponse, PiForkResponse, PiModelDefaults, PiModelSummary, PiProviderStatus, PiSessionCatalog, PiSessionFolderResult, PiSessionInfo, PiSessionScope, PiSessionSearchResult, PiSessionSnapshot, PiSessionSort, PiSessionTreeResponse, PiThinkingLevel, PiTreeNavigationResponse, RevuPiEvent } from '../shared/piTypes';
+import type { PiAgentRequest, PiCompactionResponse, PiDiscoveredSessionResponse, PiEntriesResponse, PiForkResponse, PiModelDefaults, PiModelSummary, PiProviderStatus, PiQueueState, PiSessionCatalog, PiSessionFolderResult, PiSessionInfo, PiSessionScope, PiSessionSearchResult, PiSessionSnapshot, PiSessionSort, PiSessionTreeResponse, PiThinkingLevel, PiTreeNavigationResponse, RevuPiEvent } from '../shared/piTypes';
 
 const agentInvoke=<T>(body:PiAgentRequest)=>ipcRenderer.invoke('revu:agent',body) as Promise<{ok:boolean;value?:T;error?:string}>;
 
@@ -44,6 +44,9 @@ contextBridge.exposeInMainWorld('revu',{
     renameSession:(projectId:string,sessionId:string,name:string,scope:PiSessionScope='current')=>agentInvoke<void>({action:'renameSession',projectId,sessionId,name,scope}),
     deleteSession:(projectId:string,sessionId:string,scope:PiSessionScope='current')=>agentInvoke<void>({action:'deleteSession',projectId,sessionId,scope}),
     prompt:(projectId:string,sessionId:string,text:string)=>agentInvoke<void>({action:'prompt',projectId,sessionId,text}),
+    steer:(projectId:string,sessionId:string,text:string)=>agentInvoke<void>({action:'steer',projectId,sessionId,text}),
+    followUp:(projectId:string,sessionId:string,text:string)=>agentInvoke<void>({action:'followUp',projectId,sessionId,text}),
+    clearQueue:(projectId:string,sessionId:string)=>agentInvoke<PiQueueState>({action:'clearQueue',projectId,sessionId}),
     stop:(projectId:string,sessionId:string)=>agentInvoke<void>({action:'stop',projectId,sessionId}),
     compact:(projectId:string,sessionId:string)=>agentInvoke<PiCompactionResponse>({action:'compact',projectId,sessionId}),
     setAutoCompaction:(projectId:string,sessionId:string,enabled:boolean)=>

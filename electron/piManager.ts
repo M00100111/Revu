@@ -5,7 +5,7 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type {
   PiCompactionResponse,PiEntriesResponse,PiForkResponse,PiModelDefaults,PiModelSummary,PiProviderStatus,
-  PiRuntimeStatus,PiSessionCatalog,PiSessionInfo,PiSessionScope,PiSessionSearchResult,PiSessionSnapshot,PiSessionSort,
+  PiQueueState,PiRuntimeStatus,PiSessionCatalog,PiSessionInfo,PiSessionScope,PiSessionSearchResult,PiSessionSnapshot,PiSessionSort,
   PiSessionSummary,PiSessionTreeResponse,PiThinkingLevel,PiTreeNavigationResponse,PiUsageStats,RevuPiEvent,
 } from '../shared/piTypes';
 import { calculatePiCacheHitPercent, countPiSessionRuns, derivedPiSessionName, isReservedPiSessionName } from '../shared/piSession';
@@ -49,6 +49,7 @@ interface RuntimeHandle {
   sessionPath?:string;
   error?:string;
   isCompacting?:boolean;
+  queue:PiQueueState;
   unsubscribe:()=>void;
   usageRefresh?:Promise<void>;
   usageRefreshPending?:boolean;
@@ -291,7 +292,7 @@ export class PiManager {
   private async startRuntime(projectId:string,sessionId?:string,sessionPath?:string){
     const project=this.project(projectId);const client=await this.createClient(project.root,sessionPath);
     const provisional=sessionId??crypto.randomUUID();
-    const handle:RuntimeHandle={sessionId:provisional,projectId,cwd:project.root,client,status:'starting',sessionPath,unsubscribe:()=>{}};
+    const handle:RuntimeHandle={sessionId:provisional,projectId,cwd:project.root,client,status:'starting',sessionPath,queue:{steering:[],followUp:[]},unsubscribe:()=>{}};
     handle.unsubscribe=client.onEvent(event=>this.onEvent(handle,event));
     try{
       await client.start();
@@ -330,7 +331,7 @@ export class PiManager {
     const state=await handle.client.getState();
     if(!state.sessionId||!state.sessionFile)throw new Error('Pi did not create the new session.');
     this.runtimes.delete(previousId);
-    handle.sessionId=state.sessionId;handle.sessionPath=state.sessionFile;handle.status='idle';handle.error=undefined;
+    handle.sessionId=state.sessionId;handle.sessionPath=state.sessionFile;handle.status='idle';handle.error=undefined;handle.queue={steering:[],followUp:[]};
     this.runtimes.set(handle.sessionId,handle);this.selectedSessionId=handle.sessionId;
     return handle;
   }
@@ -476,7 +477,7 @@ export class PiManager {
         provider:state.model.provider,id:state.model.id,contextWindow:state.model.contextWindow,
         reasoning:!!state.model.reasoning,
       }:undefined,thinkingLevel:state.thinkingLevel,availableThinkingLevels:levels,
-      autoCompactionEnabled:state.autoCompactionEnabled,isCompacting:state.isCompacting,
+      autoCompactionEnabled:state.autoCompactionEnabled,isCompacting:state.isCompacting,queue:handle.queue,
       usage:stats?this.mapUsage(stats):undefined,error:handle.error};
   }
 
@@ -489,6 +490,20 @@ export class PiManager {
       const disposition=await handle.client.prompt(message);
       if(disposition==='handled'){handle.status='idle';this.emit(handle,'status','idle');}
     }catch(error){this.fail(handle,error);throw error;}
+  }
+
+  async steer(projectId:string,sessionId:string,text:string){
+    const message=text.trim();if(!message)throw new Error('Message is required.');const handle=await this.ensureRuntime(projectId,sessionId);
+    if(handle.status!=='running')throw new Error('Steering is only available while the session is running.');await handle.client.steer(message);
+  }
+
+  async followUp(projectId:string,sessionId:string,text:string){
+    const message=text.trim();if(!message)throw new Error('Message is required.');const handle=await this.ensureRuntime(projectId,sessionId);
+    if(handle.status!=='running')throw new Error('Follow-up is only available while the session is running.');await handle.client.followUp(message);
+  }
+
+  async clearQueue(projectId:string,sessionId:string):Promise<PiQueueState>{
+    const handle=await this.ensureRuntime(projectId,sessionId);return handle.client.clearQueue();
   }
 
   async stop(projectId:string,sessionId:string){
@@ -514,6 +529,7 @@ export class PiManager {
   }
 
   private onEvent(handle:RuntimeHandle,event:JsonEvent){
+    if(event.type==='queue_update')handle.queue={steering:[...event.steering],followUp:[...event.followUp]};
     this.emit(handle,'event',event);
     if(event.type==='agent_start'){handle.status='running';this.emit(handle,'status','running');}
     if(event.type==='turn_end')void this.refreshUsage(handle);

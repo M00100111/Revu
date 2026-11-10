@@ -1,4 +1,4 @@
-import type { PiCompactionResponse, PiDiscoveredSessionResponse, PiEntriesResponse, PiForkResponse, PiModelDefaults, PiModelSummary, PiProviderStatus, PiSessionCatalog, PiSessionFolderResult, PiSessionInfo, PiSessionScope, PiSessionSearchResult, PiSessionSnapshot, PiSessionSort, PiSessionTreeResponse, PiThinkingLevel, PiTreeNavigationResponse, RevuPiEvent } from '../shared/piTypes';
+import type { PiCompactionResponse, PiDiscoveredSessionResponse, PiEntriesResponse, PiForkResponse, PiModelDefaults, PiModelSummary, PiProviderStatus, PiQueueState, PiSessionCatalog, PiSessionFolderResult, PiSessionInfo, PiSessionScope, PiSessionSearchResult, PiSessionSnapshot, PiSessionSort, PiSessionTreeResponse, PiThinkingLevel, PiTreeNavigationResponse, RevuPiEvent } from '../shared/piTypes';
 interface RevuResponse<T>{ok:boolean;value?:T;status?:number;error?:string}
 interface RevuAgentApi {
   listSessions(projectId:string,scope?:PiSessionScope):Promise<RevuResponse<PiSessionCatalog>>;
@@ -20,6 +20,9 @@ interface RevuAgentApi {
   renameSession(projectId:string,sessionId:string,name:string,scope?:PiSessionScope):Promise<RevuResponse<void>>;
   deleteSession(projectId:string,sessionId:string,scope?:PiSessionScope):Promise<RevuResponse<void>>;
   prompt(projectId:string,sessionId:string,text:string):Promise<RevuResponse<void>>;
+  steer(projectId:string,sessionId:string,text:string):Promise<RevuResponse<void>>;
+  followUp(projectId:string,sessionId:string,text:string):Promise<RevuResponse<void>>;
+  clearQueue(projectId:string,sessionId:string):Promise<RevuResponse<PiQueueState>>;
   stop(projectId:string,sessionId:string):Promise<RevuResponse<void>>;
   compact(projectId:string,sessionId:string):Promise<RevuResponse<PiCompactionResponse>>;
   setAutoCompaction(projectId:string,sessionId:string,enabled:boolean):Promise<RevuResponse<PiSessionSnapshot>>;
