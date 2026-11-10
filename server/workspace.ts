@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFile, readdir, realpath, stat, open, unlink, mkdir } from 'node:fs/promises';
 import { watch, type FSWatcher } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import type { Project, Snapshot, ProjectStatus, ChangeFile } from '../shared/types';
+import type { Project, Snapshot, ProjectStatus, ChangeFile, ProjectPathEntry } from '../shared/types';
 import { git } from './git';
 
 export interface Registered extends Project { repo: string | null; watcher?: FSWatcher; gitWatcher?: FSWatcher }
@@ -102,6 +102,35 @@ export class Workspace {
     return entries.filter(e => e.name !== '.git' && (e.isFile() || e.isDirectory()))
       .map(e => ({ name: e.name, kind: e.isDirectory() ? 'directory' as const : 'file' as const }))
       .sort((a, b) => a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === 'directory' ? -1 : 1);
+  }
+  async paths(p:Registered):Promise<ProjectPathEntry[]> {
+    const found=new Map<string,ProjectPathEntry['kind']>();
+    const addFile=(rawPath:string)=>{
+      const path=rawPath.replaceAll('\\','/').replace(/^\.\//,'').replace(/^\/+|\/+$/g,'');
+      if(!path||path.split('/').some(part=>part.toLowerCase()==='.git'))return;
+      found.set(path,'file');
+      const parts=path.split('/');let current='';
+      for(const part of parts.slice(0,-1)){current=current?`${current}/${part}`:part;found.set(current,'directory');}
+    };
+    if(p.repo){
+      const output=(await git(p.root,['ls-files','-co','--exclude-standard','-z'])).toString('utf8');
+      for(const path of output.split('\0').filter(Boolean))addFile(path);
+    }else{
+      const pending=[''];const limit=50_000;
+      while(pending.length&&found.size<limit){
+        const parent=pending.shift()!;let entries;
+        try{entries=await readdir(await this.path(p,parent),{withFileTypes:true});}catch{continue;}
+        for(const entry of entries){
+          if(entry.name==='.git')continue;
+          const path=parent?`${parent}/${entry.name}`:entry.name;
+          if(entry.isDirectory()){found.set(path,'directory');pending.push(path);}
+          else if(entry.isFile())found.set(path,'file');
+          if(found.size>=limit)break;
+        }
+      }
+    }
+    return [...found].map(([path,kind])=>({path:kind==='directory'?`${path}/`:path,kind}))
+      .sort((a,b)=>a.path.localeCompare(b.path));
   }
   async read(p: Registered, path: string): Promise<Snapshot> {
     try { return decode(await readFile(await this.path(p, path, true))); }

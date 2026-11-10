@@ -38,6 +38,9 @@ declare global {
     revu:{
       invoke<T>(body:Record<string,unknown>):Promise<RevuResponse<T>>;
       copyText(text:string):Promise<boolean>;
+      chooseChatFiles(projectId:string):Promise<string[]>;
+      filePath(file:File):string;
+      saveChatImage(mimeType:string,bytes:Uint8Array):Promise<string>;
       openExternal(url:string):Promise<boolean>;
       windowControl(action:'minimize'|'maximize'|'close'|'isMaximized'):Promise<boolean>;
       setDirty(dirty:boolean):void;

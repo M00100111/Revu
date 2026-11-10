@@ -1,6 +1,7 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell, type OpenDialogOptions, type SaveDialogOptions } from 'electron';
+import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { diff } from '../server/git';
 import { HttpError, Workspace } from '../server/workspace';
@@ -54,6 +55,7 @@ async function invoke(body:Record<string,any>){
   const project=workspace.get(body.projectId);
   switch(body.action){
     case 'list':return workspace.list(project,body.path??'');
+    case 'chatPaths':return workspace.paths(project);
     case 'read':return workspace.read(project,body.path);
     case 'baseline':return {...await workspace.baseline(project,body.path),base:project.base};
     case 'status':return workspace.status(project);
@@ -154,6 +156,20 @@ ipcMain.handle('revu:open-external',async(_event,value:unknown)=>{
 ipcMain.handle('revu:copy-text',(_event,value:unknown)=>{
   if(typeof value!=='string')return false;
   try{clipboard.writeText(value);return true;}catch{return false;}
+});
+ipcMain.handle('revu:choose-chat-files',async(event,projectId:unknown)=>{
+  if(typeof projectId!=='string')return [];
+  const project=workspace.get(projectId);const owner=BrowserWindow.fromWebContents(event.sender)??mainWindow;
+  const options:OpenDialogOptions={title:'Choose Files',defaultPath:project.root,properties:['openFile','multiSelections']};
+  const result=owner?await dialog.showOpenDialog(owner,options):await dialog.showOpenDialog(options);
+  return result.canceled?[]:result.filePaths;
+});
+ipcMain.handle('revu:save-chat-image',async(_event,mimeType:unknown,bytes:unknown)=>{
+  if(typeof mimeType!=='string'||!(bytes instanceof Uint8Array))throw new Error('Invalid clipboard image.');
+  const extensions:Record<string,string>={'image/png':'png','image/jpeg':'jpg','image/gif':'gif','image/webp':'webp','image/bmp':'bmp'};
+  const extension=extensions[mimeType];if(!extension)throw new Error('Unsupported clipboard image format.');
+  const directory=join(app.getPath('temp'),'revu-chat');await mkdir(directory,{recursive:true});
+  const path=join(directory,`clipboard-${randomUUID()}.${extension}`);await writeFile(path,bytes);return path;
 });
 
 ipcMain.handle('revu:window-control',(event,action:'minimize'|'maximize'|'close'|'isMaximized')=>{

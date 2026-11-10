@@ -6,6 +6,7 @@ export interface Project {
   base: string | null;
 }
 export interface Entry { name: string; kind: 'file' | 'directory' }
+export interface ProjectPathEntry { path:string; kind:'file'|'directory' }
 export interface Snapshot {
   text: string;
   hash: string;

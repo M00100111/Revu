@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { PiAgentRequest, PiCompactionResponse, PiDiscoveredSessionResponse, PiEntriesResponse, PiForkResponse, PiModelDefaults, PiModelSummary, PiProviderStatus, PiSessionCatalog, PiSessionFolderResult, PiSessionInfo, PiSessionScope, PiSessionSearchResult, PiSessionSnapshot, PiSessionSort, PiSessionTreeResponse, PiThinkingLevel, PiTreeNavigationResponse, RevuPiEvent } from '../shared/piTypes';
 
 const agentInvoke=<T>(body:PiAgentRequest)=>ipcRenderer.invoke('revu:agent',body) as Promise<{ok:boolean;value?:T;error?:string}>;
@@ -6,6 +6,9 @@ const agentInvoke=<T>(body:PiAgentRequest)=>ipcRenderer.invoke('revu:agent',body
 contextBridge.exposeInMainWorld('revu',{
   invoke:(body:Record<string,unknown>)=>ipcRenderer.invoke('revu:invoke',body),
   copyText:(text:string)=>ipcRenderer.invoke('revu:copy-text',text) as Promise<boolean>,
+  chooseChatFiles:(projectId:string)=>ipcRenderer.invoke('revu:choose-chat-files',projectId) as Promise<string[]>,
+  filePath:(file:File)=>webUtils.getPathForFile(file),
+  saveChatImage:(mimeType:string,bytes:Uint8Array)=>ipcRenderer.invoke('revu:save-chat-image',mimeType,bytes) as Promise<string>,
   openExternal:(url:string)=>ipcRenderer.invoke('revu:open-external',url) as Promise<boolean>,
   windowControl:(action:'minimize'|'maximize'|'close'|'isMaximized')=>ipcRenderer.invoke('revu:window-control',action),
   setDirty:(dirty:boolean)=>ipcRenderer.send('revu:dirty-state',dirty),
