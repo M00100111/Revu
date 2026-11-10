@@ -17,7 +17,8 @@ export interface ToolState {
   id:string;runKey:string;name:string;status:'running'|'done'|'error';args?:unknown;result?:unknown;
   startedAt?:number;durationMs?:number;usage?:MessageUsage;
 }
-export interface ChatState extends PiSessionSnapshot {tools:ToolState[];streamText:string;streamThinking:string;entries:PiSessionEntry[];leafId:string|null;queue:PiQueueState;settledRuns:Record<string,number>}
+interface AutoRetryState {attempt:number;maxAttempts:number;errorMessage:string;deadline:number}
+export interface ChatState extends PiSessionSnapshot {tools:ToolState[];streamText:string;streamThinking:string;entries:PiSessionEntry[];leafId:string|null;queue:PiQueueState;autoRetry?:AutoRetryState;settledRuns:Record<string,number>}
 export interface ToolDetailRequest {
   id:string;projectId:string;sessionId:string;toolCallId:string;fileName:string;content:string;
 }
@@ -115,7 +116,8 @@ const toolsFromMessages=(messages:unknown[]):ToolState[]=>{
 export const withSnapshot=(snapshot:PiSessionSnapshot,previous?:ChatState):ChatState=>({
   ...snapshot,tools:(()=>{const history=toolsFromMessages(snapshot.messages);const known=new Set(history.map(tool=>tool.id));
     return [...history,...(previous?.tools??[]).filter(tool=>tool.status==='running'&&!known.has(tool.id))];})(),streamText:'',streamThinking:'',
-  entries:previous?.entries??[],leafId:previous?.leafId??null,queue:snapshot.queue??previous?.queue??EMPTY_QUEUE,settledRuns:previous?.settledRuns??{},
+  entries:previous?.entries??[],leafId:previous?.leafId??null,queue:snapshot.queue??previous?.queue??EMPTY_QUEUE,
+  autoRetry:snapshot.status==='running'?previous?.autoRetry:undefined,settledRuns:previous?.settledRuns??{},
 });
 const withEntries=(state:ChatState,response:PiEntriesResponse):ChatState=>({...state,entries:response.entries,leafId:response.leafId});
 const activeEntries=(state:ChatState)=>{
@@ -440,7 +442,7 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
   const [usageOpen,setUsageOpen]=useState(false);const [contextOpen,setContextOpen]=useState(false);const [contextOperation,setContextOperation]=useState<'compact'|'toggle'|null>(null);
   const [sessionInfoOpen,setSessionInfoOpen]=useState(false);const [sessionInfo,setSessionInfo]=useState<PiSessionInfo|undefined>();const [sessionInfoError,setSessionInfoError]=useState('');
   const [compactionResult,setCompactionResult]=useState<PiCompactionResult|undefined>();const [activeRunKey,setActiveRunKey]=useState('');
-  const [toolClock,setToolClock]=useState(Date.now());
+  const [toolClock,setToolClock]=useState(Date.now());const [retryClock,setRetryClock]=useState(Date.now());
   const [previewRunKey,setPreviewRunKey]=useState('');const [previewTop,setPreviewTop]=useState(8);
   const [openSessionIds,setOpenSessionIds]=useState<Record<string,string[]>>({});
   const [sessionTabCapacity,setSessionTabCapacity]=useState(1);const [sessionMenuOpen,setSessionMenuOpen]=useState(false);const [sessionMenuStyle,setSessionMenuStyle]=useState<React.CSSProperties>({});
@@ -483,8 +485,8 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
   const visibleSessionTabs=visibleSessionCount?sessionTabs.slice(-visibleSessionCount).reverse():[];
   const runs=current?buildRuns(current):[];const usage=current?.usage??emptyUsage;
   const queue=current?.queue??EMPTY_QUEUE;const queueCount=queue.steering.length+queue.followUp.length;
-  const agentRunning=current?.status==='running';
-  const showQueuePanel=!!selectedProjectId;
+  const agentRunning=current?.status==='running';const agentActive=agentRunning||current?.status==='stopping';
+  const showQueuePanel=!!agentActive&&(!!draft.trim()||queueCount>0);
   const previewRun=runs.find(run=>run.key===previewRunKey);
   const statsRun=runs.find(run=>run.key===statsRunKey);
   const mentionOptions=mention?mentionEntries.map(entry=>({entry,score:fuzzyPathScore(entry,mention.query)}))
@@ -495,6 +497,7 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
     setToolClock(Date.now());const timer=setInterval(()=>setToolClock(Date.now()),1000);
     return()=>clearInterval(timer);
   },[hasRunningTool,selectedSessionId]);
+  useEffect(()=>{if(!current?.autoRetry)return;setRetryClock(Date.now());const timer=setInterval(()=>setRetryClock(Date.now()),250);return()=>clearInterval(timer);},[current?.autoRetry?.deadline]);
   useEffect(()=>{
     if(!current)return;
     for(const tool of current.tools)if(tool.status==='running')onUpdateToolDetail(toolDetail(current,tool,toolClock));
@@ -635,6 +638,12 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
           steering:Array.isArray(payload.steering)?payload.steering.filter((item):item is string=>typeof item==='string'):[],
           followUp:Array.isArray(payload.followUp)?payload.followUp.filter((item):item is string=>typeof item==='string'):[],
         }};
+        if(payload.type==='auto_retry_start')updated={...updated,autoRetry:{
+          attempt:typeof payload.attempt==='number'?payload.attempt:1,maxAttempts:typeof payload.maxAttempts==='number'?payload.maxAttempts:1,
+          errorMessage:typeof payload.errorMessage==='string'?payload.errorMessage:'The model request failed.',
+          deadline:Date.now()+(typeof payload.delayMs==='number'?Math.max(0,payload.delayMs):0),
+        }};
+        if(payload.type==='auto_retry_end'||payload.type==='agent_settled')updated={...updated,autoRetry:undefined};
         const next={...chatsRef.current,[event.sessionId]:updated};chatsRef.current=next;setChats(next);
         if(payload.type==='tool_execution_start'||payload.type==='tool_execution_update'||payload.type==='tool_execution_end'){
           const tool=updated.tools.find(item=>item.id===String(payload.toolCallId));if(tool)onUpdateToolDetail(toolDetail(updated,tool));
@@ -886,7 +895,7 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
         <div className="agent-chat-body" ref={bodyRef}>{!projects.length?<div className="agent-welcome"><strong>Open a folder to start</strong></div>
         :!current?null
         :<>{runs.map(run=>{const messageKey=`${current.sessionId}:${run.key}`;const answerText=assistantText(run);const showSource=sourceMessageKeys.has(messageKey);
-          const latest=run.key===runs.at(-1)?.key;const showActions=shouldShowAssistantActions(latest,current.status);const showRetryMock=latest;return <section className="agent-run" key={run.key} ref={element=>{if(element)runRefs.current.set(run.key,element);else runRefs.current.delete(run.key);}}>
+          const latest=run.key===runs.at(-1)?.key;const showActions=shouldShowAssistantActions(latest,current.status);const autoRetry=latest?current.autoRetry:undefined;return <section className="agent-run" key={run.key} ref={element=>{if(element)runRefs.current.set(run.key,element);else runRefs.current.delete(run.key);}}>
           {run.user&&<article className="agent-message user"><div className="agent-user-bubble">{run.user}</div>
             <footer className="agent-user-meta">{run.userTimestamp!==undefined&&<time dateTime={new Date(run.userTimestamp).toISOString()} title={formatFullTime(run.userTimestamp)}>{formatTime(run.userTimestamp)}</time>}
               <button type="button" title={copiedMessageKey===messageKey+'-user'?'Copied':'Copy'} aria-label="Copy user message" onClick={()=>void copyMessage(messageKey+'-user',run.user)}>
@@ -894,7 +903,7 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
               <button type="button" disabled={!run.userEntryId||!['idle','error'].includes(current.status)||current.isCompacting} title={run.userEntryId?'Fork from this message':'Fork unavailable'} aria-label="Fork from this message" onClick={()=>void forkRun(run)}>
                 <Icon name="fork" size={12}/></button>
             </footer></article>}
-          {(!!run.items.length||showActions||showRetryMock)&&<div className="agent-response"><span className="agent-role" role="img" aria-label="Pi"><Icon name="pi" size={16}/></span>{run.items.map(part=>part.type==='answer'
+          {(!!run.items.length||showActions||!!autoRetry)&&<div className="agent-response"><span className="agent-role" role="img" aria-label="Pi"><Icon name="pi" size={16}/></span>{run.items.map(part=>part.type==='answer'
             ?part.streaming||showSource?<div className={'agent-answer source '+(part.streaming?'streaming':'')} key={part.key}>{part.text}</div>
               :<MarkdownContent text={part.text??''} key={part.key}/>
             :part.type==='thinking'?<details className="agent-thinking" key={part.key} open={part.streaming||undefined} onToggle={()=>requestAnimationFrame(updateRunRail)}><summary title="Toggle thought process"><Icon name="thought" size={16}/><span>Thought process</span></summary><div>{part.text}</div></details>
@@ -903,8 +912,8 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
               <div className="agent-tool-detail"><button type="button" className="agent-tool-expand" title="Open in Editor" aria-label={`Open ${part.tool.name} details in editor`}
                 onClick={()=>onOpenToolDetail(toolDetail(current,part.tool!,toolClock))}><Icon name="expand" size={13}/></button>
                 <pre>{JSON.stringify({input:part.tool.args,output:part.tool.result},null,2)}</pre></div></details>)}
-            {showRetryMock&&<div className="agent-auto-retry" role="status"><span><strong>Auto retry</strong><span>Network request failed</span></span>
-              <small>Retrying 1/3 in 2s</small></div>}
+            {autoRetry&&<div className="agent-auto-retry" role="status"><span><strong>Auto retry</strong><span title={autoRetry.errorMessage}>{autoRetry.errorMessage}</span></span>
+              <small>{`Retrying ${autoRetry.attempt}/${autoRetry.maxAttempts} in ${Math.max(0,Math.ceil((autoRetry.deadline-retryClock)/1000))}s`}</small></div>}
             {showActions&&<div className="agent-response-footer"><div className="agent-message-actions" aria-label="Assistant message actions">
                 <button type="button" disabled={!answerText} title={copiedMessageKey===messageKey+'-assistant'?'Copied':'Copy'} aria-label="Copy assistant message"
                   onClick={()=>void copyMessage(messageKey+'-assistant',answerText)}><Icon name={copiedMessageKey===messageKey+'-assistant'?'check':'copy'} size={14}/></button>
