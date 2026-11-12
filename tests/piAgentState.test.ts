@@ -116,5 +116,16 @@ test('Pi run statistics combine assistant and model-backed tool usage',()=>{
   assert.equal(run.stats.assistantUsage.totalTokens,150);
   assert.equal(run.stats.toolUsage.totalTokens,20);
   assert.equal(run.stats.calls.length,3);
+  assert.equal(run.stopReason,'stop');
   assert.equal(run.items.find(item=>item.type==='tool')?.tool?.usage?.totalTokens,20);
+});
+
+test('Pi chat Run keeps the latest Assistant stop reason',()=>{
+  const state=withSnapshot({...snapshot,messages:[
+    {role:'user',content:'Inspect this',timestamp:1},
+    {role:'assistant',content:[{type:'toolCall',id:'tool-1',name:'read',arguments:{}}],timestamp:2,stopReason:'toolUse'},
+    {role:'toolResult',toolCallId:'tool-1',toolName:'read',content:[],isError:false,timestamp:3},
+    {role:'assistant',content:[{type:'text',text:'Stopped'}],timestamp:4,stopReason:'aborted'},
+  ]});
+  assert.equal(buildRuns(state)[0].stopReason,'aborted');
 });
