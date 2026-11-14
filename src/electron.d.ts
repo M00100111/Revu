@@ -1,4 +1,4 @@
-import type { PiCompactionResponse, PiDiscoveredSessionResponse, PiEntriesResponse, PiForkResponse, PiModelDefaults, PiModelSummary, PiProviderStatus, PiQueueState, PiSessionCatalog, PiSessionFolderResult, PiSessionInfo, PiSessionScope, PiSessionSearchResult, PiSessionSnapshot, PiSessionSort, PiSessionTreeResponse, PiThinkingLevel, PiTreeNavigationResponse, RevuPiEvent } from '../shared/piTypes';
+import type { PiCompactionConfiguration, PiCompactionResponse, PiContextProjection, PiDirectBashState, PiDiscoveredSessionResponse, PiEntriesResponse, PiForkResponse, PiModelDefaults, PiModelSummary, PiProviderStatus, PiQueueState, PiSessionCatalog, PiSessionFolderResult, PiSessionInfo, PiSessionScope, PiSessionSearchResult, PiSessionSnapshot, PiSessionSort, PiSessionTreeResponse, PiThinkingLevel, PiTreeNavigationResponse, RevuPiEvent } from '../shared/piTypes';
 interface RevuResponse<T>{ok:boolean;value?:T;status?:number;error?:string}
 interface RevuAgentApi {
   listSessions(projectId:string,scope?:PiSessionScope):Promise<RevuResponse<PiSessionCatalog>>;
@@ -23,8 +23,13 @@ interface RevuAgentApi {
   steer(projectId:string,sessionId:string,text:string):Promise<RevuResponse<void>>;
   followUp(projectId:string,sessionId:string,text:string):Promise<RevuResponse<void>>;
   clearQueue(projectId:string,sessionId:string):Promise<RevuResponse<PiQueueState>>;
+  setRetainedQueue(projectId:string,sessionId:string,queue:PiQueueState):Promise<RevuResponse<PiQueueState>>;
   stop(projectId:string,sessionId:string):Promise<RevuResponse<void>>;
-  compact(projectId:string,sessionId:string):Promise<RevuResponse<PiCompactionResponse>>;
+  bash(projectId:string,sessionId:string,command:string,excludeFromContext:boolean):Promise<RevuResponse<PiDirectBashState>>;
+  abortBash(projectId:string,sessionId:string):Promise<RevuResponse<void>>;
+  abortRetry(projectId:string,sessionId:string):Promise<RevuResponse<void>>;
+  compact(projectId:string,sessionId:string,customInstructions?:string):Promise<RevuResponse<PiCompactionResponse>>;
+  getContextProjection(projectId:string,sessionId:string):Promise<RevuResponse<PiContextProjection>>;
   setAutoCompaction(projectId:string,sessionId:string,enabled:boolean):Promise<RevuResponse<PiSessionSnapshot>>;
   listProviders():Promise<RevuResponse<PiProviderStatus[]>>;
   saveApiKey(providerId:string,key:string):Promise<RevuResponse<void>>;
@@ -34,6 +39,8 @@ interface RevuAgentApi {
   setThinkingLevel(projectId:string,sessionId:string,level:PiThinkingLevel):Promise<RevuResponse<PiSessionSnapshot>>;
   getModelDefaults(projectId?:string):Promise<RevuResponse<PiModelDefaults>>;
   saveModelDefaults(provider:string,modelId:string,thinkingLevel:PiThinkingLevel):Promise<RevuResponse<void>>;
+  getCompactionConfiguration(projectId?:string):Promise<RevuResponse<PiCompactionConfiguration>>;
+  saveCompactionConfiguration(configuration:PiCompactionConfiguration):Promise<RevuResponse<void>>;
   onEvent(listener:(event:RevuPiEvent)=>void):()=>void;
 }
 declare global {

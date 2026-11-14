@@ -4,21 +4,32 @@ import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type {
-  PiCompactionResponse,PiEntriesResponse,PiForkResponse,PiModelDefaults,PiModelSummary,PiProviderStatus,
+  PiCompactionConfiguration,PiCompactionResponse,PiContextProjection,PiDirectBashState,PiEntriesResponse,PiForkResponse,PiModelDefaults,PiModelSummary,PiProviderStatus,
   PiQueueState,PiRuntimeStatus,PiSessionCatalog,PiSessionInfo,PiSessionScope,PiSessionSearchResult,PiSessionSnapshot,PiSessionSort,
   PiSessionSummary,PiSessionTreeResponse,PiThinkingLevel,PiTreeNavigationResponse,PiUsageStats,RevuPiEvent,
 } from '../shared/piTypes';
 import { calculatePiCacheHitPercent, countPiSessionRuns, derivedPiSessionName, isReservedPiSessionName } from '../shared/piSession';
 import { searchPiSessions } from '../shared/piSessionSearch';
+import { acceptPiQueueHead, cleanPiQueue, emptyPiQueue, mergePiQueues } from '../shared/piQueue';
 import { copyPiSessions, nativePiSessionDir, nativePiSessionsDir } from './piSessionStorage';
 
 type PiModule=typeof import('@earendil-works/pi-coding-agent');
-type RpcClient=InstanceType<PiModule['RpcClient']>&{
+type NativeRpcClient=InstanceType<PiModule['RpcClient']>;
+type RpcClient=Omit<NativeRpcClient,'bash'>&{
+  bash:(command:string,excludeFromContext?:boolean)=>Promise<{output:string;exitCode:number|null;cancelled:boolean;truncated:boolean;fullOutputPath?:string}>;
   navigateTree:(entryId:string,options:{summarize:boolean;customInstructions?:string})=>Promise<{editorText?:string;cancelled:boolean;aborted?:boolean}>;
   setEntryLabel:(entryId:string,label?:string)=>Promise<void>;
   abortBranchSummary:()=>Promise<void>;
   getCacheWarmingInfo:()=>Promise<{mode:string;status?:CacheWarmingStatus;cacheWaste:CacheWaste}>;
+  getContextProjection:()=>Promise<PiContextProjection>;
+  reloadSettings:()=>Promise<void>;
 };
+interface CompactionSettingsManager {
+  getCompactionConfiguration:()=>PiCompactionConfiguration;
+  setCompactionConfiguration:(configuration:PiCompactionConfiguration)=>void;
+  flush:()=>Promise<void>;
+  drainErrors:()=>Array<{error:Error}>;
+}
 interface CacheWarmingDecision {phase:'streaming'|'idle';warmCost:number;missCost:number;continuationProbability:number;expectedSavings:number;economicsAvailable:boolean;action:'warm'|'stop'}
 interface CacheWarmingStatus {state:'inactive'|'scheduled'|'refreshing';reason?:string;nextWarmAt?:number;decision?:CacheWarmingDecision;extensionOverride?:boolean}
 interface CacheWaste {missedTokens:number;missedCost:number;missCount:number}
@@ -50,6 +61,7 @@ interface RuntimeHandle {
   error?:string;
   isCompacting?:boolean;
   queue:PiQueueState;
+  bash?:PiDirectBashState;
   unsubscribe:()=>void;
   usageRefresh?:Promise<void>;
   usageRefreshPending?:boolean;
@@ -108,6 +120,8 @@ function formatWarmingStatus(status?:CacheWarmingStatus){
 
 export class PiManager {
   private readonly runtimes=new Map<string,RuntimeHandle>();
+  private readonly retainedQueues=new Map<string,PiQueueState>();
+  private readonly retainedQueueRevisions=new Map<string,number>();
   private readonly runCountCache=new Map<string,{modifiedAt:number;count:number}>();
   private readonly treeOperations=new Map<string,TreeOperation>();
   private selectedSessionId:string|null=null;
@@ -142,6 +156,24 @@ export class PiManager {
     return this.modulePromise;
   }
   private project(projectId:string){return this.options.resolveProject(projectId);}
+  private queueKey(projectId:string,sessionId:string){return `${projectId}\u0000${sessionId}`;}
+  private retainedQueue(projectId:string,sessionId:string){return this.retainedQueues.get(this.queueKey(projectId,sessionId))??emptyPiQueue();}
+  private updateRetainedQueue(handle:Pick<RuntimeHandle,'projectId'|'sessionId'>,queue:PiQueueState){
+    const normalized=cleanPiQueue(queue);const key=this.queueKey(handle.projectId,handle.sessionId);
+    if(normalized.steering.length||normalized.followUp.length)this.retainedQueues.set(key,normalized);else this.retainedQueues.delete(key);
+    this.retainedQueueRevisions.set(key,(this.retainedQueueRevisions.get(key)??0)+1);
+    this.emit(handle,'retained-queue',normalized);return normalized;
+  }
+  private retainQueue(handle:Pick<RuntimeHandle,'projectId'|'sessionId'>,queue:PiQueueState){
+    return this.updateRetainedQueue(handle,mergePiQueues(this.retainedQueue(handle.projectId,handle.sessionId),cleanPiQueue(queue)));
+  }
+  private captureLiveQueue(handle:RuntimeHandle){
+    const mirrored=cleanPiQueue(handle.queue);if(!mirrored.steering.length&&!mirrored.followUp.length)return;const key=this.queueKey(handle.projectId,handle.sessionId);
+    const existing=this.retainedQueue(handle.projectId,handle.sessionId);handle.queue=emptyPiQueue();this.updateRetainedQueue(handle,mergePiQueues(existing,mirrored));
+    const revision=this.retainedQueueRevisions.get(key);void handle.client.clearQueue().then(cleared=>{
+      if(this.retainedQueueRevisions.get(key)!==revision)return;this.updateRetainedQueue(handle,mergePiQueues(existing,cleared));
+    }).catch(()=>{});
+  }
   private emit(handle:Pick<RuntimeHandle,'sessionId'|'projectId'>,type:RevuPiEvent['type'],payload?:unknown){
     this.options.emit({sessionId:handle.sessionId,projectId:handle.projectId,type,payload});
   }
@@ -220,7 +252,7 @@ export class PiManager {
     const {dir}=await this.sessionLocation(cwd);args.push('--session-dir',dir);
     if(sessionPath)args.push('--session',sessionPath);
     else if(ephemeral)args.push('--no-session');
-    return new RpcClient({cwd,cliPath:this.cliPath(),env:await this.childEnv(),args}) as RpcClient;
+    return new RpcClient({cwd,cliPath:this.cliPath(),env:await this.childEnv(),args}) as unknown as RpcClient;
   }
 
   private async listedSessions(projectId:string,scope:PiSessionScope){
@@ -292,7 +324,7 @@ export class PiManager {
   private async startRuntime(projectId:string,sessionId?:string,sessionPath?:string){
     const project=this.project(projectId);const client=await this.createClient(project.root,sessionPath);
     const provisional=sessionId??crypto.randomUUID();
-    const handle:RuntimeHandle={sessionId:provisional,projectId,cwd:project.root,client,status:'starting',sessionPath,queue:{steering:[],followUp:[]},unsubscribe:()=>{}};
+    const handle:RuntimeHandle={sessionId:provisional,projectId,cwd:project.root,client,status:'starting',sessionPath,queue:emptyPiQueue(),unsubscribe:()=>{}};
     handle.unsubscribe=client.onEvent(event=>this.onEvent(handle,event));
     try{
       await client.start();
@@ -331,7 +363,9 @@ export class PiManager {
     const state=await handle.client.getState();
     if(!state.sessionId||!state.sessionFile)throw new Error('Pi did not create the new session.');
     this.runtimes.delete(previousId);
-    handle.sessionId=state.sessionId;handle.sessionPath=state.sessionFile;handle.status='idle';handle.error=undefined;handle.queue={steering:[],followUp:[]};
+    const previousQueueKey=this.queueKey(handle.projectId,previousId);const retained=this.retainedQueue(handle.projectId,previousId);this.retainedQueues.delete(previousQueueKey);this.retainedQueueRevisions.delete(previousQueueKey);
+    handle.sessionId=state.sessionId;handle.sessionPath=state.sessionFile;handle.status='idle';handle.error=undefined;handle.queue=emptyPiQueue();
+    if(retained.steering.length||retained.followUp.length){const queueKey=this.queueKey(handle.projectId,handle.sessionId);this.retainedQueues.set(queueKey,retained);this.retainedQueueRevisions.set(queueKey,1);}
     this.runtimes.set(handle.sessionId,handle);this.selectedSessionId=handle.sessionId;
     return handle;
   }
@@ -392,7 +426,7 @@ export class PiManager {
   private async stopForTreeOperation(handle:RuntimeHandle){
     let state=await handle.client.getState();
     if(handle.status==='running'||handle.status==='stopping'||state.isStreaming){
-      await handle.client.clearQueue();await handle.client.abort();handle.status='idle';this.emit(handle,'status','idle');
+      const cleared=await handle.client.clearQueue();this.retainQueue(handle,cleared);await handle.client.abort();handle.status='idle';this.emit(handle,'status','idle');
       state=await handle.client.getState();
     }
     if(state.isCompacting)throw new Error('Wait for the current compaction to finish before navigating the session tree.');
@@ -478,6 +512,7 @@ export class PiManager {
         reasoning:!!state.model.reasoning,
       }:undefined,thinkingLevel:state.thinkingLevel,availableThinkingLevels:levels,
       autoCompactionEnabled:state.autoCompactionEnabled,isCompacting:state.isCompacting,queue:handle.queue,
+      retainedQueue:this.retainedQueue(handle.projectId,handle.sessionId),bash:handle.bash,
       usage:stats?this.mapUsage(stats):undefined,error:handle.error};
   }
 
@@ -488,8 +523,17 @@ export class PiManager {
     handle.status='running';handle.error=undefined;this.emit(handle,'status','running');
     try{
       const disposition=await handle.client.prompt(message);
+      if(disposition!=='handled')await this.flushRetainedQueue(handle);
       if(disposition==='handled'){handle.status='idle';this.emit(handle,'status','idle');}
     }catch(error){this.fail(handle,error);throw error;}
+  }
+
+  private async flushRetainedQueue(handle:RuntimeHandle){
+    const pending=this.retainedQueue(handle.projectId,handle.sessionId);let next={steering:[...pending.steering],followUp:[...pending.followUp]};
+    try{
+      while(next.steering.length){await handle.client.steer(next.steering[0]);next=acceptPiQueueHead(next,'steering');this.updateRetainedQueue(handle,next);}
+      while(next.followUp.length){await handle.client.followUp(next.followUp[0]);next=acceptPiQueueHead(next,'followUp');this.updateRetainedQueue(handle,next);}
+    }catch(error){this.emit(handle,'event',{type:'retained_queue_error',message:errorMessage(error)});}
   }
 
   async steer(projectId:string,sessionId:string,text:string){
@@ -503,20 +547,41 @@ export class PiManager {
   }
 
   async clearQueue(projectId:string,sessionId:string):Promise<PiQueueState>{
-    const handle=await this.ensureRuntime(projectId,sessionId);return handle.client.clearQueue();
+    const handle=this.runtimes.get(sessionId);
+    if(!handle){this.project(projectId);return this.updateRetainedQueue({projectId,sessionId},emptyPiQueue());}
+    if(handle.projectId!==projectId)throw new Error('Session does not belong to this project.');
+    const cleared=await handle.client.clearQueue();handle.queue=emptyPiQueue();this.updateRetainedQueue(handle,emptyPiQueue());return cleared;
+  }
+
+  async setRetainedQueue(projectId:string,sessionId:string,queue:PiQueueState){
+    this.project(projectId);return this.updateRetainedQueue({projectId,sessionId},queue);
   }
 
   async stop(projectId:string,sessionId:string){
     this.project(projectId);const handle=this.runtimes.get(sessionId);if(!handle)return;
     handle.status='stopping';this.emit(handle,'status','stopping');
-    try{await handle.client.clearQueue();await handle.client.abort();}
+    try{const cleared=await handle.client.clearQueue();this.retainQueue(handle,cleared);await handle.client.abort();}
     catch(error){this.fail(handle,error);throw error;}
   }
 
-  async compact(projectId:string,sessionId:string):Promise<PiCompactionResponse>{
+  async bash(projectId:string,sessionId:string,command:string,excludeFromContext:boolean):Promise<PiDirectBashState>{
+    const value=command.trim();if(!value)throw new Error('Command is required.');const handle=await this.ensureRuntime(projectId,sessionId);
+    if(handle.bash?.status==='running')throw new Error('Wait for the current Bash command to finish.');
+    const started:PiDirectBashState={command:value,output:'',status:'running',excludeFromContext,startedAt:Date.now()};handle.bash=started;this.emit(handle,'bash',started);
+    try{
+      const result=await handle.client.bash(value,excludeFromContext);const completed:PiDirectBashState={...started,...result,status:result.cancelled||result.exitCode===0?'done':'error'};
+      handle.bash=completed;this.emit(handle,'bash',completed);handle.bash=undefined;this.emit(handle,'sessions-changed');return completed;
+    }catch(error){const failed:PiDirectBashState={...started,output:handle.bash?.output??'',status:'error',error:errorMessage(error)};
+      handle.bash=failed;this.emit(handle,'bash',failed);handle.bash=undefined;throw error;}
+  }
+
+  async abortBash(projectId:string,sessionId:string){const handle=await this.ensureRuntime(projectId,sessionId);await handle.client.abortBash();}
+  async abortRetry(projectId:string,sessionId:string){const handle=await this.ensureRuntime(projectId,sessionId);await handle.client.abortRetry();}
+
+  async compact(projectId:string,sessionId:string,customInstructions?:string):Promise<PiCompactionResponse>{
     const handle=await this.ensureRuntime(projectId,sessionId);
     if(handle.status==='running'||handle.status==='stopping')throw new Error('Stop the session before compacting context.');
-    const result=await handle.client.compact();
+    const result=await handle.client.compact(customInstructions?.trim()||undefined);
     const snapshot=await this.snapshot(handle);
     return {snapshot,result:{tokensBefore:result.tokensBefore,estimatedTokensAfter:result.estimatedTokensAfter,
       cost:result.usage?.cost.total}};
@@ -528,14 +593,22 @@ export class PiManager {
     return this.snapshot(handle);
   }
 
+  async getContextProjection(projectId:string,sessionId:string){
+    const handle=await this.ensureRuntime(projectId,sessionId);return handle.client.getContextProjection();
+  }
+
   private onEvent(handle:RuntimeHandle,event:JsonEvent){
     if(event.type==='queue_update')handle.queue={steering:[...event.steering],followUp:[...event.followUp]};
+    if(event.type==='bash_execution_update'&&handle.bash?.status==='running'){
+      handle.bash={...handle.bash,output:handle.bash.output+event.delta};this.emit(handle,'bash',handle.bash);
+    }
     this.emit(handle,'event',event);
     if(event.type==='agent_start'){handle.status='running';this.emit(handle,'status','running');}
     if(event.type==='turn_end')void this.refreshUsage(handle);
     if(event.type==='compaction_start')handle.isCompacting=true;
     if(event.type==='compaction_end')handle.isCompacting=false;
     if(event.type==='agent_settled'){
+      this.captureLiveQueue(handle);
       handle.status='idle';this.emit(handle,'status','idle');
       this.emit(handle,'sessions-changed');
       void this.refreshUsage(handle).finally(()=>{
@@ -555,6 +628,7 @@ export class PiManager {
   }
 
   private fail(handle:RuntimeHandle,error:unknown){
+    this.captureLiveQueue(handle);
     handle.status='error';handle.error=errorMessage(error);this.emit(handle,'error',handle.error);
   }
 
@@ -599,7 +673,7 @@ export class PiManager {
   async deleteSession(projectId:string,sessionId:string,scope:PiSessionScope='current'){
     const runtime=this.runtimes.get(sessionId);let path=runtime?.sessionPath;
     if(!path){try{path=(await this.findSession(projectId,sessionId,scope)).path;}catch{path=undefined;}}
-    await this.disposeRuntime(sessionId);
+    await this.disposeRuntime(sessionId);const queueKey=this.queueKey(projectId,sessionId);this.retainedQueues.delete(queueKey);this.retainedQueueRevisions.delete(queueKey);
     if(path){this.runCountCache.delete(path);await shell.trashItem(path);}
     if(this.selectedSessionId===sessionId)this.selectedSessionId=null;
     this.options.emit({sessionId,projectId,type:'sessions-changed'});
@@ -607,6 +681,8 @@ export class PiManager {
 
   async closeProject(projectId:string){
     await Promise.all([...this.runtimes.values()].filter(item=>item.projectId===projectId).map(item=>this.disposeRuntime(item.sessionId)));
+    for(const key of this.retainedQueues.keys())if(key.startsWith(`${projectId}\u0000`)){this.retainedQueues.delete(key);this.retainedQueueRevisions.delete(key);}
+    for(const key of this.retainedQueueRevisions.keys())if(key.startsWith(`${projectId}\u0000`))this.retainedQueueRevisions.delete(key);
     this.runCountCache.clear();
   }
 
@@ -643,6 +719,28 @@ export class PiManager {
     const {SettingsManager}=await this.module();const settings=SettingsManager.create(process.cwd(),this.agentDir);
     settings.setDefaultModelAndProvider(provider,modelId);settings.setDefaultThinkingLevel(thinkingLevel);await settings.flush();
     const errors=settings.drainErrors();if(errors.length)throw new Error(errors.map(item=>item.error.message).join('\n'));
+  }
+
+  async getCompactionConfiguration(projectId?:string){
+    const cwd=projectId?this.project(projectId).root:process.cwd();const {SettingsManager}=await this.module();
+    return (SettingsManager.create(cwd,this.agentDir) as unknown as CompactionSettingsManager).getCompactionConfiguration();
+  }
+
+  async saveCompactionConfiguration(configuration:PiCompactionConfiguration){
+    const integer=(value:number,label:string)=>{if(!Number.isSafeInteger(value)||value<0)throw new Error(`${label} must be a non-negative integer.`);return value;};
+    const modelOverrides:PiCompactionConfiguration['modelOverrides']={};
+    for(const [key,value] of Object.entries(configuration.modelOverrides)){
+      if(!key.trim()||!key.includes('/'))throw new Error('Model override keys must use provider/modelId.');const entry:{reserveTokens?:number;keepRecentTokens?:number}={};
+      if(value.reserveTokens!==undefined)entry.reserveTokens=integer(value.reserveTokens,`${key} reserveTokens`);
+      if(value.keepRecentTokens!==undefined)entry.keepRecentTokens=integer(value.keepRecentTokens,`${key} keepRecentTokens`);
+      if(entry.reserveTokens!==undefined||entry.keepRecentTokens!==undefined)modelOverrides[key]=entry;
+    }
+    const normalized:PiCompactionConfiguration={enabled:!!configuration.enabled,
+      reserveTokens:integer(configuration.reserveTokens,'reserveTokens'),keepRecentTokens:integer(configuration.keepRecentTokens,'keepRecentTokens'),modelOverrides};
+    const {SettingsManager}=await this.module();const settings=SettingsManager.create(process.cwd(),this.agentDir) as unknown as CompactionSettingsManager;
+    settings.setCompactionConfiguration(normalized);await settings.flush();const errors=settings.drainErrors();
+    if(errors.length)throw new Error(errors.map(item=>item.error.message).join('\n'));
+    await Promise.all([...this.runtimes.values()].map(handle=>handle.client.reloadSettings().catch(()=>{})));
   }
 
   private async disposeRuntime(sessionId:string){

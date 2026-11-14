@@ -130,8 +130,13 @@ async function invokeAgent(body:PiAgentRequest,sourceWindow?:BrowserWindow|null)
     case 'steer':return piManager.steer(body.projectId,body.sessionId,body.text);
     case 'followUp':return piManager.followUp(body.projectId,body.sessionId,body.text);
     case 'clearQueue':return piManager.clearQueue(body.projectId,body.sessionId);
+    case 'setRetainedQueue':return piManager.setRetainedQueue(body.projectId,body.sessionId,body.queue);
     case 'stop':return piManager.stop(body.projectId,body.sessionId);
-    case 'compact':return piManager.compact(body.projectId,body.sessionId);
+    case 'bash':return piManager.bash(body.projectId,body.sessionId,body.command,body.excludeFromContext);
+    case 'abortBash':return piManager.abortBash(body.projectId,body.sessionId);
+    case 'abortRetry':return piManager.abortRetry(body.projectId,body.sessionId);
+    case 'compact':return piManager.compact(body.projectId,body.sessionId,body.customInstructions);
+    case 'getContextProjection':return piManager.getContextProjection(body.projectId,body.sessionId);
     case 'setAutoCompaction':return piManager.setAutoCompaction(body.projectId,body.sessionId,body.enabled);
     case 'listProviders':return piManager.listProviders();
     case 'saveApiKey':return piManager.saveApiKey(body.providerId,body.key);
@@ -141,6 +146,8 @@ async function invokeAgent(body:PiAgentRequest,sourceWindow?:BrowserWindow|null)
     case 'setThinkingLevel':return piManager.setThinkingLevel(body.projectId,body.sessionId,body.level);
     case 'getModelDefaults':return piManager.getModelDefaults(body.projectId);
     case 'saveModelDefaults':return piManager.saveModelDefaults(body.provider,body.modelId,body.thinkingLevel);
+    case 'getCompactionConfiguration':return piManager.getCompactionConfiguration(body.projectId);
+    case 'saveCompactionConfiguration':return piManager.saveCompactionConfiguration(body.configuration);
   }
 }
 

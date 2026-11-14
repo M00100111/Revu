@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
-import type { PiAgentRequest, PiCompactionResponse, PiDiscoveredSessionResponse, PiEntriesResponse, PiForkResponse, PiModelDefaults, PiModelSummary, PiProviderStatus, PiQueueState, PiSessionCatalog, PiSessionFolderResult, PiSessionInfo, PiSessionScope, PiSessionSearchResult, PiSessionSnapshot, PiSessionSort, PiSessionTreeResponse, PiThinkingLevel, PiTreeNavigationResponse, RevuPiEvent } from '../shared/piTypes';
+import type { PiAgentRequest, PiCompactionConfiguration, PiCompactionResponse, PiContextProjection, PiDirectBashState, PiDiscoveredSessionResponse, PiEntriesResponse, PiForkResponse, PiModelDefaults, PiModelSummary, PiProviderStatus, PiQueueState, PiSessionCatalog, PiSessionFolderResult, PiSessionInfo, PiSessionScope, PiSessionSearchResult, PiSessionSnapshot, PiSessionSort, PiSessionTreeResponse, PiThinkingLevel, PiTreeNavigationResponse, RevuPiEvent } from '../shared/piTypes';
 
 const agentInvoke=<T>(body:PiAgentRequest)=>ipcRenderer.invoke('revu:agent',body) as Promise<{ok:boolean;value?:T;error?:string}>;
 
@@ -47,8 +47,14 @@ contextBridge.exposeInMainWorld('revu',{
     steer:(projectId:string,sessionId:string,text:string)=>agentInvoke<void>({action:'steer',projectId,sessionId,text}),
     followUp:(projectId:string,sessionId:string,text:string)=>agentInvoke<void>({action:'followUp',projectId,sessionId,text}),
     clearQueue:(projectId:string,sessionId:string)=>agentInvoke<PiQueueState>({action:'clearQueue',projectId,sessionId}),
+    setRetainedQueue:(projectId:string,sessionId:string,queue:PiQueueState)=>agentInvoke<PiQueueState>({action:'setRetainedQueue',projectId,sessionId,queue}),
     stop:(projectId:string,sessionId:string)=>agentInvoke<void>({action:'stop',projectId,sessionId}),
-    compact:(projectId:string,sessionId:string)=>agentInvoke<PiCompactionResponse>({action:'compact',projectId,sessionId}),
+    bash:(projectId:string,sessionId:string,command:string,excludeFromContext:boolean)=>
+      agentInvoke<PiDirectBashState>({action:'bash',projectId,sessionId,command,excludeFromContext}),
+    abortBash:(projectId:string,sessionId:string)=>agentInvoke<void>({action:'abortBash',projectId,sessionId}),
+    abortRetry:(projectId:string,sessionId:string)=>agentInvoke<void>({action:'abortRetry',projectId,sessionId}),
+    compact:(projectId:string,sessionId:string,customInstructions?:string)=>agentInvoke<PiCompactionResponse>({action:'compact',projectId,sessionId,customInstructions}),
+    getContextProjection:(projectId:string,sessionId:string)=>agentInvoke<PiContextProjection>({action:'getContextProjection',projectId,sessionId}),
     setAutoCompaction:(projectId:string,sessionId:string,enabled:boolean)=>
       agentInvoke<PiSessionSnapshot>({action:'setAutoCompaction',projectId,sessionId,enabled}),
     listProviders:()=>agentInvoke<PiProviderStatus[]>({action:'listProviders'}),
@@ -62,6 +68,9 @@ contextBridge.exposeInMainWorld('revu',{
     getModelDefaults:(projectId?:string)=>agentInvoke<PiModelDefaults>({action:'getModelDefaults',projectId}),
     saveModelDefaults:(provider:string,modelId:string,thinkingLevel:PiThinkingLevel)=>
       agentInvoke<void>({action:'saveModelDefaults',provider,modelId,thinkingLevel}),
+    getCompactionConfiguration:(projectId?:string)=>agentInvoke<PiCompactionConfiguration>({action:'getCompactionConfiguration',projectId}),
+    saveCompactionConfiguration:(configuration:PiCompactionConfiguration)=>
+      agentInvoke<void>({action:'saveCompactionConfiguration',configuration}),
     onEvent:(listener:(event:RevuPiEvent)=>void)=>{
       const receive=(_event:Electron.IpcRendererEvent,value:RevuPiEvent)=>listener(value);
       ipcRenderer.on('revu:agent-event',receive);

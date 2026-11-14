@@ -123,6 +123,43 @@ export interface PiQueueState {
   followUp:string[];
 }
 
+export interface PiDirectBashState {
+  command:string;
+  output:string;
+  status:'running'|'done'|'error';
+  excludeFromContext:boolean;
+  startedAt:number;
+  exitCode?:number|null;
+  cancelled?:boolean;
+  truncated?:boolean;
+  fullOutputPath?:string;
+  error?:string;
+}
+
+export interface PiContextProjectionEntry {
+  sourceEntry:PiSessionEntry;
+  messages:unknown[];
+}
+
+export interface PiContextProjection {
+  entries:PiContextProjectionEntry[];
+  messages:unknown[];
+  thinkingLevel:string;
+  model:{provider:string;modelId:string}|null;
+}
+
+export interface PiCompactionModelOverride {
+  reserveTokens?:number;
+  keepRecentTokens?:number;
+}
+
+export interface PiCompactionConfiguration {
+  enabled:boolean;
+  reserveTokens:number;
+  keepRecentTokens:number;
+  modelOverrides:Record<string,PiCompactionModelOverride>;
+}
+
 export interface PiSessionSnapshot {
   sessionId:string;
   projectId:string;
@@ -135,6 +172,8 @@ export interface PiSessionSnapshot {
   autoCompactionEnabled:boolean;
   isCompacting:boolean;
   queue?:PiQueueState;
+  retainedQueue?:PiQueueState;
+  bash?:PiDirectBashState;
   usage?:PiUsageStats;
   error?:string;
 }
@@ -164,7 +203,7 @@ export interface PiModelDefaults {
 export interface RevuPiEvent {
   sessionId:string;
   projectId:string;
-  type:'event'|'status'|'usage'|'error'|'sessions-changed';
+  type:'event'|'status'|'usage'|'error'|'sessions-changed'|'bash'|'retained-queue';
   payload?:unknown;
 }
 
@@ -192,8 +231,13 @@ export type PiAgentRequest=
   |{action:'steer';projectId:string;sessionId:string;text:string}
   |{action:'followUp';projectId:string;sessionId:string;text:string}
   |{action:'clearQueue';projectId:string;sessionId:string}
+  |{action:'setRetainedQueue';projectId:string;sessionId:string;queue:PiQueueState}
   |{action:'stop';projectId:string;sessionId:string}
-  |{action:'compact';projectId:string;sessionId:string}
+  |{action:'bash';projectId:string;sessionId:string;command:string;excludeFromContext:boolean}
+  |{action:'abortBash';projectId:string;sessionId:string}
+  |{action:'abortRetry';projectId:string;sessionId:string}
+  |{action:'compact';projectId:string;sessionId:string;customInstructions?:string}
+  |{action:'getContextProjection';projectId:string;sessionId:string}
   |{action:'setAutoCompaction';projectId:string;sessionId:string;enabled:boolean}
   |{action:'listProviders'}
   |{action:'saveApiKey';providerId:string;key:string}
@@ -202,4 +246,6 @@ export type PiAgentRequest=
   |{action:'setModel';projectId:string;sessionId:string;provider:string;modelId:string}
   |{action:'setThinkingLevel';projectId:string;sessionId:string;level:PiThinkingLevel}
   |{action:'getModelDefaults';projectId?:string}
-  |{action:'saveModelDefaults';provider:string;modelId:string;thinkingLevel:PiThinkingLevel};
+  |{action:'saveModelDefaults';provider:string;modelId:string;thinkingLevel:PiThinkingLevel}
+  |{action:'getCompactionConfiguration';projectId?:string}
+  |{action:'saveCompactionConfiguration';configuration:PiCompactionConfiguration};
