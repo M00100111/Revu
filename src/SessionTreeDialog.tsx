@@ -17,6 +17,7 @@ const contentText=(content:unknown)=>typeof content==='string'?content:Array.isA
 }).filter(Boolean).join('\n'):'';
 const message=(entry:PiSessionEntry)=>record(entry.message);
 const normalized=(value:string)=>value.replace(/[\n\t]+/g,' ').replace(/\s+/g,' ').trim();
+const entryJson=(entry:PiSessionEntry)=>JSON.stringify(entry,null,2);
 
 const toolCallsFromTree=(tree:PiSessionTreeNode[])=>{const calls=new Map<string,ToolCall>();const visit=(node:PiSessionTreeNode)=>{
   if(node.entry.type==='message'&&message(node.entry).role==='assistant'){const content=message(node.entry).content;
@@ -54,17 +55,6 @@ const displayText=(node:PiSessionTreeNode,toolCalls?:ReadonlyMap<string,ToolCall
   if(entry.type==='session_info')return {kind:'meta',text:`[title: ${String(entry.name??'empty')}]`};
   if(entry.type==='custom')return {kind:'meta',text:`[custom: ${String(entry.customType??'')}]`};
   return {kind:'meta',text:`[${entry.type}]`};
-};
-
-const copyText=(node:PiSessionTreeNode)=>{
-  const entry=node.entry;
-  if(entry.type==='message'){
-    const item=message(entry);if(item.role==='bashExecution')return String(item.command??'').trim();
-    return (contentText(item.content)||String(item.errorMessage??'')).trim();
-  }
-  if(entry.type==='custom_message')return contentText(entry.content).trim();
-  if(entry.type==='compaction'||entry.type==='branch_summary')return String(entry.summary??'').trim();
-  return '';
 };
 
 const formatLabelTime=(value:string)=>{
@@ -129,6 +119,7 @@ export default function SessionTreeDialog({projectId,sessionId,onClose,onNavigat
   const [navigationTarget,setNavigationTarget]=useState<PiSessionTreeNode|null>(null);const [customPrompt,setCustomPrompt]=useState(false);
   const [instructions,setInstructions]=useState('');const [navigating,setNavigating]=useState(false);const [cancelling,setCancelling]=useState(false);
   const [labelTarget,setLabelTarget]=useState<PiSessionTreeNode|null>(null);const [label,setLabel]=useState('');
+  const [detailTarget,setDetailTarget]=useState<PiSessionEntry|null>(null);
   useEffect(()=>{let cancelled=false;setLoading(true);void window.revu.agent.getSessionTree(projectId,sessionId).then(result=>{
     if(!result.ok)throw new Error(result.error||'Could not load the session tree.');if(!cancelled){setTree(result.value!);setSelected(result.value!.leafId??'');}
   }).catch(error=>{if(!cancelled)notify('error',error instanceof Error?error.message:String(error));}).finally(()=>{if(!cancelled)setLoading(false);});return()=>{cancelled=true;};},[projectId,sessionId]);
@@ -149,10 +140,11 @@ export default function SessionTreeDialog({projectId,sessionId,onClose,onNavigat
   const applyLabel=async(node:PiSessionTreeNode,value?:string)=>{try{const result=await window.revu.agent.setSessionEntryLabel(projectId,sessionId,node.entry.id,value).then(response=>{
     if(!response.ok)throw new Error(response.error||'Could not update the label.');return response.value!;});setTree(result);setLabelTarget(null);
   }catch(error){notify('error',error instanceof Error?error.message:String(error));}};
-  const contextMenu=async(event:React.MouseEvent,node:PiSessionTreeNode)=>{setSelected(node.entry.id);const text=copyText(node);
-    const action=await showContextMenu(event,[{id:'copy',label:'Copy',disabled:!text},{id:'label',label:node.label?'Edit Label':'Set Label'},
+  const contextMenu=async(event:React.MouseEvent,node:PiSessionTreeNode)=>{setSelected(node.entry.id);
+    const action=await showContextMenu(event,[{id:'detail',label:'Detail'},{id:'copy',label:'Copy'},{id:'label',label:node.label?'Edit Label':'Set Label'},
       ...(node.label?[{id:'removeLabel' as const,label:'Remove Label'}]:[])] as const);
-    if(action==='copy'&&text){if(!await window.revu.copyText(text))notify('error','Could not copy the entry.');}
+    if(action==='detail')setDetailTarget(node.entry);
+    if(action==='copy'&&!await window.revu.copyText(entryJson(node.entry)))notify('error','Could not copy the entry.');
     if(action==='label'){setLabelTarget(node);setLabel(node.label??'');}if(action==='removeLabel')void applyLabel(node,undefined);};
   return <div className="agent-modal-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget&&!navigating)onClose();}}>
     <section className="agent-modal session-tree-dialog" role="dialog" aria-modal="true" aria-label="Session Tree">
@@ -191,5 +183,10 @@ export default function SessionTreeDialog({projectId,sessionId,onClose,onNavigat
       <header><strong>{labelTarget.label?'Edit Label':'Set Label'}</strong></header><div className="tree-label-input"><input autoFocus value={label} onChange={event=>setLabel(event.target.value)} placeholder="Label"/></div>
       <footer><button type="button" onClick={()=>setLabelTarget(null)}>Cancel</button><button className="agent-primary" type="submit">Save</button></footer>
     </form></div>}
+    {detailTarget&&<div className="agent-nested-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)setDetailTarget(null);}}>
+      <section className="agent-tree-prompt session-tree-detail" role="dialog" aria-modal="true" aria-label="Entry Detail">
+        <header><strong>Entry Detail</strong><button className="agent-icon-button" onClick={()=>setDetailTarget(null)} aria-label="Close"><Icon name="close" size={14}/></button></header>
+        <pre>{entryJson(detailTarget)}</pre>
+      </section></div>}
   </div>;
 }
