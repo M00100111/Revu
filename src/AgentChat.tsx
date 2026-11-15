@@ -200,6 +200,40 @@ export const formatAgentTokens=(value:number)=>{
   return value>=1_000_000?compact(value/1_000_000,'m'):value>=1000?compact(value/1000,'k'):String(value);
 };
 export const formatContextPercent=(value?:number|null)=>`${(value??0).toFixed(2)}%`;
+const sourceRoles=(messages:unknown[])=>messages.map(message=>String(record(message).role??'')).filter(Boolean);
+const blockSummary=(content:unknown)=>{
+  const blocks=Array.isArray(content)?content.map(record):[];
+  const calls=blocks.filter(block=>block.type==='toolCall').map(block=>String(block.name??'tool'));
+  if(calls.length)return `toolCall ${calls.slice(0,3).join(', ')}${calls.length>3?` +${calls.length-3}`:''}`;
+  const thinking=blocks.find(block=>block.type==='thinking');
+  if(thinking&&typeof thinking.thinking==='string')return `thinking: ${thinking.thinking}`;
+  const images=blocks.filter(block=>block.type==='image').length;
+  return images?(images===1?'image':`${images} images`):'';
+};
+const sourcePreview=(entry:PiSessionEntry)=>{
+  const value=record(entry);const clip=(text:string)=>text.replace(/\s+/g,' ').trim().slice(0,120);
+  switch(entry.type){
+    case 'message':{
+      const item=record(value.message);const role=String(item.role??'');
+      if(role==='bashExecution')return clip(`$ ${String(item.command??'')}`);
+      if(role==='toolResult'){const tool=String(item.toolName??'tool');const body=clip(messageText(item))||clip(blockSummary(item.content));return body?`${tool}: ${body}`:tool;}
+      if(role==='system'){const sections=record(item.sections);const preamble=typeof sections.preamble==='string'?clip(sections.preamble):'';
+        return preamble||clip(messageText(item))||(Object.keys(sections).length?'system prompt':'');}
+      return clip(messageText(item))||clip(blockSummary(item.content))||clip(String(item.errorMessage??''))||'(no content)';
+    }
+    case 'custom_message':return clip(messageText(value.content))||'custom message';
+    case 'branch_summary':return clip(String(value.summary??''))||'branch summary';
+    case 'compaction':return `${formatAgentTokens(Number(value.tokensBefore??0))} tokens · ${clip(String(value.summary??''))}`;
+    case 'model_change':return `${String(value.provider??'')}/${String(value.modelId??'')}`;
+    case 'thinking_level_change':return String(value.thinkingLevel??'');
+    case 'label':return clip(String(value.label??'(cleared)'));
+    case 'session_info':return clip(String(value.name??'(empty)'));
+    case 'custom':return clip(String(value.customType??''));
+    case 'context_edit':return value.replacement==null?`omit ${String(value.targetId??'')}`:`replace ${String(value.targetId??'')}`;
+    case 'usage':return [String(value.kind??'usage'),`${String(value.provider??'')}/${String(value.model??'')}`].join(' · ');
+    default:return '';
+  }
+};
 export const formatToolDuration=(value:number)=>{
   const seconds=Math.max(0,value)/1000;
   if(seconds<60)return `${seconds.toFixed(1)}s`;
@@ -1049,6 +1083,13 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
   const openContextDetail=async()=>{if(!current||!selectedProjectId)return;setContextOpen(false);setContextDetailOpen(true);setContextProjection(undefined);setContextProjectionError('');
     try{setContextProjection(await window.revu.agent.getContextProjection(selectedProjectId,current.sessionId).then(unwrap));}
     catch(error){setContextProjectionError(errorMessage(error));}};
+  const openContextJson=()=>{if(!current||!contextProjection)return;
+    onOpenToolDetail({id:`context:${current.sessionId}`,projectId:current.projectId,sessionId:current.sessionId,toolCallId:'context-projection',
+      fileName:`normalized-context-${current.sessionId.slice(0,8)}.json`,
+      content:messageJson({model:contextProjection.model,thinkingLevel:contextProjection.thinkingLevel,messages:contextProjection.messages})});};
+  const openSourceJson=(source:PiSessionEntry,messages:unknown[])=>{if(!current)return;
+    onOpenToolDetail({id:`entry:${current.sessionId}:${source.id}`,projectId:current.projectId,sessionId:current.sessionId,toolCallId:source.id,
+      fileName:`${source.type}-${source.id.slice(0,8)}.json`,content:messageJson({sourceEntry:source,messages})});};
   const loadModels=async()=>{if(!selectedProjectId)return;try{setModels(await window.revu.agent.listModels(selectedProjectId,current?.sessionId).then(unwrap));setModelMenu(true);}
     catch(error){setModels([]);notify('error',error instanceof Error?error.message:String(error));setModelMenu(true);}};
   const setModel=async(model:PiModelSummary)=>{if(!selectedProjectId)return;if(!current){setNewChatModel(model);return;}try{
@@ -1292,13 +1333,21 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
       </div>}
       {contextDetailOpen&&<div className="agent-chat-modal-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)setContextDetailOpen(false);}}>
         <section className="agent-chat-modal context-detail-dialog" role="dialog" aria-modal="true" aria-label="Context Detail">
-          <header><strong>Context Detail</strong><button className="agent-icon-button" onClick={()=>setContextDetailOpen(false)} aria-label="Close"><Icon name="close" size={14}/></button></header>
-          <div className="context-detail-content">{contextProjectionError?<p className="agent-empty">{contextProjectionError}</p>:!contextProjection?<p className="agent-empty">Loading context projection…</p>:<>
-            <dl><div><dt>Model</dt><dd>{contextProjection.model?`${contextProjection.model.provider}/${contextProjection.model.modelId}`:'None'}</dd></div><div><dt>Thinking</dt><dd>{contextProjection.thinkingLevel}</dd></div><div><dt>Messages</dt><dd>{contextProjection.messages.length}</dd></div></dl>
-            <section><h3>Sources</h3>{contextProjection.entries.map((entry,index)=><details key={`${entry.sourceEntry.id}:${index}`}><summary><span>{entry.sourceEntry.type}</span><code>{entry.sourceEntry.id}</code><small>{entry.messages.length} messages</small></summary>
-              <pre>{messageJson({sourceEntry:entry.sourceEntry,messages:entry.messages})}</pre></details>)}</section>
-            <section><h3>Normalized Context</h3><pre>{messageJson({model:contextProjection.model,thinkingLevel:contextProjection.thinkingLevel,messages:contextProjection.messages})}</pre></section>
-          </>}</div>
+          <header><strong>Context Detail</strong><span className="context-detail-actions">
+            <button className="agent-icon-button" title="Open normalized context" aria-label="Open normalized context" disabled={!contextProjection} onClick={openContextJson}><Icon name="json" size={21}/></button>
+            <button className="agent-icon-button" onClick={()=>setContextDetailOpen(false)} aria-label="Close"><Icon name="close" size={14}/></button>
+          </span></header>
+          <div className="context-detail-content">{contextProjectionError?<p className="agent-empty">{contextProjectionError}</p>:!contextProjection?<p className="agent-empty">Loading context projection…</p>:contextProjection.entries.length===0?<p className="agent-empty">No context sources yet.</p>:
+            <div className="context-source-list">{contextProjection.entries.map((entry,index)=>{const count=entry.messages.length;const roles=sourceRoles(entry.messages);
+              return <details key={`${entry.sourceEntry.id}:${index}`}><summary><span className="context-source-line">
+                <span className={count>0?'context-source-type active':'context-source-type'}>{entry.sourceEntry.type}</span>
+                {roles.map((role,roleIndex)=><span className={`context-source-role role-${role}`} key={roleIndex}>{role}</span>)}
+                <span className="context-source-preview">{sourcePreview(entry.sourceEntry)}</span>
+                {count>0&&<small className="context-source-count">{count} {count===1?'message':'messages'}</small>}
+              </span></summary><div className="context-source-body">
+                <button type="button" className="context-source-expand" title="Open in Editor" aria-label={`Open ${entry.sourceEntry.type} details in editor`} onClick={()=>openSourceJson(entry.sourceEntry,entry.messages)}><Icon name="expand" size={13}/></button>
+                <pre>{messageJson({sourceEntry:entry.sourceEntry,messages:entry.messages})}</pre></div></details>;})}</div>}
+          </div>
         </section>
       </div>}
     </aside>

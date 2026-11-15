@@ -22,6 +22,7 @@ const assets={
   tree:new URL('../assets/icons/chat/tree.svg',import.meta.url).href,
   format:new URL('../assets/icons/chat/format.svg',import.meta.url).href,
   image:new URL('../assets/icons/chat/image.svg',import.meta.url).href,
+  json:new URL('../assets/icons/chat/json.svg',import.meta.url).href,
   send:new URL('../assets/icons/chat/send.svg',import.meta.url).href,
   stop:new URL('../assets/icons/chat/stop.svg',import.meta.url).href,
   thought:new URL('../assets/icons/chat/thought.svg',import.meta.url).href,
