@@ -4,6 +4,8 @@ import type { Project } from './editor';
 import Icon from './Icon';
 import MarkdownContent from './MarkdownContent';
 import SessionTreeDialog from './SessionTreeDialog';
+import SummaryCard from './SummaryCard';
+import { historicalSummary, summaryActive, updateSummaryOperations, type SummaryOperation } from '../shared/piSummary';
 import { showContextMenu } from './ContextMenu';
 import { isReservedPiSessionName, threadPiSessions,type ThreadedPiSession } from '../shared/piSession';
 import { inlineDiff } from '../shared/inlineDiff';
@@ -20,11 +22,11 @@ export interface ToolState {
   startedAt?:number;durationMs?:number;usage?:MessageUsage;
 }
 export interface AutoRetryState {attempt:number;maxAttempts:number;errorMessage:string;deadline:number;cancelling?:boolean}
-export interface ChatState extends PiSessionSnapshot {tools:ToolState[];streamText:string;streamThinking:string;entries:PiSessionEntry[];leafId:string|null;queue:PiQueueState;bashHistory?:PiDirectBashState[];autoRetry?:AutoRetryState;settledRuns:Record<string,number>}
+export interface ChatState extends PiSessionSnapshot {tools:ToolState[];streamText:string;streamThinking:string;entries:PiSessionEntry[];leafId:string|null;queue:PiQueueState;bashHistory?:PiDirectBashState[];autoRetry?:AutoRetryState;settledRuns:Record<string,number>;summaryOperations:SummaryOperation[]}
 export interface ToolDetailRequest {
   id:string;projectId:string;sessionId:string;toolCallId:string;fileName:string;content:string;
 }
-interface RunItem {type:'answer'|'thinking'|'tool'|'fallback'|'bash'|'custom'|'branchSummary'|'compactionSummary';key:string;text?:string;tool?:ToolState;streaming?:boolean;label?:string;raw?:unknown;meta?:string;bash?:PiDirectBashState}
+interface RunItem {type:'answer'|'thinking'|'tool'|'fallback'|'bash'|'custom'|'branchSummary'|'compactionSummary'|'summaryOperation';key:string;text?:string;tool?:ToolState;streaming?:boolean;label?:string;raw?:unknown;meta?:string;bash?:PiDirectBashState;summary?:SummaryOperation}
 interface MessageUsage {input:number;output:number;cacheRead:number;cacheWrite:number;reasoning:number;totalTokens:number;cost:number}
 interface RunCall {key:string;type:'model'|'tool';name:string;durationMs?:number;usage?:MessageUsage}
 interface RunStats {elapsedMs?:number;modelTimeMs:number;toolTimeMs:number;assistantUsage:MessageUsage;toolUsage:MessageUsage;calls:RunCall[]}
@@ -145,6 +147,9 @@ export const withSnapshot=(snapshot:PiSessionSnapshot,previous?:ChatState):ChatS
   bash:snapshotBash(snapshot,previous),
   bashHistory:(previous?.bashHistory??[]).filter(item=>!bashRecorded(snapshot,item)),
   autoRetry:snapshot.status==='running'?previous?.autoRetry:undefined,settledRuns:previous?.settledRuns??{},
+  summaryOperations:snapshot.isCompacting&&!previous?.summaryOperations.some(operation=>operation.kind==='compaction'&&summaryActive(operation))
+    ?[...(previous?.summaryOperations??[]),{id:`restored-compaction-${snapshot.sessionId}-${previous?.summaryOperations.length??0}`,kind:'compaction',runKey:lastRunKey(snapshot.messages),status:'running',events:[]}]
+    :previous?.summaryOperations??[],
 });
 const withEntries=(state:ChatState,response:PiEntriesResponse):ChatState=>({...state,entries:response.entries,leafId:response.leafId});
 const activeEntries=(state:ChatState)=>{
@@ -153,7 +158,18 @@ const activeEntries=(state:ChatState)=>{
   return branch.reverse();
 };
 export const buildRuns=(state:ChatState):ChatRun[]=>{
-  const userEntries=activeEntries(state).filter(entry=>entry.type==='message'&&record(entry.message).role==='user');
+  const branch=activeEntries(state);const userEntries=branch.filter(entry=>entry.type==='message'&&record(entry.message).role==='user');
+  const placedSummaries=new Set<string>();
+  const summaryFor=(message:unknown)=>{
+    const value=record(message);const kind=value.role==='branchSummary'?'branchSummary':'compaction';
+    const entry=branch.find(entry=>entry.type===(kind==='compaction'?'compaction':'branch_summary')&&entry.summary===value.summary&&messageTimestamp(message)===Date.parse(entry.timestamp));
+    const historical=historicalSummary(message,entry);const timestamp=messageTimestamp(message);
+    const operation=state.summaryOperations.find(operation=>operation.kind===kind&&operation.status==='completed'&&!placedSummaries.has(operation.id)
+      &&operation.summary===value.summary&&(operation.entryId?operation.entryId===entry?.id:timestamp===undefined||operation.startedAt===undefined
+        ||timestamp>=operation.startedAt&&(operation.endedAt===undefined||timestamp<=operation.endedAt+1000)));
+    if(operation)placedSummaries.add(operation.id);
+    return operation?{...historical,...operation,cost:operation.cost??historical.cost,entryId:operation.entryId??historical.entryId}:historical;
+  };
   const runs:ChatRun[]=[];const tools=new Map(state.tools.map(tool=>[tool.id,tool]));const placed=new Set<string>();let current:ChatRun|undefined;let userIndex=0;
   const ensureRun=()=>current??(current={key:runKey(runs.length),user:'',items:[],stats:emptyRunStats()},runs.push(current),current);
   for(const message of state.messages){const item=record(message);const role=item.role;
@@ -179,14 +195,16 @@ export const buildRuns=(state:ChatState):ChatRun[]=>{
     if(role==='custom'&&item.display!==false){const run=ensureRun();run.items.push({type:'custom',key:`custom-${run.items.length}-${String(item.timestamp??'')}`,
       label:String(item.customType??'Custom'),text:messageText(message),raw:message});}
     if(role==='branchSummary'){const run=ensureRun();run.items.push({type:'branchSummary',key:`branch-${run.items.length}-${String(item.timestamp??'')}`,
-      label:'Branch Summary',text:String(item.summary??''),raw:message});}
+      label:'Branch Summary',text:String(item.summary??''),raw:message,summary:summaryFor(message)});}
     if(role==='compactionSummary'){const run=ensureRun();const tokens=numberValue(item.tokensBefore);run.items.push({type:'compactionSummary',key:`compaction-${run.items.length}-${String(item.timestamp??'')}`,
-      label:'Compaction Summary',text:String(item.summary??''),meta:tokens===undefined?undefined:`${formatAgentTokens(tokens)} tokens before`,raw:message});}
+      label:'Compaction Summary',text:String(item.summary??''),meta:tokens===undefined?undefined:`${formatAgentTokens(tokens)} tokens before`,raw:message,summary:summaryFor(message)});}
     if(!KNOWN_MESSAGE_ROLES.has(String(role??''))){const run=ensureRun();run.items.push({type:'fallback',key:`fallback-${run.items.length}`,
       label:String(role??'unknown'),text:messageText(message),raw:message});}
   }
   for(const tool of state.tools){if(placed.has(tool.id))continue;const run=runs.find(candidate=>candidate.key===tool.runKey)??ensureRun();run.items.push({type:'tool',key:tool.id,tool});placed.add(tool.id);}
   const live=ensureRun();if(state.streamThinking)live.items.push({type:'thinking',key:'stream-thinking',text:state.streamThinking,streaming:true});
+  for(const operation of state.summaryOperations){if(placedSummaries.has(operation.id))continue;
+    const run=runs.find(run=>run.key===operation.runKey)??live;run.items.push({type:'summaryOperation',key:operation.id,summary:operation});}
   if(state.streamText)live.items.push({type:'answer',key:'stream-answer',text:state.streamText,streaming:true});
   if(state.bashHistory?.length)for(const item of state.bashHistory)live.items.push({type:'bash',key:`direct-bash-${item.startedAt}-${item.command}`,bash:item});
   if(state.bash)live.items.push({type:'bash',key:'direct-bash-active',bash:state.bash});
@@ -407,6 +425,8 @@ function AgentSelect({value,groups,placeholder,onChange,disabled=false,placement
 
 export function updateEvent(current:ChatState,event:unknown):ChatState{
   const item=record(event);const type=item.type;
+  const summaries=updateSummaryOperations(current.summaryOperations,event,lastRunKey(current.messages));
+  if(summaries!==current.summaryOperations)current={...current,summaryOperations:summaries};
   if(type==='message_start'){
     const message=item.message;const role=record(message).role;
     if(role==='assistant')return {...current,streamText:'',streamThinking:''};
@@ -704,7 +724,8 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
     return()=>clearInterval(timer);
   },[hasRunningTool,selectedSessionId]);
   useEffect(()=>{if(current?.bash?.status==='running')return;setBashHint(false);if(bashHintTimer.current){clearTimeout(bashHintTimer.current);bashHintTimer.current=undefined;}},[current?.bash?.status,selectedSessionId]);
-  useEffect(()=>{if(!current?.autoRetry)return;setRetryClock(Date.now());const timer=setInterval(()=>setRetryClock(Date.now()),1000);return()=>clearInterval(timer);},[current?.autoRetry?.deadline,current?.sessionId]);
+  const summaryWaiting=current?.summaryOperations.some(operation=>operation.status==='waiting')??false;
+  useEffect(()=>{if(!current?.autoRetry&&!summaryWaiting)return;setRetryClock(Date.now());const timer=setInterval(()=>setRetryClock(Date.now()),1000);return()=>clearInterval(timer);},[current?.autoRetry?.deadline,summaryWaiting,current?.sessionId]);
   useEffect(()=>()=>{if(bashHintTimer.current)clearTimeout(bashHintTimer.current);},[]);
   useLayoutEffect(()=>{
     const input=textareaRef.current;if(!input)return;
@@ -922,7 +943,8 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
     if(event.type==='error'){
       clearDone(event.sessionId);
       const message=typeof event.payload==='string'?event.payload:'Pi Agent failed.';sendErrorNotice(message);
-      const currentChat=chatsRef.current[event.sessionId];if(currentChat){const next={...chatsRef.current,[event.sessionId]:{...currentChat,status:'error' as const,error:message}};chatsRef.current=next;setChats(next);}
+      const currentChat=chatsRef.current[event.sessionId];if(currentChat){const next={...chatsRef.current,[event.sessionId]:{
+        ...currentChat,status:'error' as const,error:message,summaryOperations:updateSummaryOperations(currentChat.summaryOperations,{type:'summary_interrupted',errorMessage:message},lastRunKey(currentChat.messages))}};chatsRef.current=next;setChats(next);}
       setSessions(current=>({...current,[event.projectId]:(current[event.projectId]??[]).map(session=>session.id===event.sessionId?{...session,status:'error'}:session)}));
     }
     if(event.type==='sessions-changed')void reloadSessions(event.projectId);
@@ -931,12 +953,12 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
     const body=bodyRef.current;if(!body)return;const frame=requestAnimationFrame(updateRunRail);const observer=new ResizeObserver(updateRunRail);observer.observe(body);
     for(const element of runRefs.current.values())observer.observe(element);body.addEventListener('scroll',updateRunRail,{passive:true});
     return()=>{cancelAnimationFrame(frame);observer.disconnect();body.removeEventListener('scroll',updateRunRail);};
-  },[selectedSessionId,width,current?.messages,current?.streamText,current?.streamThinking,current?.tools,updateRunRail]);
+  },[selectedSessionId,width,current?.messages,current?.streamText,current?.streamThinking,current?.tools,current?.summaryOperations,updateRunRail]);
   useLayoutEffect(()=>{const requested=pendingRunKey.current;if(!requested)return;const key=requested==='__latest__'?runs.at(-1)?.key:requested;
     const element=key?runRefs.current.get(key):undefined;if(key&&element&&bodyRef.current){skipAutoScroll.current=true;bodyRef.current.scrollTo({top:Math.max(0,element.offsetTop-12)});setActiveRunKey(key);}
     pendingRunKey.current=undefined;
   },[selectedSessionId,runs.length]);
-  useEffect(()=>{if(skipAutoScroll.current){skipAutoScroll.current=false;return;}bodyRef.current?.scrollTo({top:bodyRef.current.scrollHeight});},[current?.messages,current?.streamText,current?.streamThinking,current?.tools]);
+  useEffect(()=>{if(skipAutoScroll.current){skipAutoScroll.current=false;return;}bodyRef.current?.scrollTo({top:bodyRef.current.scrollHeight});},[current?.messages,current?.streamText,current?.streamThinking,current?.tools,current?.summaryOperations]);
   const startNewChat=()=>{if(!selectedProjectId)return;setSelectedSessionId(null);setNewChatModel(undefined);setDraft('');setSessionDialog(false);
     composerExpansionSource.current=null;composerManuallyCollapsed.current=false;setComposerExpanded(false);void loadNewChatDefaults(selectedProjectId);};
   const closeSessionTab=(sessionId:string)=>{
@@ -1075,7 +1097,7 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
   const confirmAbort=()=>{if(abortArmed){void stop();return;}setAbortArmed(true);if(abortTimer.current)clearTimeout(abortTimer.current);
     abortTimer.current=setTimeout(()=>setAbortArmed(false),2000);};
   const applyContextSnapshot=(snapshot:PiSessionSnapshot)=>setChats(state=>{const chat=state[snapshot.sessionId];if(!chat)return state;
-    const next={...state,[snapshot.sessionId]:{...chat,usage:snapshot.usage,autoCompactionEnabled:snapshot.autoCompactionEnabled,isCompacting:snapshot.isCompacting}};chatsRef.current=next;return next;});
+    const next={...state,[snapshot.sessionId]:withSnapshot(snapshot,chat)};chatsRef.current=next;return next;});
   const compactContext=async(customInstructions?:string)=>{if(!current||!selectedProjectId||contextOperation)return;setContextOperation('compact');setCompactionResult(undefined);setCustomCompactError('');try{
     const response=await window.revu.agent.compact(selectedProjectId,current.sessionId,customInstructions).then(unwrap);applyContextSnapshot(response.snapshot);setCompactionResult(response.result);
     if(customInstructions!==undefined){setCustomCompactOpen(false);setCustomCompactInstructions('');}
@@ -1087,6 +1109,9 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
     onOpenToolDetail({id:`context:${current.sessionId}`,projectId:current.projectId,sessionId:current.sessionId,toolCallId:'context-projection',
       fileName:`normalized-context-${current.sessionId.slice(0,8)}.json`,
       content:messageJson({model:contextProjection.model,thinkingLevel:contextProjection.thinkingLevel,messages:contextProjection.messages})});};
+  const openSummaryJson=(operation:SummaryOperation)=>{if(!current)return;
+    onOpenToolDetail({id:`summary:${current.sessionId}:${operation.id}`,projectId:current.projectId,sessionId:current.sessionId,toolCallId:operation.id,
+      fileName:`${operation.kind}-${operation.id}.summary.json`,content:messageJson(operation)});};
   const openSourceJson=(source:PiSessionEntry,messages:unknown[])=>{if(!current)return;
     onOpenToolDetail({id:`entry:${current.sessionId}:${source.id}`,projectId:current.projectId,sessionId:current.sessionId,toolCallId:source.id,
       fileName:`${source.type}-${source.id.slice(0,8)}.json`,content:messageJson({sourceEntry:source,messages})});};
@@ -1186,6 +1211,7 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
           const contentItems=answerIndex<0?run.items:run.items.slice(0,answerIndex+1);
           const trailingItems=answerIndex<0?[]:run.items.slice(answerIndex+1);
           const renderItem=(part:RunItem)=>{
+            if(part.summary)return <SummaryCard key={part.summary.id} operation={part.summary} now={summaryWaiting?retryClock:Date.now()} onOpenJson={openSummaryJson} onToggle={()=>requestAnimationFrame(updateRunRail)}/>;
             if(part.type==='answer')return part.streaming||showSource
               ?<div className={'agent-answer source '+(part.streaming?'streaming':'')} key={part.key}>{part.text}</div>
               :<MarkdownContent text={part.text??''} key={part.key}/>;
@@ -1376,6 +1402,7 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
       }).catch(error=>notify('error',errorMessage(error)));}} onClone={session=>void cloneSession(session)} onExport={session=>void exportSession(session)}
       onFolderChanged={()=>void reloadSessions(selectedProjectId)} onClose={()=>setSessionDialog(false)}/>}
     {treeDialog&&current&&<SessionTreeDialog projectId={current.projectId} sessionId={current.sessionId} onClose={()=>setTreeDialog(false)}
+      summaryOperation={current.summaryOperations.filter(operation=>operation.kind==='branchSummary').at(-1)} summaryNow={summaryWaiting?retryClock:Date.now()} onOpenSummaryJson={openSummaryJson}
       onNavigated={response=>void adoptTreeNavigation(response)} notify={notify}/>}
     {modelDialog&&selectedProjectId&&<ModelDialog projectId={selectedProjectId} sessionId={selectedSessionId??undefined} onClose={()=>setModelDialog(false)}
       onChanged={()=>{if(!selectedSessionId)void loadNewChatDefaults(selectedProjectId);}} notify={notify}/>} 

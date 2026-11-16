@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { PiSessionEntry,PiSessionTreeNode,PiSessionTreeResponse,PiTreeNavigationResponse } from '../shared/piTypes';
 import Icon from './Icon';
+import SummaryCard from './SummaryCard';
+import type { SummaryOperation } from '../shared/piSummary';
 import { showContextMenu } from './ContextMenu';
 
 type FilterMode='default'|'no-tools'|'user-only'|'labeled-only'|'all';
@@ -110,14 +112,16 @@ const activePath=(tree:PiSessionTreeNode[],leafId:string|null)=>{const byId=new 
   const collect=(node:PiSessionTreeNode)=>{byId.set(node.entry.id,node.entry);node.children.forEach(collect);};tree.forEach(collect);
   const result=new Set<string>();let current=leafId;while(current){const entry=byId.get(current);if(!entry)break;result.add(current);current=entry.parentId;}return result;};
 
-export default function SessionTreeDialog({projectId,sessionId,onClose,onNavigated,notify}:{
+export default function SessionTreeDialog({projectId,sessionId,onClose,onNavigated,notify,summaryOperation,summaryNow,onOpenSummaryJson}:{
   projectId:string;sessionId:string;onClose:()=>void;onNavigated:(response:PiTreeNavigationResponse)=>void;notify:Notify;
+  summaryOperation?:SummaryOperation;summaryNow:number;onOpenSummaryJson:(operation:SummaryOperation)=>void;
 }){
   const [tree,setTree]=useState<PiSessionTreeResponse>({tree:[],leafId:null});const [loading,setLoading]=useState(true);
   const [query,setQuery]=useState('');const [view,setView]=useState<ViewMode>('tree');const [filter,setFilter]=useState<FilterMode>('default');const [labelTime,setLabelTime]=useState(false);
   const [selected,setSelected]=useState('');const [folded,setFolded]=useState<Set<string>>(new Set());
   const [navigationTarget,setNavigationTarget]=useState<PiSessionTreeNode|null>(null);const [customPrompt,setCustomPrompt]=useState(false);
   const [instructions,setInstructions]=useState('');const [navigating,setNavigating]=useState(false);const [cancelling,setCancelling]=useState(false);
+  const [previousSummaryId,setPreviousSummaryId]=useState<string>();const [summaryRequested,setSummaryRequested]=useState(false);
   const [labelTarget,setLabelTarget]=useState<PiSessionTreeNode|null>(null);const [label,setLabel]=useState('');
   const [detailTarget,setDetailTarget]=useState<PiSessionEntry|null>(null);
   useEffect(()=>{let cancelled=false;setLoading(true);void window.revu.agent.getSessionTree(projectId,sessionId).then(result=>{
@@ -128,8 +132,9 @@ export default function SessionTreeDialog({projectId,sessionId,onClose,onNavigat
   const visible=useMemo(()=>filterTree(tree.tree,tree.leafId,filter,view,query,toolCalls,path),[tree,filter,view,query,toolCalls,path]);const rows=useMemo(()=>flatten(visible,folded),[visible,folded]);
   const toggleFold=(id:string)=>setFolded(current=>{const next=new Set(current);if(next.has(id))next.delete(id);else next.add(id);return next;});
   const openNavigation=(node:PiSessionTreeNode)=>{setSelected(node.entry.id);if(node.entry.id===tree.leafId){notify('info','Already at this point.');return;}
-    setNavigationTarget(node);setCustomPrompt(false);setInstructions('');};
+    setNavigationTarget(node);setCustomPrompt(false);setInstructions('');setSummaryRequested(false);};
   const navigate=async(summarize:boolean,customInstructions?:string)=>{if(!navigationTarget)return;setNavigating(true);setCancelling(false);try{
+    setPreviousSummaryId(summaryOperation?.id);setSummaryRequested(summarize);
     const result=await window.revu.agent.navigateSessionTree(projectId,sessionId,navigationTarget.entry.id,summarize,customInstructions).then(value=>{
       if(!value.ok)throw new Error(value.error||'Session tree navigation failed.');return value.value!;});
     setTree({tree:result.tree,leafId:result.leafId});if(result.cancelled||result.aborted){setNavigationTarget(null);notify('info','Branch navigation cancelled.');return;}
@@ -176,6 +181,7 @@ export default function SessionTreeDialog({projectId,sessionId,onClose,onNavigat
       :customPrompt?<div className="tree-custom-prompt"><label htmlFor="tree-custom-summary">Custom summarization instructions</label><textarea id="tree-custom-summary" autoFocus value={instructions} onChange={event=>setInstructions(event.target.value)}/></div>
       :<div className="tree-summary-options"><button onClick={()=>void navigate(false)}>No Summary</button><button onClick={()=>void navigate(true)}>Summarize</button>
         <button onClick={()=>setCustomPrompt(true)}>Summarize with Custom Prompt</button></div>}
+      {summaryRequested&&summaryOperation&&summaryOperation.id!==previousSummaryId&&<div className="tree-summary-status"><SummaryCard operation={summaryOperation} now={summaryNow} onOpenJson={onOpenSummaryJson}/></div>}
       <footer>{navigating?<button disabled={cancelling} onClick={()=>void abortNavigation()}>{cancelling?'Cancelling…':'Cancel'}</button>:customPrompt?<><button onClick={()=>setCustomPrompt(false)}>Back</button>
         <button className="agent-primary" onClick={()=>void navigate(true,instructions.trim()||undefined)}>Summarize</button></>:<button onClick={()=>setNavigationTarget(null)}>Cancel</button>}</footer>
     </section></div>}

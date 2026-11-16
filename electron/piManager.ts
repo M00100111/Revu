@@ -17,7 +17,7 @@ type PiModule=typeof import('@earendil-works/pi-coding-agent');
 type NativeRpcClient=InstanceType<PiModule['RpcClient']>;
 type RpcClient=Omit<NativeRpcClient,'bash'>&{
   bash:(command:string,excludeFromContext?:boolean)=>Promise<{output:string;exitCode:number|null;cancelled:boolean;truncated:boolean;fullOutputPath?:string}>;
-  navigateTree:(entryId:string,options:{summarize:boolean;customInstructions?:string})=>Promise<{editorText?:string;cancelled:boolean;aborted?:boolean}>;
+  navigateTree:(entryId:string,options:{summarize:boolean;customInstructions?:string})=>Promise<{editorText?:string;cancelled:boolean;aborted?:boolean;summaryEntry?:unknown}>;
   setEntryLabel:(entryId:string,label?:string)=>Promise<void>;
   abortBranchSummary:()=>Promise<void>;
   getCacheWarmingInfo:()=>Promise<{mode:string;status?:CacheWarmingStatus;cacheWaste:CacheWaste}>;
@@ -442,7 +442,17 @@ export class PiManager {
       if(operation.cancelled){const tree=await handle.client.getTree() as PiSessionTreeResponse;
         return {...tree,snapshot:await this.snapshot(handle),cancelled:true,aborted:true};}
       operation.abort=()=>handle.client.abortBranchSummary();
-      const result=await handle.client.navigateTree(entryId,{summarize,customInstructions});
+      const summaryId=crypto.randomUUID();
+      if(summarize)this.emit(handle,'event',{type:'summary_operation_start',id:summaryId,kind:'branchSummary'});
+      let result:Awaited<ReturnType<RpcClient['navigateTree']>>;
+      try{
+        result=await handle.client.navigateTree(entryId,{summarize,customInstructions});
+        if(summarize)this.emit(handle,'event',{type:'summary_operation_end',id:summaryId,kind:'branchSummary',
+          result:result.summaryEntry,cancelled:result.cancelled,aborted:result.aborted,skipped:!result.summaryEntry});
+      }catch(error){
+        if(summarize)this.emit(handle,'event',{type:'summary_operation_end',id:summaryId,kind:'branchSummary',errorMessage:errorMessage(error)});
+        throw error;
+      }
       const tree=await handle.client.getTree() as PiSessionTreeResponse;
       this.emit(handle,'sessions-changed');return {...tree,snapshot:await this.snapshot(handle),editorText:result.editorText,
         cancelled:result.cancelled,aborted:result.aborted};
@@ -492,7 +502,7 @@ export class PiManager {
     this.project(projectId);const handle=this.runtimes.get(sessionId);
     if(handle&&handle.projectId!==projectId)throw new Error('Session does not belong to this project.');
     if(this.selectedSessionId===sessionId)this.selectedSessionId=null;
-    if(handle&&(handle.status==='idle'||handle.status==='error'))await this.disposeRuntime(sessionId);
+    if(handle&&!handle.isCompacting&&!this.treeOperations.has(sessionId)&&(handle.status==='idle'||handle.status==='error'))await this.disposeRuntime(sessionId);
   }
 
   async sessionName(projectId:string,sessionId:string){
@@ -581,8 +591,18 @@ export class PiManager {
   async compact(projectId:string,sessionId:string,customInstructions?:string):Promise<PiCompactionResponse>{
     const handle=await this.ensureRuntime(projectId,sessionId);
     if(handle.status==='running'||handle.status==='stopping')throw new Error('Stop the session before compacting context.');
-    const result=await handle.client.compact(customInstructions?.trim()||undefined);
+    const summaryId=crypto.randomUUID();
+    this.emit(handle,'event',{type:'summary_operation_start',id:summaryId,kind:'compaction',reason:'manual'});
+    let result:Awaited<ReturnType<RpcClient['compact']>>;
+    try{
+      result=await handle.client.compact(customInstructions?.trim()||undefined);
+      this.emit(handle,'event',{type:'summary_operation_end',id:summaryId,kind:'compaction',result});
+    }catch(error){
+      this.emit(handle,'event',{type:'summary_operation_end',id:summaryId,kind:'compaction',errorMessage:errorMessage(error)});
+      throw error;
+    }
     const snapshot=await this.snapshot(handle);
+    if(this.selectedSessionId!==sessionId)await this.disposeRuntime(sessionId);
     return {snapshot,result:{tokensBefore:result.tokensBefore,estimatedTokensAfter:result.estimatedTokensAfter,
       cost:result.usage?.cost.total}};
   }
@@ -748,11 +768,11 @@ export class PiManager {
     this.runtimes.delete(sessionId);handle.unsubscribe();await handle.client.stop().catch(()=>{});
   }
   private async disposeUnselectedIdleRuntimes(){
-    await Promise.all([...this.runtimes.values()].filter(item=>item.sessionId!==this.selectedSessionId&&item.status==='idle')
+    await Promise.all([...this.runtimes.values()].filter(item=>item.sessionId!==this.selectedSessionId&&item.status==='idle'&&!item.isCompacting&&!this.treeOperations.has(item.sessionId))
       .map(item=>this.disposeRuntime(item.sessionId)));
   }
   private async disposeIdleRuntimes(){
-    await Promise.all([...this.runtimes.values()].filter(item=>item.status==='idle'||item.status==='error')
+    await Promise.all([...this.runtimes.values()].filter(item=>(item.status==='idle'||item.status==='error')&&!item.isCompacting&&!this.treeOperations.has(item.sessionId))
       .map(item=>this.disposeRuntime(item.sessionId)));
   }
   async dispose(){await Promise.all([...this.runtimes.keys()].map(id=>this.disposeRuntime(id)));}
