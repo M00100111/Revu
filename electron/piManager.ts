@@ -14,6 +14,8 @@ import { searchPiSessions } from '../shared/piSessionSearch';
 import { acceptPiQueueHead, cleanPiQueue, emptyPiQueue, mergePiQueues } from '../shared/piQueue';
 import { parsePiCommand, PI_BUILTIN_COMMANDS, piQueueWarning } from '../shared/piCommands';
 import { directoryExists,replaceSessionCwd,runtimeInfo,runtimeLaunch,sessionCwd,wslPath } from './piRuntime';
+import {extensionRequest,PiExtensionUI} from '../shared/piExtensionUI';
+import type {PiExtensionReply,PiExtensionPending} from '../shared/piTypes';
 import { copyPiSessions, nativePiSessionDir, nativePiSessionsDir } from './piSessionStorage';
 
 type PiModule=typeof import('@earendil-works/pi-coding-agent');
@@ -27,6 +29,7 @@ type RpcClient=Omit<NativeRpcClient,'bash'>&{
   getContextProjection:()=>Promise<PiContextProjection>;
   reloadSettings:()=>Promise<void>;
   reloadResources:()=>Promise<void>;
+  respondExtensionUI:(response:{id:string}&PiExtensionReply)=>Promise<void>;
 };
 interface PiTrustModule {
   ProjectTrustStore:new(agentDir:string)=>{getEntry:(cwd:string)=>{path:string;decision:boolean}|null;setMany:(updates:{path:string;decision:boolean|null}[])=>void};
@@ -64,6 +67,8 @@ interface RuntimeHandle {
   sessionId:string;
   projectId:string;
   cwd:string;
+  runtimeCwd:string;
+  ui:PiExtensionUI;
   client:RpcClient;
   status:PiRuntimeStatus;
   sessionPath?:string;
@@ -137,6 +142,7 @@ export class PiManager {
   private readonly trustPrompts=new Map<string,Promise<boolean>>();
   private readonly trustRequests=new Map<string,{cwd:string;projectId:string;resolve:(choice:PiTrustChoice|null)=>void}>();
   private readonly clientTrust=new WeakMap<RpcClient,boolean>();
+  private readonly clientCwd=new WeakMap<RpcClient,string>();
   private readonly resourceOperations=new Set<string>();
   private changingTrust=false;
   private changingRuntime=false;
@@ -249,6 +255,13 @@ export class PiManager {
 
   private runtimePaths(){return {root:app.isPackaged?join(process.resourcesPath,'pi'):join(app.getAppPath(),'.pi-runtime'),agentDir:this.agentDir,processDir:join(app.getPath('userData'),'pi-processes')};}
   async getRuntimeInfo():Promise<PiRuntimeInfo>{return runtimeInfo(this.runtimeConfig,this.runtimePaths());}
+  async getRuntimeCwd(projectId:string){const cwd=this.project(projectId).root;return this.runtimeConfig.kind==='wsl'?wslPath(this.runtimeConfig.distribution!,cwd):cwd;}
+  getExtensionRequests():PiExtensionPending[]{return [...this.runtimes.values()].filter(handle=>handle.ui.size).map(handle=>({projectId:handle.projectId,sessionId:handle.sessionId,requests:handle.ui.requests}));}
+  async respondExtensionUI(projectId:string,sessionId:string,requestId:string,reply:PiExtensionReply){
+    this.project(projectId);const handle=this.runtimes.get(sessionId);
+    if(!handle||handle.projectId!==projectId)throw new Error('Question session is unavailable.');
+    await handle.ui.reply(requestId,reply);
+  }
   async respondSessionCwd(requestId:string,accept:boolean){if(typeof accept!=='boolean')throw new Error('Invalid directory recovery choice.');this.cwdRequests.get(requestId)?.resolve(accept);}
   private async checkSessionCwd(projectId:string,path:string,config:PiRuntimeConfig,current:string){
     const saved=await sessionCwd(path);if(!saved||await directoryExists(config,saved))return;
@@ -266,12 +279,12 @@ export class PiManager {
       await Promise.allSettled([...this.resourceLoads]);
       if([...this.clients].some(client=>![...this.runtimes.values()].some(handle=>handle.client===client)))throw new Error('Wait for Pi resources to finish loading before switching runtime.');
       handles.push(...this.runtimes.values());
-      for(const handle of handles){if(!['idle','error'].includes(handle.status)||handle.isCompacting||handle.bash||this.treeOperations.has(handle.sessionId)||this.resourceOperations.has(handle.sessionId))throw new Error('Wait for all sessions and tools to finish before switching runtime.');
+      for(const handle of handles){if(handle.ui.size||!['idle','error'].includes(handle.status)||handle.isCompacting||handle.bash||this.treeOperations.has(handle.sessionId)||this.resourceOperations.has(handle.sessionId))throw new Error('Answer pending questions and wait for all sessions and tools to finish before switching runtime.');
         const state=await handle.client.getState();if(state.isStreaming||state.isCompacting||!['idle','error'].includes(handle.status)||handle.bash)throw new Error('Wait for all sessions and tools to finish before switching runtime.');states.set(handle,state);}
       const info=await runtimeInfo(config,this.runtimePaths());if(!info.ready)throw new Error(info.error||'Runtime is unavailable.');config=info.config;
       for(const handle of handles)if(handle.sessionPath&&existsSync(handle.sessionPath)){const current=config.kind==='wsl'?await wslPath(config.distribution!,handle.cwd):handle.cwd;
         const change=await this.checkSessionCwd(handle.projectId,handle.sessionPath,config,current);if(change)changes.push(change);}
-      for(const handle of handles)if(!['idle','error'].includes(handle.status)||handle.isCompacting||handle.bash)throw new Error('Wait for all sessions and tools to finish before switching runtime.');
+      for(const handle of handles)if(handle.ui.size||!['idle','error'].includes(handle.status)||handle.isCompacting||handle.bash)throw new Error('Wait for all sessions and tools to finish before switching runtime.');
       for(const handle of handles)await this.disposeRuntime(handle.sessionId);stopped=true;
       for(const change of changes)await replaceSessionCwd(change.path,change.saved,change.current);
       this.runtimeConfig=config;
@@ -307,13 +320,13 @@ export class PiManager {
     if(sessionPath){const change=await this.checkSessionCwd(projectId,sessionPath,config,launch.cwd);if(change)await replaceSessionCwd(change.path,change.saved,change.current);}
     if(projectId)this.project(projectId);if((this.changingTrust||this.changingRuntime)&&!trustRestart)throw new Error('Runtime changed. Try again.');
     const targetPath=(path:string)=>config.kind==='wsl'?wslPath(config.distribution!,path):Promise.resolve(path);
-    const args=[trusted?'--approve':'--no-approve','--session-dir',await targetPath(dir),'--append-system-prompt',`Runtime: ${config.kind==='wsl'?'WSL/'+config.distribution:process.platform==='darwin'?'macOS':'Windows'}; cwd: ${launch.cwd}. Historical paths may differ.`];
+    const args=[trusted?'--approve':'--no-approve','--extension',await targetPath(join(paths.root,'app','revu-extensions','ask-user.ts')),'--session-dir',await targetPath(dir),'--append-system-prompt',`Runtime: ${config.kind==='wsl'?'WSL/'+config.distribution:process.platform==='darwin'?'macOS':'Windows'}; cwd: ${launch.cwd}. Historical paths may differ.`];
     if(sessionPath)args.push('--session',await targetPath(sessionPath));else if(ephemeral)args.push('--no-session');
     const env:Record<string,string>={...launch.env,PI_SKIP_VERSION_CHECK:'1',REVU_PI_SESSION_ID:!sessionPath?expectedId??'':''};const secrets=await this.readSecrets();for(const provider of PROVIDERS)env[provider.env]=secrets[provider.id]??'';
     const client=new RpcClient({cwd,cliPath:this.cliPath(),args,launchCommand:launch.command,launchArgs:[...launch.prefix,await targetPath(this.cliPath())],bootstrap:JSON.stringify({cwd:launch.cwd,env,pidFile:launch.pidFile}),stopProcess:launch.stop} as unknown as ConstructorParameters<PiModule['RpcClient']>[0]) as unknown as RpcClient;
     if(config.kind==='wsl'){const getState=client.getState.bind(client);client.getState=async()=>{const state=await getState();return {...state,sessionFile:state.sessionFile?launch.hostPath(state.sessionFile):state.sessionFile};};}
     this.clients.add(client);const stop=client.stop.bind(client);client.stop=async()=>{try{await stop();}finally{this.clients.delete(client);}};
-    this.clientTrust.set(client,trusted);return client;
+    this.clientTrust.set(client,trusted);this.clientCwd.set(client,launch.cwd);return client;
   }
 
   private async listedSessions(projectId:string,scope:PiSessionScope){
@@ -348,6 +361,7 @@ export class PiManager {
       firstMessage:session.firstMessage,createdAt:session.created.getTime(),modifiedAt:session.modified.getTime(),
       runCount:0,status:this.runtimes.get(session.id)?.status??'idle' as PiRuntimeStatus,hasSessionFile:true,
       isCompacting:this.runtimes.get(session.id)?.isCompacting,
+      question:!!this.runtimes.get(session.id)?.ui.size,
       parentSessionId:session.parentSessionPath?idsByPath.get(this.sessionPathKey(session.parentSessionPath)):undefined,
     }));
   }
@@ -360,7 +374,7 @@ export class PiManager {
     if(scope==='current')for(const runtime of this.runtimes.values()){
       if(runtime.projectId!==projectId||result.some(item=>item.id===runtime.sessionId))continue;
       result.unshift({id:runtime.sessionId,projectId,cwd:project.root,name:'New Chat',hasName:false,scope,firstMessage:'',createdAt:Date.now(),
-        modifiedAt:Date.now(),runCount:0,status:runtime.status,hasSessionFile:!!runtime.sessionPath&&existsSync(runtime.sessionPath),isCompacting:runtime.isCompacting});
+        modifiedAt:Date.now(),runCount:0,status:runtime.status,hasSessionFile:!!runtime.sessionPath&&existsSync(runtime.sessionPath),isCompacting:runtime.isCompacting,question:!!runtime.ui.size});
     }
     const groups=[...new Map(result.filter(item=>item.cwd).map(item=>[this.cwdKey(item.cwd),{
       key:this.cwdKey(item.cwd),name:basename(item.cwd)||item.cwd,cwd:item.cwd,available:existsSync(item.cwd),
@@ -383,10 +397,12 @@ export class PiManager {
   }
 
   private async startRuntime(projectId:string,sessionId?:string,sessionPath?:string,trustRestart=false){
-    const project=this.project(projectId);const client=await this.createClient(project.root,sessionPath,false,projectId,trustRestart,sessionId);
     const provisional=sessionId??crypto.randomUUID();
-    const handle:RuntimeHandle={sessionId:provisional,projectId,cwd:project.root,client,status:'starting',sessionPath,queue:emptyPiQueue(),unsubscribe:()=>{}};
+    const project=this.project(projectId);const client=await this.createClient(project.root,sessionPath,false,projectId,trustRestart,provisional);
+    const ui=new PiExtensionUI((id,reply)=>client.respondExtensionUI({id,...reply}),()=>this.emit(handle,'extension-ui',ui.requests));
+    const handle:RuntimeHandle={sessionId:provisional,projectId,cwd:project.root,runtimeCwd:this.clientCwd.get(client)??project.root,ui,client,status:'starting',sessionPath,queue:emptyPiQueue(),unsubscribe:()=>{}};
     handle.unsubscribe=client.onEvent(event=>this.onEvent(handle,event));
+    this.runtimes.set(provisional,handle);
     try{
       await client.start();
       this.project(projectId);
@@ -397,7 +413,7 @@ export class PiManager {
       this.emit(handle,'status',handle.status);
       return handle;
     }catch(error){
-      handle.unsubscribe();await client.stop().catch(()=>{});throw error;
+      this.runtimes.delete(provisional);handle.ui.clear();handle.unsubscribe();await client.stop().catch(()=>{});throw error;
     }
   }
 
@@ -413,6 +429,7 @@ export class PiManager {
     const existing=this.runtimes.get(sessionId);
     if(existing?.status==='error')await this.disposeRuntime(sessionId);
     const handle=await this.ensureRuntime(projectId,sessionId);
+    if(handle.ui.size)throw new Error('Answer the pending question first.');
     if(handle.status==='starting'||handle.status==='running'||handle.status==='stopping')
       throw new Error('Wait for the session to finish before using this action.');
     const state=await handle.client.getState();
@@ -478,6 +495,7 @@ export class PiManager {
 
   async getEntries(projectId:string,sessionId:string,sinceEntryId?:string):Promise<PiEntriesResponse>{
     const handle=await this.ensureRuntime(projectId,sessionId);
+    if(handle.status==='starting'&&handle.ui.size)return {entries:[],leafId:null};
     const response=await handle.client.getEntries(sinceEntryId);
     return response as PiEntriesResponse;
   }
@@ -487,6 +505,7 @@ export class PiManager {
   }
 
   private async stopForTreeOperation(handle:RuntimeHandle){
+    if(handle.ui.size)throw new Error('Answer the pending question first.');
     let state=await handle.client.getState();
     if(handle.status==='running'||handle.status==='stopping'||state.isStreaming){
       const cleared=await handle.client.clearQueue();this.retainQueue(handle,cleared);await handle.client.abort();handle.status='idle';this.emit(handle,'status','idle');
@@ -564,6 +583,7 @@ export class PiManager {
   async releaseSession(projectId:string,sessionId:string){
     this.project(projectId);const handle=this.runtimes.get(sessionId);
     if(handle&&handle.projectId!==projectId)throw new Error('Session does not belong to this project.');
+    if(handle)await handle.ui.cancel();
     if(this.selectedSessionId===sessionId)this.selectedSessionId=null;
     if(handle&&!handle.isCompacting&&!this.treeOperations.has(sessionId)&&(handle.status==='idle'||handle.status==='error'))await this.disposeRuntime(sessionId);
   }
@@ -574,12 +594,13 @@ export class PiManager {
   }
 
   private async snapshot(handle:RuntimeHandle):Promise<PiSessionSnapshot>{
+    if(handle.status==='starting'&&handle.ui.size)return {sessionId:handle.sessionId,projectId:handle.projectId,status:'starting',cwd:handle.runtimeCwd,name:'New Chat',messages:[],thinkingLevel:'medium',availableThinkingLevels:[],autoCompactionEnabled:true,isCompacting:false,extensionRequests:handle.ui.requests};
     const [state,messages,levels,stats]=await Promise.all([
       handle.client.getState(),handle.client.getMessages(),handle.client.getAvailableThinkingLevels(),
       handle.client.getSessionStats().catch(()=>undefined),
     ]);
     handle.sessionPath=state.sessionFile;
-    return {sessionId:handle.sessionId,projectId:handle.projectId,status:handle.status,
+    return {sessionId:handle.sessionId,projectId:handle.projectId,status:handle.status,cwd:handle.runtimeCwd,extensionRequests:handle.ui.requests,
       name:state.sessionName||'New Chat',messages,model:state.model?{
         provider:state.model.provider,id:state.model.id,contextWindow:state.model.contextWindow,
         reasoning:!!state.model.reasoning,
@@ -662,6 +683,7 @@ export class PiManager {
 
   async compact(projectId:string,sessionId:string,customInstructions?:string):Promise<PiCompactionResponse>{
     const handle=await this.ensureRuntime(projectId,sessionId);
+    if(handle.ui.size)throw new Error('Answer the pending question first.');
     if(handle.status==='running'||handle.status==='stopping')throw new Error('Stop the session before compacting context.');
     const summaryId=crypto.randomUUID();
     this.emit(handle,'event',{type:'summary_operation_start',id:summaryId,kind:'compaction',reason:'manual'});
@@ -691,8 +713,15 @@ export class PiManager {
 
   private onEvent(handle:RuntimeHandle,event:JsonEvent){
     const raw=event as unknown as Record<string,unknown>;
+    if(raw.type==='revu_process_exit'){this.fail(handle,raw.message??'Pi process exited.');return;}
+    if(raw.type==='extension_ui_closed'){if(typeof raw.id==='string')handle.ui.remove(raw.id);return;}
     if(raw.type==='extension_ui_request'){
-      this.emit(handle,'warning','Extension UI is not supported in Revu yet.');return;
+      if(raw.method==='notify'){this.emit(handle,'extension-notify',{message:String(raw.message??''),level:raw.notifyType==='error'?'error':raw.notifyType==='warning'?'warning':'info'});return;}
+      const request=extensionRequest(raw);
+      if(request)handle.ui.add(request);
+      else if(['select','confirm','input','editor'].includes(String(raw.method))&&typeof raw.id==='string')void handle.client.respondExtensionUI({id:raw.id,cancelled:true}).catch(error=>this.fail(handle,error));
+      else this.emit(handle,'warning',`Extension UI ${String(raw.method)} is not supported in Revu yet.`);
+      return;
     }
     if(event.type==='queue_update')handle.queue={steering:[...event.steering],followUp:[...event.followUp]};
     if(event.type==='bash_execution_update'&&handle.bash?.status==='running'){
@@ -708,7 +737,7 @@ export class PiManager {
       handle.status='idle';this.emit(handle,'status','idle');
       this.emit(handle,'sessions-changed');
       void this.refreshUsage(handle).finally(()=>{
-        if(this.selectedSessionId!==handle.sessionId)return this.disposeRuntime(handle.sessionId);
+        if(this.selectedSessionId!==handle.sessionId&&!handle.ui.size)return this.disposeRuntime(handle.sessionId);
       });
     }
   }
@@ -724,6 +753,7 @@ export class PiManager {
   }
 
   private fail(handle:RuntimeHandle,error:unknown){
+    handle.ui.clear();
     this.captureLiveQueue(handle);
     handle.status='error';handle.error=errorMessage(error);this.emit(handle,'error',handle.error);
   }
@@ -792,6 +822,7 @@ export class PiManager {
 
   async setModel(projectId:string,sessionId:string,provider:string,modelId:string){
     const handle=await this.ensureRuntime(projectId,sessionId);
+    if(handle.ui.size)throw new Error('Answer the pending question first.');
     if(handle.status==='running'||handle.status==='stopping')throw new Error('Stop the session before changing models.');
     await handle.client.setModel(provider,modelId);
     return this.snapshot(handle);
@@ -799,6 +830,7 @@ export class PiManager {
 
   async setThinkingLevel(projectId:string,sessionId:string,level:PiThinkingLevel){
     const handle=await this.ensureRuntime(projectId,sessionId);
+    if(handle.ui.size)throw new Error('Answer the pending question first.');
     if(handle.status==='running'||handle.status==='stopping')throw new Error('Stop the session before changing thinking level.');
     await handle.client.setThinkingLevel(level);
     return this.snapshot(handle);
@@ -890,9 +922,9 @@ export class PiManager {
     const restarted:PiTrustSaveResponse['restarted']=[];this.changingTrust=true;
     try{
     for(const handle of affected){
-      if(!['idle','error'].includes(handle.status)||handle.isCompacting||handle.bash?.status==='running'||this.treeOperations.has(handle.sessionId)||this.resourceOperations.has(handle.sessionId))
+      if(handle.ui.size||!['idle','error'].includes(handle.status)||handle.isCompacting||handle.bash?.status==='running'||this.treeOperations.has(handle.sessionId)||this.resourceOperations.has(handle.sessionId))
         throw new Error('Wait for active project sessions to finish before changing trust.');
-      const state=await handle.client.getState();if(state.isStreaming||state.isCompacting||!['idle','error'].includes(handle.status)||handle.bash)throw new Error('Wait for active project sessions to finish before changing trust.');
+      const state=await handle.client.getState();if(handle.ui.size||state.isStreaming||state.isCompacting||!['idle','error'].includes(handle.status)||handle.bash)throw new Error('Wait for active project sessions to finish before changing trust.');
     }
     await this.writeProjectTrust(cwd,choice);
     for(const key of this.trustDecisions.keys())if(key===scope||key.startsWith(scope.endsWith('\\')?scope:scope+'\\'))this.trustDecisions.delete(key);
@@ -921,7 +953,8 @@ export class PiManager {
   private async withResourceClient<T>(projectId:string,read:(client:RpcClient)=>Promise<T>):Promise<T>{
     const operation=(async()=>{
       const client=await this.createClient(this.project(projectId).root,undefined,true,projectId);
-      try{await client.start();return await read(client);}finally{await client.stop();}
+      const dispose=client.onEvent(event=>{const raw=event as unknown as Record<string,unknown>;if(raw.type==='extension_ui_request'&&['select','confirm','input','editor'].includes(String(raw.method))&&typeof raw.id==='string')void client.respondExtensionUI({id:raw.id,cancelled:true}).catch(()=>{});});
+      try{await client.start();return await read(client);}finally{dispose();await client.stop();}
     })();
     this.resourceLoads.add(operation);
     try{return await operation;}finally{this.resourceLoads.delete(operation);}
@@ -936,6 +969,7 @@ export class PiManager {
   }
   async reloadResources(projectId:string,sessionId:string){
     const handle=await this.ensureRuntime(projectId,sessionId);
+    if(handle.ui.size)throw new Error('Answer the pending question before reloading.');
     if(!['idle','error'].includes(handle.status)||handle.isCompacting||handle.bash?.status==='running'||this.treeOperations.has(sessionId))
       throw new Error('Wait for the session to finish before reloading.');
     this.resourceOperations.add(sessionId);
@@ -944,14 +978,15 @@ export class PiManager {
   }
   private async disposeRuntime(sessionId:string){
     const handle=this.runtimes.get(sessionId);if(!handle)return;
+    handle.ui.clear();
     this.runtimes.delete(sessionId);handle.unsubscribe();await handle.client.stop().catch(()=>{});
   }
   private async disposeUnselectedIdleRuntimes(){
-    await Promise.all([...this.runtimes.values()].filter(item=>item.sessionId!==this.selectedSessionId&&item.status==='idle'&&!item.isCompacting&&!this.treeOperations.has(item.sessionId))
+    await Promise.all([...this.runtimes.values()].filter(item=>item.sessionId!==this.selectedSessionId&&item.status==='idle'&&!item.ui.size&&!item.isCompacting&&!this.treeOperations.has(item.sessionId))
       .map(item=>this.disposeRuntime(item.sessionId)));
   }
   private async disposeIdleRuntimes(){
-    await Promise.all([...this.runtimes.values()].filter(item=>(item.status==='idle'||item.status==='error')&&!item.isCompacting&&!this.treeOperations.has(item.sessionId))
+    await Promise.all([...this.runtimes.values()].filter(item=>(item.status==='idle'||item.status==='error')&&!item.ui.size&&!item.isCompacting&&!this.treeOperations.has(item.sessionId))
       .map(item=>this.disposeRuntime(item.sessionId)));
   }
   async dispose(){for(const request of this.cwdRequests.values())request.resolve(false);for(const request of this.trustRequests.values())request.resolve(null);this.trustRequests.clear();await Promise.all([...this.runtimes.keys()].map(id=>this.disposeRuntime(id)));await Promise.all([...this.clients].map(client=>client.stop().catch(()=>{})));}

@@ -32,6 +32,7 @@ export interface PiSessionSummary {
   status:PiRuntimeStatus;
   hasSessionFile?:boolean;
   isCompacting?:boolean;
+  question?:boolean;
   parentSessionId?:string;
 }
 
@@ -189,7 +190,18 @@ export interface PiSessionSnapshot {
   bash?:PiDirectBashState;
   usage?:PiUsageStats;
   error?:string;
+  cwd?:string;
+  extensionRequests?:PiExtensionRequest[];
 }
+
+export type PiExtensionRequest={id:string;title:string;deadline?:number;group?:{id:string;index:number;total:number}}&(
+  |{method:'select';options:string[]}
+  |{method:'confirm';message:string}
+  |{method:'input';placeholder?:string}
+  |{method:'editor';prefill?:string}
+);
+export type PiExtensionReply={cancelled:true}|{value:string}|{confirmed:boolean};
+export interface PiExtensionPending {projectId:string;sessionId:string;requests:PiExtensionRequest[]}
 
 export interface PiCompactionResult {
   tokensBefore:number;
@@ -216,11 +228,14 @@ export interface PiModelDefaults {
 export interface RevuPiEvent {
   sessionId:string;
   projectId:string;
-  type:'event'|'status'|'usage'|'error'|'sessions-changed'|'bash'|'retained-queue'|'trust-request'|'warning'|'resources-changed'|'cwd-request'|'runtime-changed';
+  type:'event'|'status'|'usage'|'error'|'sessions-changed'|'bash'|'retained-queue'|'trust-request'|'warning'|'resources-changed'|'cwd-request'|'runtime-changed'|'extension-ui'|'extension-notify';
   payload?:unknown;
 }
 
 export type PiAgentRequest=
+  |{action:'getExtensionRequests'}
+  |{action:'respondExtensionUI';projectId:string;sessionId:string;requestId:string;reply:PiExtensionReply}
+  |{action:'getRuntimeCwd';projectId:string}
   |{action:'getRuntimeInfo'}
   |{action:'chooseBashPath'}
   |{action:'setRuntime';config:PiRuntimeConfig}

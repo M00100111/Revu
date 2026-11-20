@@ -82,6 +82,9 @@ ipcMain.handle('revu:invoke',async(_event,body)=>{
 async function invokeAgent(body:PiAgentRequest,sourceWindow?:BrowserWindow|null){
   if(!piManager)throw new Error('Pi Agent is not ready.');
   switch(body.action){
+    case 'getRuntimeCwd':return piManager.getRuntimeCwd(body.projectId);
+    case 'getExtensionRequests':return piManager.getExtensionRequests();
+    case 'respondExtensionUI':return piManager.respondExtensionUI(body.projectId,body.sessionId,body.requestId,body.reply);
     case 'chooseBashPath':{
       const owner=sourceWindow??mainWindow;if(!owner)throw new Error('The application window is unavailable.');
       const result=await dialog.showOpenDialog(owner,{title:'Choose Bash executable',properties:['openFile'],filters:[{name:'Executables',extensions:['exe']}]});

@@ -15,6 +15,7 @@ const bundle=await build({entryPoints:['electron/piManager.ts'],bundle:true,plat
 }]});
 const {PiManager:Manager}=await import('data:text/javascript;base64,'+Buffer.from(bundle.outputFiles[0].text+'\n//# sourceURL=revu-pi-test.mjs').toString('base64')) as {PiManager:typeof PiManager};
 function fixture(client:{start:()=>Promise<void>;stop:()=>Promise<void>;getAvailableModels?:()=>Promise<unknown[]>;getCommands?:()=>Promise<unknown[]>}){
+  client=Object.assign({onEvent:()=>()=>{}},client);
   const manager=new Manager({resolveProject:id=>({id,root:process.cwd()}),emit:()=>{}});
   const internal=manager as unknown as {clients:Set<unknown>;createClient:()=>Promise<unknown>};
   const stop=client.stop;

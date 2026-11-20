@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import Icon from './Icon';
 
 export type NotificationLevel='info'|'success'|'warning'|'error';
-export interface NotificationAction {type:'open-agent-session';projectId:string;sessionId:string;runKey?:string}
+export interface NotificationAction {type:'open-agent-session';projectId:string;sessionId:string;runKey?:string;question?:boolean}
 export interface AppNotification {
   id:string;level:NotificationLevel;message:string;createdAt:number;read:boolean;toast:boolean;count:number;
   action?:NotificationAction;

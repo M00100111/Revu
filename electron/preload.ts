@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import type {PiExtensionPending,PiExtensionReply} from '../shared/piTypes';
 import type { PiRuntimeConfig,PiRuntimeInfo,PiRuntimeChange, PiTrustSaveResponse, PiProjectTrust, PiSlashCommand, PiTrustChoice, PiAgentRequest, PiCompactionConfiguration, PiCompactionResponse, PiContextProjection, PiDirectBashState, PiDiscoveredSessionResponse, PiEntriesResponse, PiForkResponse, PiModelDefaults, PiModelSummary, PiProviderStatus, PiQueueState, PiSessionCatalog, PiSessionFolderResult, PiSessionInfo, PiSessionScope, PiSessionSearchResult, PiSessionSnapshot, PiSessionSort, PiSessionTreeResponse, PiThinkingLevel, PiTreeNavigationResponse, RevuPiEvent } from '../shared/piTypes';
 
 const agentInvoke=<T>(body:PiAgentRequest)=>ipcRenderer.invoke('revu:agent',body) as Promise<{ok:boolean;value?:T;error?:string}>;
@@ -23,6 +24,9 @@ contextBridge.exposeInMainWorld('revu',{
     return()=>ipcRenderer.removeListener('revu:project-changed',receive);
   },
   agent:{
+    getRuntimeCwd:(projectId:string)=>agentInvoke<string>({action:'getRuntimeCwd',projectId}),
+    getExtensionRequests:()=>agentInvoke<PiExtensionPending[]>({action:'getExtensionRequests'}),
+    respondExtensionUI:(projectId:string,sessionId:string,requestId:string,reply:PiExtensionReply)=>agentInvoke<void>({action:'respondExtensionUI',projectId,sessionId,requestId,reply}),
     chooseBashPath:()=>agentInvoke<string|null>({action:'chooseBashPath'}),
     getRuntimeInfo:()=>agentInvoke<PiRuntimeInfo>({action:'getRuntimeInfo'}),
     setRuntime:(config:PiRuntimeConfig)=>agentInvoke<PiRuntimeChange>({action:'setRuntime',config}),

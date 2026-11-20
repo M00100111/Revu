@@ -1,6 +1,9 @@
 import type { PiRuntimeConfig,PiRuntimeInfo,PiRuntimeChange, PiTrustSaveResponse, PiProjectTrust, PiSlashCommand, PiTrustChoice, PiCompactionConfiguration, PiCompactionResponse, PiContextProjection, PiDirectBashState, PiDiscoveredSessionResponse, PiEntriesResponse, PiForkResponse, PiModelDefaults, PiModelSummary, PiProviderStatus, PiQueueState, PiSessionCatalog, PiSessionFolderResult, PiSessionInfo, PiSessionScope, PiSessionSearchResult, PiSessionSnapshot, PiSessionSort, PiSessionTreeResponse, PiThinkingLevel, PiTreeNavigationResponse, RevuPiEvent } from '../shared/piTypes';
 interface RevuResponse<T>{ok:boolean;value?:T;status?:number;error?:string}
 interface RevuAgentApi {
+  getRuntimeCwd(projectId:string):Promise<RevuResponse<string>>;
+  getExtensionRequests():Promise<RevuResponse<import('../shared/piTypes').PiExtensionPending[]>>;
+  respondExtensionUI(projectId:string,sessionId:string,requestId:string,reply:import('../shared/piTypes').PiExtensionReply):Promise<RevuResponse<void>>;
   chooseBashPath():Promise<RevuResponse<string|null>>;
   getRuntimeInfo():Promise<RevuResponse<PiRuntimeInfo>>;
   setRuntime(config:PiRuntimeConfig):Promise<RevuResponse<PiRuntimeChange>>;

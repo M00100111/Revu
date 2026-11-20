@@ -109,8 +109,18 @@ export default function App(){
         runKey:action.runKey,token:(current?.token??0)+1}));
     }
   },[notifications]);
-  const handleAgentNotice=useCallback((notice:AgentNotice)=>notify(notice.level,notice.message,
-    {type:'open-agent-session',projectId:notice.projectId,sessionId:notice.sessionId,runKey:notice.runKey}),[notify]);
+  const handleAgentNotice=useCallback((notice:AgentNotice)=>{
+    if(notice.question===false){setNotifications(current=>current.map(item=>item.action?.question&&item.action.projectId===notice.projectId&&item.action.sessionId===notice.sessionId
+      ?{...item,read:true,toast:false,message:item.message.replace(/^Question ·/,'Question resolved ·'),action:{...item.action,question:false}}:item));return;}
+    if(notice.question){
+      setNotifications(current=>{
+        const existing=current.find(item=>item.action?.question&&item.action.projectId===notice.projectId&&item.action.sessionId===notice.sessionId);
+        if(existing)return current.map(item=>item.id===existing.id?{...item,message:notice.message}:item);
+        return [{id:crypto.randomUUID(),level:'info',message:notice.message,createdAt:Date.now(),read:false,toast:true,count:1,action:{type:'open-agent-session',projectId:notice.projectId,sessionId:notice.sessionId,question:true}},...current];
+      });return;
+    }
+    notify(notice.level,notice.message,{type:'open-agent-session',projectId:notice.projectId,sessionId:notice.sessionId,runKey:notice.runKey});
+  },[notify]);
   const readAllNotifications=useCallback(()=>setNotifications(current=>current.map(item=>
     item.read?item:{...item,read:true})),[]);
   const clearNotifications=useCallback(()=>setNotifications([]),[]);
