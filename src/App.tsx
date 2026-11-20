@@ -468,7 +468,7 @@ export default function App(){
       </div>}
     </main>
     </>}
-    <AgentChat open={agentOpen} projects={projects} activeProjectId={projectId}
+    <AgentChat onOpenSettings={()=>{setSettingsCategory('chat');setPanel('settings');}} open={agentOpen} projects={projects} activeProjectId={projectId}
       dirtyProjectIds={new Set(documents.filter(file=>file.dirty).map(file=>file.project.id))}
       width={agentWidth} onResize={setAgentWidth}
       onResizeEnd={value=>localStorage.setItem('revu-agent-width',String(value))} notify={notify}

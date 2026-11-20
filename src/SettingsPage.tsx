@@ -1,8 +1,9 @@
+import ChatRuntimeSettings from './ChatRuntimeSettings';
 import { useEffect, useState } from 'react';
 import ResizeHandle from './ResizeHandle';
 import type { FileTabOverflow } from './tabLayout';
 
-export type SettingsCategory='interaction'|'editor'|'review'|'appearance'|'activity-bar';
+export type SettingsCategory='interaction'|'editor'|'review'|'appearance'|'activity-bar'|'chat';
 export type ReviewFileLabels='name'|'path';
 
 function FontSizeSetting({fontSize,onChange}:{fontSize:number;onChange:(value:number)=>void}){
@@ -50,6 +51,7 @@ export function SettingsSidebar({width,onResize,category,onCategoryChange}:{
       <button className={category==='review'?'active':''} onClick={()=>onCategoryChange('review')}>Review</button>
       <button className={category==='appearance'?'active':''} onClick={()=>onCategoryChange('appearance')}>Appearance</button>
       <button className={category==='activity-bar'?'active':''} onClick={()=>onCategoryChange('activity-bar')}>Activity Bar</button>
+      <button className={category==='chat'?'active':''} onClick={()=>onCategoryChange('chat')}>Chat</button>
     </nav>
     <ResizeHandle width={width} onResize={onResize}/>
   </aside>;
@@ -132,6 +134,8 @@ export default function SettingsPage({category,syncWidths,onChange,mixed,onModeC
           <span><strong>Dark theme color</strong><small>Set the dark theme background using #RRGGBB.</small></span>
           <ThemeColorSetting value={darkThemeColor} label="Dark theme color" onChange={onDarkThemeColorChange}/>
         </div>
+      </>:category==='chat'?<>
+        <ChatRuntimeSettings/>
       </>:<>
         <h1>Activity Bar</h1>
         <label className="setting-row">

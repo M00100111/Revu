@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
-import type { PiAgentRequest, PiCompactionConfiguration, PiCompactionResponse, PiContextProjection, PiDirectBashState, PiDiscoveredSessionResponse, PiEntriesResponse, PiForkResponse, PiModelDefaults, PiModelSummary, PiProviderStatus, PiQueueState, PiSessionCatalog, PiSessionFolderResult, PiSessionInfo, PiSessionScope, PiSessionSearchResult, PiSessionSnapshot, PiSessionSort, PiSessionTreeResponse, PiThinkingLevel, PiTreeNavigationResponse, RevuPiEvent } from '../shared/piTypes';
+import type { PiRuntimeConfig,PiRuntimeInfo,PiRuntimeChange, PiTrustSaveResponse, PiProjectTrust, PiSlashCommand, PiTrustChoice, PiAgentRequest, PiCompactionConfiguration, PiCompactionResponse, PiContextProjection, PiDirectBashState, PiDiscoveredSessionResponse, PiEntriesResponse, PiForkResponse, PiModelDefaults, PiModelSummary, PiProviderStatus, PiQueueState, PiSessionCatalog, PiSessionFolderResult, PiSessionInfo, PiSessionScope, PiSessionSearchResult, PiSessionSnapshot, PiSessionSort, PiSessionTreeResponse, PiThinkingLevel, PiTreeNavigationResponse, RevuPiEvent } from '../shared/piTypes';
 
 const agentInvoke=<T>(body:PiAgentRequest)=>ipcRenderer.invoke('revu:agent',body) as Promise<{ok:boolean;value?:T;error?:string}>;
 
@@ -23,6 +23,15 @@ contextBridge.exposeInMainWorld('revu',{
     return()=>ipcRenderer.removeListener('revu:project-changed',receive);
   },
   agent:{
+    chooseBashPath:()=>agentInvoke<string|null>({action:'chooseBashPath'}),
+    getRuntimeInfo:()=>agentInvoke<PiRuntimeInfo>({action:'getRuntimeInfo'}),
+    setRuntime:(config:PiRuntimeConfig)=>agentInvoke<PiRuntimeChange>({action:'setRuntime',config}),
+    respondSessionCwd:(requestId:string,accept:boolean)=>agentInvoke<void>({action:'respondSessionCwd',requestId,accept}),
+    getCommands:(projectId:string,sessionId?:string)=>agentInvoke<PiSlashCommand[]>({action:'getCommands',projectId,sessionId}),
+    getProjectTrust:(projectId:string,sessionId?:string)=>agentInvoke<PiProjectTrust>({action:'getProjectTrust',projectId,sessionId}),
+    saveProjectTrust:(projectId:string,choice:PiTrustChoice,sessionId?:string)=>agentInvoke<PiTrustSaveResponse>({action:'saveProjectTrust',projectId,choice,sessionId}),
+    respondProjectTrust:(requestId:string,choice:PiTrustChoice|null)=>agentInvoke<void>({action:'respondProjectTrust',requestId,choice}),
+    reloadResources:(projectId:string,sessionId:string)=>agentInvoke<PiSessionSnapshot>({action:'reloadResources',projectId,sessionId}),
     listSessions:(projectId:string,scope:PiSessionScope='current')=>agentInvoke<PiSessionCatalog>({action:'listSessions',projectId,scope}),
     searchSessions:(projectId:string,query:string,sort:PiSessionSort,scope:PiSessionScope='current')=>agentInvoke<PiSessionSearchResult[]>({action:'searchSessions',projectId,query,sort,scope}),
     openSession:(projectId:string,sessionId:string)=>agentInvoke<PiSessionSnapshot>({action:'openSession',projectId,sessionId}),

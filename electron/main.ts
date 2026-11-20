@@ -82,6 +82,19 @@ ipcMain.handle('revu:invoke',async(_event,body)=>{
 async function invokeAgent(body:PiAgentRequest,sourceWindow?:BrowserWindow|null){
   if(!piManager)throw new Error('Pi Agent is not ready.');
   switch(body.action){
+    case 'chooseBashPath':{
+      const owner=sourceWindow??mainWindow;if(!owner)throw new Error('The application window is unavailable.');
+      const result=await dialog.showOpenDialog(owner,{title:'Choose Bash executable',properties:['openFile'],filters:[{name:'Executables',extensions:['exe']}]});
+      return result.canceled?null:result.filePaths[0]??null;
+    }
+    case 'getRuntimeInfo':return piManager.getRuntimeInfo();
+    case 'setRuntime':return piManager.setRuntime(body.config);
+    case 'respondSessionCwd':return piManager.respondSessionCwd(body.requestId,body.accept);
+    case 'getCommands':return piManager.getCommands(body.projectId,body.sessionId);
+    case 'getProjectTrust':return piManager.getProjectTrust(body.projectId,body.sessionId);
+    case 'saveProjectTrust':return piManager.saveProjectTrust(body.projectId,body.choice,body.sessionId);
+    case 'respondProjectTrust':return piManager.respondProjectTrust(body.requestId,body.choice);
+    case 'reloadResources':return piManager.reloadResources(body.projectId,body.sessionId);
     case 'listSessions':return piManager.listSessions(body.projectId,body.scope);
     case 'searchSessions':return piManager.searchSessions(body.projectId,body.query,body.sort,body.scope);
     case 'openSession':return piManager.openSession(body.projectId,body.sessionId);

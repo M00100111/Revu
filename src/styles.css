@@ -552,3 +552,38 @@ kbd { font: inherit; border: 1px solid var(--border); border-radius: 3px; paddin
 .notification-toast-body i { font-style: normal; }
 .notification-toast > .icon-button { position: absolute; top: 5px; right: 5px; width: 25px; height: 25px; }
 .tab-select,.agent-session-tab > button:first-child,.notification-item-body,.notification-toast-body,.session-select,.review-file-name,.review-file-summary { cursor: default; }
+
+.agent-command-menu > button { display:flex; height:42px; align-items:center; gap:10px; }
+.agent-command-menu > button > span:last-child { display:flex; min-width:0; flex:1; flex-direction:column; gap:3px; }
+.agent-command-menu > button.unsupported,.agent-command-menu > button.unsupported > span:last-child { color:var(--muted); }
+.agent-command-menu strong { font-size:12px; font-weight:500; }
+.agent-command-menu small { overflow:hidden; color:var(--muted); font-size:10.5px; text-overflow:ellipsis; white-space:nowrap; }
+.command-dialog-backdrop { background:#0003; }
+.command-dialog-content { padding:16px; }
+.command-dialog-content > input { box-sizing:border-box; width:100%; height:34px; padding:0 9px; border:1px solid var(--border); border-radius:5px; outline:none; background:var(--bg); color:var(--text); }
+.command-dialog-content > input:focus { border-color:var(--muted); }
+.command-dialog-error { margin:0; padding:10px 16px; color:var(--danger,#d44); font-size:12px; }
+.fork-message-list > p { color:var(--muted); font-size:12px; padding:8px; }
+.fork-message-list > button { width:100%; text-align:left; padding:0 8px; border-radius:4px; }
+.project-trust-backdrop { position:fixed; z-index:2400; inset:0; display:grid; place-items:center; padding:24px; background:#0005; }
+.project-trust-dialog { width:min(440px,calc(100vw - 48px)); }
+.project-trust-dialog > header > div { display:flex; min-width:0; align-items:baseline; gap:12px; }
+.project-trust-dialog > header strong { flex-shrink:0; }
+.project-trust-dialog > header span { overflow:hidden; color:var(--muted); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
+.trust-status { display:grid; margin:0 0 22px; gap:8px; font-size:12px; }
+.trust-status > div { display:grid; grid-template-columns:112px minmax(0,1fr); }
+.trust-status dt { color:var(--muted); }.trust-status dd { margin:0; overflow-wrap:anywhere; }
+.trust-status small { display:block; margin-top:4px; color:var(--muted); }
+.trust-options { display:grid; gap:8px; padding-bottom:0; }
+
+.trust-options > button { display:flex; box-sizing:border-box; height:52px; min-width:0; flex-direction:column; justify-content:center; align-items:flex-start; gap:4px; padding:8px 12px; border:1px solid transparent; border-radius:6px; background:transparent; color:var(--text); text-align:left; font-size:12px; }
+.trust-options > button:hover:enabled { background:var(--hover); }
+.trust-options > button > small { max-width:100%; overflow:hidden; color:var(--muted); font-size:11px; white-space:nowrap; text-overflow:ellipsis; }
+
+.runtime-status { display:grid; gap:6px; margin-top:18px; font-size:12px; }.runtime-status > span { color:var(--muted); overflow-wrap:anywhere; }
+.runtime-confirm-dialog,.cwd-recovery-dialog { width:min(440px,calc(100vw - 48px)); }.runtime-confirm-dialog p,.cwd-recovery-dialog p { margin:0 0 12px; font-size:12px; line-height:1.6; }.runtime-confirm-dialog label { display:grid; gap:8px; font-size:12px; }.runtime-confirm-dialog select { height:32px; }
+.cwd-recovery-dialog dl { display:grid; gap:6px; margin:0 0 18px; font-size:12px; }.cwd-recovery-dialog dt { color:var(--muted); }.cwd-recovery-dialog dd { margin:0 0 8px; overflow-wrap:anywhere; }.agent-runtime-label { flex-shrink:0; color:var(--muted); font-size:10px; }
+
+.setting-row > .agent-select { width:min(320px,48%); flex-shrink:0; }
+
+.setting-value { color:var(--muted); font-size:11px; }

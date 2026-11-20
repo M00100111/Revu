@@ -2,15 +2,19 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { createPortal } from 'react-dom';
 import type { Project } from './editor';
 import Icon from './Icon';
+import AgentSelect,{type SelectGroup,type SelectOption} from './AgentSelect';
 import MarkdownContent from './MarkdownContent';
 import SessionTreeDialog from './SessionTreeDialog';
 import SummaryCard from './SummaryCard';
+import { CwdRecoveryDialog,ForkDialog, ProjectTrustDialog, RenameSessionDialog } from './CommandDialogs';
+import { mergePiCommands, parsePiCommand, piCommandAt, piQueueWarning, UNSUPPORTED_PI_COMMANDS } from '../shared/piCommands';
 import { historicalSummary, summaryActive, updateSummaryOperations, type SummaryOperation } from '../shared/piSummary';
 import { showContextMenu } from './ContextMenu';
 import { isReservedPiSessionName, threadPiSessions,type ThreadedPiSession } from '../shared/piSession';
 import { inlineDiff } from '../shared/inlineDiff';
 import type { ProjectPathEntry } from '../shared/types';
 import type {
+  PiSlashCommand,PiProjectTrust,PiTrustRequest,PiTrustChoice,
   PiCompactionConfiguration,PiCompactionResult,PiContextProjection,PiDirectBashState,PiEntriesResponse,PiModelDefaults,PiModelSummary,PiProviderStatus,PiQueueState,PiRuntimeStatus,
   PiSessionCatalog,PiSessionEntry,PiSessionGroup,PiSessionInfo,PiSessionScope,PiSessionSearchResult,PiSessionSnapshot,PiSessionSort,PiSessionSummary,PiThinkingLevel,
   PiTreeNavigationResponse,PiUsageStats,RevuPiEvent,
@@ -36,8 +40,6 @@ type SessionTone='idle'|'running'|'done'|'error';
 export interface AgentNavigationRequest {projectId:string;sessionId:string;runKey?:string;token:number}
 export interface AgentNotice {level:'success'|'error';message:string;projectId:string;sessionId:string;runKey?:string}
 type Notify=(level:'info'|'warning'|'error',message:string)=>void;
-interface SelectOption {value:string;label:string}
-interface SelectGroup {label?:string;options:SelectOption[]}
 interface MentionMatch {start:number;end:number;query:string}
 
 const THINKING_LEVELS:PiThinkingLevel[]=['off','minimal','low','medium','high','xhigh','max'];
@@ -387,41 +389,6 @@ const modelGroups=(models:PiModelSummary[]):SelectGroup[]=>{
   return [...groups].map(([provider,options])=>({label:providerName(provider),options}));
 };
 
-function AgentSelect({value,groups,placeholder,onChange,disabled=false,placement='down',align='start',compact=false,showCheck=true}:{
-  value?:string;groups:SelectGroup[];placeholder:string;onChange:(value:string)=>void;disabled?:boolean;
-  placement?:'up'|'down';align?:'start'|'end';compact?:boolean;showCheck?:boolean;
-}){
-  const [open,setOpen]=useState(false);const [menuStyle,setMenuStyle]=useState<React.CSSProperties>({});
-  const root=useRef<HTMLDivElement|null>(null);const menu=useRef<HTMLDivElement|null>(null);
-  const options=groups.flatMap(group=>group.options);const selected=options.find(option=>option.value===value);
-  useLayoutEffect(()=>{if(!open||!root.current)return;const rect=root.current.getBoundingClientRect();const width=compact?Math.max(96,rect.width):rect.width;
-    const left=Math.max(8,Math.min(window.innerWidth-width-8,align==='end'?rect.right-width:rect.left));
-    setMenuStyle({position:'fixed',left,width,maxHeight:Math.max(100,Math.min(280,(placement==='up'?rect.top:window.innerHeight-rect.bottom)-12)),
-      ...(placement==='up'?{bottom:window.innerHeight-rect.top+5}:{top:rect.bottom+5})});
-  },[open,placement,align,compact]);
-  useEffect(()=>{if(!open)return;const outside=(event:PointerEvent|FocusEvent)=>{const target=event.target as Node;if(!root.current?.contains(target)&&!menu.current?.contains(target))setOpen(false);};
-    const escape=(event:KeyboardEvent)=>{if(event.key==='Escape')setOpen(false);};
-    document.addEventListener('pointerdown',outside);document.addEventListener('focusin',outside);document.addEventListener('keydown',escape);
-    return()=>{document.removeEventListener('pointerdown',outside);document.removeEventListener('focusin',outside);document.removeEventListener('keydown',escape);};
-  },[open]);
-  const choose=(next:string)=>{onChange(next);setOpen(false);};
-  const keyDown=(event:React.KeyboardEvent<HTMLButtonElement>)=>{
-    if(event.key==='Escape'){setOpen(false);return;}
-    if(event.key==='Enter'||event.key===' '){event.preventDefault();setOpen(current=>!current);return;}
-    if(event.key!=='ArrowDown'&&event.key!=='ArrowUp')return;
-    event.preventDefault();const index=options.findIndex(option=>option.value===value);
-    const next=event.key==='ArrowDown'?Math.min(options.length-1,index+1):index<0?options.length-1:Math.max(0,index-1);if(options[next])choose(options[next].value);
-  };
-  return <div className={'agent-select '+(compact?'compact':'')} ref={root}
-    onBlur={event=>{const next=event.relatedTarget as Node|null;if(!root.current?.contains(next)&&!menu.current?.contains(next))setOpen(false);}}
-    onKeyDownCapture={event=>{if(event.key==='Escape')setOpen(false);}}><button type="button" className="agent-select-trigger" disabled={disabled}
-    aria-haspopup="listbox" aria-expanded={open} onClick={()=>setOpen(current=>!current)} onKeyDown={keyDown}>
-    <span className={selected?'':'placeholder'}>{selected?.label??placeholder}</span><Icon name="down" size={12}/></button>
-    {open&&createPortal(<div ref={menu} style={menuStyle} className="agent-select-menu" role="listbox">{groups.map((group,index)=><section key={group.label??index}>
-      {group.label&&<strong>{group.label}</strong>}{group.options.map(option=><button type="button" role="option" aria-selected={option.value===value}
-        className={option.value===value?'selected':''} key={option.value} onClick={()=>choose(option.value)}><span>{option.label}</span>{showCheck&&option.value===value&&<Icon name="check" size={11}/>}</button>)}</section>)}</div>,document.body)}
-  </div>;
-}
 
 export function updateEvent(current:ChatState,event:unknown):ChatState{
   const item=record(event);const type=item.type;
@@ -642,8 +609,8 @@ function ModelDialog({projectId,sessionId,onClose,onChanged,notify}:{projectId:s
   </div>;
 }
 
-export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds,width,onResize,onResizeEnd,notify,navigationRequest,onNotice,onProjectAdded,onOpenToolDetail,onUpdateToolDetail}:{
-  open:boolean;projects:Project[];activeProjectId:string|null;dirtyProjectIds:ReadonlySet<string>;width:number;
+export default function AgentChat({onOpenSettings,open,projects,activeProjectId,dirtyProjectIds,width,onResize,onResizeEnd,notify,navigationRequest,onNotice,onProjectAdded,onOpenToolDetail,onUpdateToolDetail}:{
+  onOpenSettings:()=>void;open:boolean;projects:Project[];activeProjectId:string|null;dirtyProjectIds:ReadonlySet<string>;width:number;
   onResize:(width:number)=>void;onResizeEnd:(width:number)=>void;notify:Notify;
   navigationRequest:AgentNavigationRequest|null;onNotice:(notice:AgentNotice)=>void;
   onProjectAdded:(project:Project)=>Project;
@@ -653,6 +620,16 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
   const [sessions,setSessions]=useState<Record<string,PiSessionSummary[]>>({});const [chats,setChats]=useState<Record<string,ChatState>>({});
   const [draft,setDraft]=useState('');const [sessionDialog,setSessionDialog]=useState(false);const [modelDialog,setModelDialog]=useState(false);
   const [treeDialog,setTreeDialog]=useState(false);
+  const [commandMatch,setCommandMatch]=useState<ReturnType<typeof piCommandAt>>(null);
+  const [commands,setCommands]=useState<PiSlashCommand[]>([]);const [commandIndex,setCommandIndex]=useState(0);
+  const [commandsLoading,setCommandsLoading]=useState(false);const [commandsError,setCommandsError]=useState('');const [commandRevision,setCommandRevision]=useState(0);
+  const [cwdDialogs,setCwdDialogs]=useState<import('../shared/piTypes').PiCwdRequest[]>([]);
+  const [runtimeLabel,setRuntimeLabel]=useState('');
+  const [inputWarning,setInputWarning]=useState('');
+  const [forkTarget,setForkTarget]=useState<{projectId:string;sessionId:string}|null>(null);
+  const [renameTarget,setRenameTarget]=useState<{projectId:string;sessionId:string;name:string}|null>(null);
+  const [trustDialogs,setTrustDialogs]=useState<{id?:string;projectId:string;sessionId?:string;trust:PiProjectTrust}[]>([]);
+  const queueSubmitting=useRef(false);
   const [modelMenu,setModelMenu]=useState(false);const [models,setModels]=useState<PiModelSummary[]>([]);const [loading,setLoading]=useState(false);
   const [composerExpanded,setComposerExpanded]=useState(false);
   const [queuePanelOpen,setQueuePanelOpen]=useState(false);
@@ -709,6 +686,10 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
   const liveQueueCount=queue.steering.length+queue.followUp.length;const retainedQueueCount=retainedQueue.steering.length+retainedQueue.followUp.length;
   const queueCount=liveQueueCount+retainedQueueCount;
   const draftBash=directBashCommand(draft);
+  const commandOptions=mergePiCommands(commands).filter(item=>!commandMatch?.query||`${item.name} ${item.description??''}`.toLocaleLowerCase().includes(commandMatch.query.toLocaleLowerCase()));
+  const queueWarning=piQueueWarning(draft,commands);
+  const draftBuiltin=mergePiCommands([]).some(item=>item.name===parsePiCommand(draft.trimEnd())?.name);
+  const draftExtension=commands.some(item=>item.source==='extension'&&item.name===parsePiCommand(draft.trimEnd())?.name);
   const bashWarningVisible=!!bashHint&&current?.bash?.status==='running';
   const agentRunning=current?.status==='running';const agentActive=agentRunning||current?.status==='stopping';
   const showQueuePanel=queuePanelOpen||(!!agentActive&&!!draft.trim())||queueCount>0;
@@ -744,6 +725,19 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
     if(!current)return;
     for(const tool of current.tools)if(tool.status==='running')onUpdateToolDetail(toolDetail(current,tool,toolClock));
   },[current,toolClock,onUpdateToolDetail]);
+  useEffect(()=>{void window.revu.agent.getRuntimeInfo().then(unwrap).then(info=>setRuntimeLabel(info.config.kind==='wsl'?'WSL · '+info.config.distribution:'Native')).catch(()=>{});},[]);
+  useEffect(()=>{if(!inputWarning)return;const timer=setTimeout(()=>setInputWarning(''),5000);return()=>clearTimeout(timer);},[inputWarning]);
+  useEffect(()=>{
+    setCommands([]);setCommandsError('');setCommandMatch(null);setCommandIndex(0);
+    if(!selectedProjectId||!open)return;
+    let cancelled=false;setCommandsLoading(true);
+    void window.revu.agent.getCommands(selectedProjectId,selectedSessionId??undefined).then(unwrap).then(items=>{if(!cancelled)setCommands(items);})
+      .catch(error=>{if(!cancelled)setCommandsError(errorMessage(error));}).finally(()=>{if(!cancelled)setCommandsLoading(false);});
+    return()=>{cancelled=true;};
+  },[open,selectedProjectId,selectedSessionId,commandRevision]);
+  useEffect(()=>{setCommandIndex(0);},[commandMatch?.query,commands]);
+  useEffect(()=>{setForkTarget(null);setRenameTarget(null);setInputWarning('');},[selectedProjectId,selectedSessionId]);
+  useEffect(()=>{if(commandMatch)composerRef.current?.querySelector('[aria-label="Commands"] [aria-selected="true"]')?.scrollIntoView({block:'nearest'});},[commandMatch,commandIndex]);
   const dirty=selectedProjectId?dirtyProjectIds.has(selectedProjectId):false;
   const reloadSessions=async(projectId:string)=>{
     try{const catalog=await window.revu.agent.listSessions(projectId).then(unwrap);const items=catalog.sessions;setSessions(current=>({...current,[projectId]:items}));return items;}
@@ -867,6 +861,16 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
     setActiveRunKey(current=>current===active?current:active);
   },[]);
   useEffect(()=>window.revu.agent.onEvent((event:RevuPiEvent)=>{
+    if(event.type==='cwd-request'){setCwdDialogs(items=>[...items,event.payload as import('../shared/piTypes').PiCwdRequest]);return;}
+    if(event.type==='runtime-changed'){const change=event.payload as import('../shared/piTypes').PiRuntimeChange;setRuntimeLabel(change.info.config.kind==='wsl'?'WSL · '+change.info.config.distribution:'Native');setCommandRevision(value=>value+1);
+      for(const item of change.restarted){const snapshot=item.snapshot;void window.revu.agent.getEntries(snapshot.projectId,snapshot.sessionId).then(unwrap).then(entries=>{setChats(state=>{const next={...state};const previous=next[item.previousId];delete next[item.previousId];next[snapshot.sessionId]=withEntries(withSnapshot(snapshot,previous),entries);chatsRef.current=next;return next;});}).catch(error=>notify('warning',errorMessage(error)));}
+      for(const project of viewRef.current.projects)void reloadSessions(project.id);return;
+    }
+    if(event.type==='trust-request'){
+      const request=event.payload as PiTrustRequest;setTrustDialogs(items=>items.some(item=>item.id===request.id)?items:[...items,{...request,projectId:event.projectId}]);return;
+    }
+    if(event.type==='warning'){notify('warning',String(event.payload));return;}
+    if(event.type==='resources-changed'){setCommandRevision(value=>value+1);return;}
     const sendErrorNotice=(message:string)=>{
       erroredRuns.current.add(event.sessionId);const chat=chatsRef.current[event.sessionId];const latest=chat?buildRuns(chat).at(-1):undefined;
       const noticeKey=`${event.sessionId}:${latest?.key??'latest'}:error`;if(notifiedRuns.current.has(noticeKey))return;notifiedRuns.current.add(noticeKey);
@@ -979,7 +983,7 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
     if(action==='close')closeSessionTab(sessionId);if(action==='closeOthers')closeOtherSessionTabs(sessionId);if(action==='closeAll')closeAllSessionTabs();};
   const closeNewChatTab=()=>{const next=(openSessionIds[selectedProjectId]??[]).at(-1);if(next)void openSessionById(selectedProjectId,next);};
   const focusComposer=(caret:number)=>requestAnimationFrame(()=>{const input=textareaRef.current;if(!input)return;input.focus();input.setSelectionRange(caret,caret);});
-  const updateDraftAt=(text:string,caret:number)=>{historyIndex.current=null;draftRef.current=text;setDraft(text);setMention(mentionAt(text,caret));setMentionIndex(0);focusComposer(caret);};
+  const updateDraftAt=(text:string,caret:number)=>{historyIndex.current=null;draftRef.current=text;setDraft(text);setMention(mentionAt(text,caret));setMentionIndex(0);setCommandMatch(piCommandAt(text,caret));setCommandIndex(0);focusComposer(caret);};
   const insertReferences=(paths:string[],start?:number,end?:number)=>{
     if(!selectedProject||!paths.length)return;const value=draftRef.current;const input=textareaRef.current;const from=start??input?.selectionStart??value.length;const to=end??input?.selectionEnd??from;
     const before=value.slice(0,from);const after=value.slice(to);const references=paths.map(path=>fileReference(path,selectedProject.root)).join(' ');
@@ -987,6 +991,17 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
     updateDraftAt(`${before}${leading}${references}${trailing}${after}`,before.length+leading.length+references.length+trailing.length);
   };
   const chooseFiles=async()=>{if(!selectedProjectId)return;try{const paths=await window.revu.chooseChatFiles(selectedProjectId);insertReferences(paths,draftRef.current.length,draftRef.current.length);}catch(error){notify('error',errorMessage(error));}};
+  const insertCommandTrigger=()=>{
+    setMention(null);setCommandIndex(0);
+    if(!draft){updateDraftAt('/',1);return;}
+    const match=/^\/[^\s]*/.exec(draft);if(match){focusComposer(match[0].length);setCommandMatch(piCommandAt(draft,match[0].length));}
+    else{setCommandMatch({query:'',end:0});textareaRef.current?.focus();}
+  };
+  const acceptCommand=(command:PiSlashCommand,execute=false)=>{
+    if(!commandMatch)return;const after=draft.slice(commandMatch.end);const next=`/${command.name}${after.startsWith(' ')?'':' '}${after}`;
+    if(execute){historyIndex.current=null;draftRef.current=next;setDraft(next);setMention(null);setCommandMatch(null);if(command.source==='builtin'){void executeBuiltin(next.trimEnd());return;}void sendCommand(next);return;}
+    updateDraftAt(next,command.name.length+2);setCommandMatch(null);
+  };
   const insertMentionTrigger=()=>{
     const input=textareaRef.current;const start=input?.selectionStart??draft.length;const end=input?.selectionEnd??start;const before=draft.slice(0,start);const prefix=before&&!/[\s(（]$/.test(before)?' @':'@';
     const next=`${before}${prefix}${draft.slice(end)}`;updateDraftAt(next,before.length+prefix.length);
@@ -1012,14 +1027,14 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
     void pathsForFiles(files).then(paths=>insertReferences(paths,draftRef.current.length,draftRef.current.length)).catch(error=>notify('error',errorMessage(error)));
   };
   const browseHistory=(direction:-1|1)=>{
-    if(mention)return false;const items=savedInputHistory();if(!items.length)return false;let index=historyIndex.current;
+    if(mention||commandMatch)return false;const items=savedInputHistory();if(!items.length)return false;let index=historyIndex.current;
     if(index===null){if(direction>0||draft)return false;index=items.length-1;}else index+=direction;
     if(index>=items.length){historyIndex.current=null;setDraft('');setMention(null);focusComposer(0);return true;}
     index=Math.max(0,index);historyIndex.current=index;setDraft(items[index]);setMention(null);focusComposer(items[index].length);return true;
   };
   const queueDraft=async(kind:'steering'|'followUp')=>{
-    if(!selectedProjectId||!current||!draft.trim()||directBashCommand(draft))return;const text=draft;
-    historyIndex.current=null;setMention(null);draftRef.current='';setDraft('');focusComposer(0);
+    if(!selectedProjectId||!current||!draft.trim()||directBashCommand(draft))return;
+    if(queueWarning){setInputWarning(queueWarning);return;}if(queueSubmitting.current)return;const text=draft;queueSubmitting.current=true;
     try{
       if(current.status==='running'){
         if(kind==='steering')await window.revu.agent.steer(selectedProjectId,current.sessionId,text).then(unwrap);
@@ -1032,7 +1047,8 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
           const updated={...state,[current.sessionId]:{...chat,retainedQueue:saved}};chatsRef.current=updated;return updated;});
       }
       rememberInput(text);
-    }catch(error){if(!draftRef.current)updateDraftAt(text,text.length);notify('error',errorMessage(error));}
+      if(draftRef.current===text){historyIndex.current=null;setMention(null);setCommandMatch(null);draftRef.current='';setDraft('');focusComposer(0);}
+    }catch(error){notify('warning',errorMessage(error));}finally{queueSubmitting.current=false;}
   };
   const clearPendingQueue=async()=>{
     if(!selectedProjectId||!current||!queueCount)return;
@@ -1063,28 +1079,32 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
       setChats(state=>{const next={...state,[session.sessionId]:withEntries(withSnapshot(snapshot,state[session.sessionId]),entries)};chatsRef.current=next;return next;});
     }catch(error){if(!draftRef.current)updateDraftAt(text,text.length);notify('error',errorMessage(error));}
   };
-  const submitInput=()=>{const bash=directBashCommand(draft);if(bash){void executeDirectBash(bash);return;}if(agentRunning)void queueDraft('steering');else void send();};
-  const send=async()=>{if(!selectedProjectId||!draft.trim()||dirty||(!current&&!newChatModel))return;const text=draft;historyIndex.current=null;setMention(null);setDraft('');
+  const submitInput=()=>{if(parsePiCommand(draft.trimEnd())&&draftBuiltin){void executeBuiltin(draft.trimEnd());return;}const bash=directBashCommand(draft);if(bash){void executeDirectBash(bash);return;}if(agentRunning)void queueDraft('steering');else void send();};
+  const sendCommand=async(text:string)=>{if(!selectedProjectId)return;const warning=agentRunning?piQueueWarning(text,commands):undefined;if(warning){setInputWarning(warning);return;}
+    if(dirty&&!agentRunning){notify('warning','Save unsaved files before running Pi.');return;}
+    try{const session=await ensureChatSession();if(agentRunning)await window.revu.agent.steer(selectedProjectId,session.sessionId,text).then(unwrap);else await window.revu.agent.prompt(selectedProjectId,session.sessionId,text).then(unwrap);rememberInput(text);if(draftRef.current===text){draftRef.current='';setDraft('');setCommandMatch(null);}}catch(error){notify('warning',errorMessage(error));}};
+  const send=async()=>{if(!selectedProjectId||!draft.trim()||dirty||(!current&&!newChatModel&&!draftExtension))return;const text=draft;historyIndex.current=null;setMention(null);setDraft('');
     try{
       const session=await ensureChatSession();await window.revu.agent.prompt(selectedProjectId,session.sessionId,text).then(unwrap);rememberInput(text);
     }
     catch(error){setDraft(text);notify('error',error instanceof Error?error.message:String(error));}
   };
   const setRetained=async(kind:'steering'|'followUp',index:number,value?:string)=>{
-    if(!selectedProjectId||!current)return;const next=updatePiQueueItem(retainedQueue,kind,index,value);
+    if(!selectedProjectId||!current)return false;const warning=value===undefined?undefined:piQueueWarning(value,commands);if(warning){setInputWarning(warning);return false;}const next=updatePiQueueItem(retainedQueue,kind,index,value);
     try{const saved=await window.revu.agent.setRetainedQueue(selectedProjectId,current.sessionId,next).then(unwrap);setChats(state=>{
-      const chat=state[current.sessionId];if(!chat)return state;const updated={...state,[current.sessionId]:{...chat,retainedQueue:saved}};chatsRef.current=updated;return updated;});}
-    catch(error){notify('error',errorMessage(error));}
+      const chat=state[current.sessionId];if(!chat)return state;const updated={...state,[current.sessionId]:{...chat,retainedQueue:saved}};chatsRef.current=updated;return updated;});return true;}
+    catch(error){notify('warning',errorMessage(error));return false;}
   };
   const sendRetained=async(kind:'steering'|'followUp',index:number,message:string)=>{
-    if(!selectedProjectId||!current)return;const next=updatePiQueueItem(retainedQueue,kind,index);
+    if(!selectedProjectId||!current)return;if(agentActive||current.isCompacting){setInputWarning('Wait for the session to finish before sending this prompt.');return;}const next=updatePiQueueItem(retainedQueue,kind,index);
     try{const saved=await window.revu.agent.setRetainedQueue(selectedProjectId,current.sessionId,next).then(unwrap);setChats(state=>{
       const chat=state[current.sessionId];if(!chat)return state;const updated={...state,[current.sessionId]:{...chat,retainedQueue:saved}};chatsRef.current=updated;return updated;});
       await window.revu.agent.prompt(selectedProjectId,current.sessionId,message).then(unwrap);rememberInput(message);
     }catch(error){notify('error',errorMessage(error));}
   };
   const appendRetained=(message:string)=>updateDraftAt(draft?`${draft}\n${message}`:message,(draft?`${draft}\n${message}`:message).length);
-  const replaceRetained=(kind:'steering'|'followUp',index:number)=>{if(!draft.trim())return;const value=draft;draftRef.current='';setDraft('');void setRetained(kind,index,value);focusComposer(0);};
+  const replaceRetained=async(kind:'steering'|'followUp',index:number)=>{if(!draft.trim()||queueWarning||queueSubmitting.current)return;const value=draft;queueSubmitting.current=true;
+    try{if(await setRetained(kind,index,value)&&draftRef.current===value){draftRef.current='';setDraft('');setCommandMatch(null);focusComposer(0);}}finally{queueSubmitting.current=false;}};
   const toggleDirectBash=()=>{if(!draft.startsWith('!'))rememberInput(draft);const next=toggleDirectBashInput(draft);updateDraftAt(next,next.startsWith('!!')?Math.max(2,(textareaRef.current?.selectionStart??1)+1):1);};
   const stop=async()=>{if(!current||!selectedProjectId)return;setAbortArmed(false);if(abortTimer.current)clearTimeout(abortTimer.current);
     try{await window.revu.agent.stop(selectedProjectId,current.sessionId).then(unwrap);}catch(error){notify('error',error instanceof Error?error.message:String(error));}};
@@ -1172,6 +1192,66 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
     try{const path=await window.revu.agent.exportHtml(session.projectId,session.id).then(unwrap);if(path)notify('info','Conversation exported.');}
     catch(error){notify('error',errorMessage(error));}
   };
+  const executeBuiltin=async(text:string)=>{
+    const command=parsePiCommand(text);if(!command||!selectedProjectId)return;
+    if(UNSUPPORTED_PI_COMMANDS.has(command.name)){notify('warning',`/${command.name} is not supported in Revu yet.`);return;}
+    const needsSession=['name','session','tree','fork','clone','copy','reload'].includes(command.name);
+    if(needsSession&&!current){notify('warning','Open a session before using this command.');return;}
+    if(['model','thinking','scoped-models','tree','fork','clone','reload'].includes(command.name)&&(agentActive||current?.isCompacting||current?.bash?.status==='running')){
+      notify('warning','Wait for the session to finish before using this command.');return;
+    }
+    try{
+      switch(command.name){
+        case 'model':case 'thinking':case 'scoped-models':await loadModels();break;
+        case 'settings':onOpenSettings();break;
+        case 'new':startNewChat();break;
+        case 'resume':setSessionDialog(true);break;
+        case 'name':setRenameTarget({projectId:selectedProjectId,sessionId:current!.sessionId,name:command.args.trim()||titleFor((sessions[selectedProjectId]??[]).find(session=>session.id===current!.sessionId),current!)});break;
+        case 'session':await openSessionInfo();break;
+        case 'tree':setTreeDialog(true);break;
+        case 'fork':setForkTarget({projectId:selectedProjectId,sessionId:current!.sessionId});break;
+        case 'clone':{
+          const snapshot=await window.revu.agent.cloneSession(selectedProjectId,current!.sessionId).then(unwrap);await adoptCreatedSession(selectedProjectId,snapshot,'');break;
+        }
+        case 'compact':setContextOpen(true);break;
+        case 'copy':{
+          const last=[...current!.messages].reverse().find(message=>{const item=record(message);return item.role==='assistant'&&!(item.stopReason==='aborted'&&Array.isArray(item.content)&&!item.content.length);});
+          const value=messageText(last).trim();if(!value){notify('warning','No assistant message to copy.');return;}
+          if(!await window.revu.copyText(value))throw new Error('Could not copy the message.');notify('info','Copied last assistant message.');break;
+        }
+        case 'trust':{
+          const trust=await window.revu.agent.getProjectTrust(selectedProjectId,current?.sessionId).then(unwrap);
+          setTrustDialogs(items=>[...items,{projectId:selectedProjectId,sessionId:current?.sessionId,trust}]);break;
+        }
+        case 'reload':{
+          const snapshot=await window.revu.agent.reloadResources(selectedProjectId,current!.sessionId).then(unwrap);applyContextSnapshot(snapshot);setCommandRevision(value=>value+1);notify('info','Pi resources reloaded.');break;
+        }
+      }
+      historyIndex.current=null;rememberInput(text);setCommandMatch(null);setMention(null);
+      if(draftRef.current.trimEnd()===text){draftRef.current='';setDraft('');}
+      if(['new','clone','copy','reload'].includes(command.name))focusComposer(0);
+    }catch(error){notify('warning',errorMessage(error));}
+  };
+  const closeTrust=async()=>{
+    const dialog=trustDialogs[0];if(!dialog)return;
+    try{if(dialog.id)await window.revu.agent.respondProjectTrust(dialog.id,null).then(unwrap);setTrustDialogs(items=>items.slice(1));}
+    catch(error){notify('warning',errorMessage(error));}
+  };
+  const saveTrust=async(choice:PiTrustChoice)=>{
+    const dialog=trustDialogs[0];if(!dialog)return;
+    if(dialog.id)await window.revu.agent.respondProjectTrust(dialog.id,choice).then(unwrap);
+    else{
+      const response=await window.revu.agent.saveProjectTrust(dialog.projectId,choice,dialog.sessionId).then(unwrap);
+      for(const item of response.restarted){const snapshot=item.snapshot;
+        const entries=await window.revu.agent.getEntries(snapshot.projectId,snapshot.sessionId).then(unwrap);
+        setChats(state=>{const next={...state};const previous=next[item.previousId];delete next[item.previousId];next[snapshot.sessionId]=withEntries(withSnapshot(snapshot,previous),entries);chatsRef.current=next;return next;});
+        setOpenSessionIds(state=>({...state,[snapshot.projectId]:(state[snapshot.projectId]??[]).map(id=>id===item.previousId?snapshot.sessionId:id)}));
+        setSelectedSessionId(id=>id===item.previousId?snapshot.sessionId:id);
+      }
+      await reloadSessions(dialog.projectId);setCommandRevision(value=>value+1);
+    }
+    setTrustDialogs(items=>items.slice(1));
+  };
   return <>
     <aside className={`agent-chat ${open?'open':''} ${fileDragActive?'file-drag-active':''}`} style={{width:open?width:0}} aria-hidden={!open}
       onDragEnter={event=>{if(event.dataTransfer.types.includes('Files'))setFileDragActive(true);}}
@@ -1249,20 +1329,30 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
         </div>
       </div>
       <div ref={composerRef} className={`agent-composer ${composerExpanded?'expanded':''} ${showQueuePanel?'queues-visible':''} ${draft.startsWith('!')?'bash-mode':''}`}>{bashWarningVisible&&<div className="agent-bash-warning" role="status"><span>Warning: A bash command is already running. Stop it before running another.</span></div>}
-        {dirty&&!draft.startsWith('!')&&<div className="agent-dirty-warning">Save unsaved files before running Pi.</div>}
+        {inputWarning&&<div className="agent-bash-warning" role="status">{inputWarning}</div>}
+        {dirty&&!draft.startsWith('!')&&!draftBuiltin&&<div className="agent-dirty-warning">Save unsaved files before running Pi.</div>}
         {showQueuePanel&&<div className="agent-input-queues" aria-label="Queued messages">
           <div className="agent-input-queue-row"><Icon name="steering" size={17}/><div className="agent-input-queue-messages">
             {queue.steering.map((message,index)=><QueueMessage message={message} key={`live-${index}:${message}`}/>)}
-            {retainedQueue.steering.map((message,index)=><QueueMessage retained message={message} key={`retained-${index}:${message}`} replaceDisabled={!draft.trim()}
+            {retainedQueue.steering.map((message,index)=><QueueMessage retained message={message} key={`retained-${index}:${message}`} replaceDisabled={!draft.trim()||!!queueWarning||commandsLoading}
               onAppend={()=>appendRetained(message)} onReplace={()=>replaceRetained('steering',index)} onDelete={()=>void setRetained('steering',index)} onSend={()=>void sendRetained('steering',index,message)}/>)}</div>
             <button type="button" className="agent-input-queue-submit" disabled={!current||!draft.trim()||!!draftBash} title={agentRunning?'Steer the current run (Enter)':'Add to steering queue (Ctrl+Enter)'} onClick={()=>void queueDraft('steering')}>
               <Icon name="steeringButton" size={16}/><span>Steering</span></button></div>
           <div className="agent-input-queue-row"><Icon name="followUp" size={15}/><div className="agent-input-queue-messages">
             {queue.followUp.map((message,index)=><QueueMessage message={message} key={`live-${index}:${message}`}/>)}
-            {retainedQueue.followUp.map((message,index)=><QueueMessage retained message={message} key={`retained-${index}:${message}`} replaceDisabled={!draft.trim()}
+            {retainedQueue.followUp.map((message,index)=><QueueMessage retained message={message} key={`retained-${index}:${message}`} replaceDisabled={!draft.trim()||!!queueWarning||commandsLoading}
               onAppend={()=>appendRetained(message)} onReplace={()=>replaceRetained('followUp',index)} onDelete={()=>void setRetained('followUp',index)} onSend={()=>void sendRetained('followUp',index,message)}/>)}</div>
             <button type="button" className="agent-input-queue-submit" disabled={!current||!draft.trim()||!!draftBash} title={agentRunning?'Queue follow-up (Alt+Enter)':'Add to follow-up queue (Alt+Enter)'} onClick={()=>void queueDraft('followUp')}>
               <Icon name="followUpButton" size={16}/><span>FollowUp</span></button></div>
+        </div>}
+        {commandMatch&&<div className="agent-path-menu agent-command-menu" role="listbox" aria-label="Commands">
+          {commandOptions.map((command,index)=><button key={command.name} title={command.description} type="button" role="option" aria-selected={index===commandIndex}
+            className={[index===commandIndex?'selected':'',command.source==='builtin'&&UNSUPPORTED_PI_COMMANDS.has(command.name)?'unsupported':''].filter(Boolean).join(' ')} onMouseDown={event=>event.preventDefault()} onMouseEnter={()=>setCommandIndex(index)} onClick={()=>acceptCommand(command)}>
+            <Icon name={command.source==='skill'?'skillItem':command.source==='extension'?'extensionItem':command.source==='prompt'?'promptItem':'commandItem'} size={16}/>
+            <span><strong>/{command.name}</strong><small>{command.description}</small></span></button>)}
+          {commandsLoading&&<div className="agent-path-empty">Loading commands…</div>}
+          {commandsError&&<div className="agent-path-empty error">{commandsError}</div>}
+          {!commandOptions.length&&!commandsLoading&&!commandsError&&<div className="agent-path-empty">No commands found</div>}
         </div>}
         {mention&&<div className="agent-path-menu" role="listbox" aria-label="Project files and folders">
           {mentionLoading?<div className="agent-path-empty">Searching…</div>:mentionError?<div className="agent-path-empty error">{mentionError}</div>
@@ -1276,10 +1366,15 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
           onClick={()=>{if(composerExpanded){composerExpansionSource.current=null;composerManuallyCollapsed.current=true;setComposerExpanded(false);}
             else{composerExpansionSource.current='manual';composerManuallyCollapsed.current=false;setComposerExpanded(true);}}}><Icon name={composerExpanded?'collapse':'expand'} size={15}/></button>}
         <textarea ref={textareaRef} value={draft} disabled={!selectedProjectId} placeholder="" onPaste={event=>void pasteFiles(event)}
-          onBlur={event=>{if(!composerRef.current?.contains(event.relatedTarget as Node|null))setMention(null);}}
-          onSelect={event=>setMention(mentionAt(draft,event.currentTarget.selectionStart))}
-          onChange={event=>{historyIndex.current=null;draftRef.current=event.target.value;setDraft(event.target.value);setMention(mentionAt(event.target.value,event.target.selectionStart));setMentionIndex(0);}}
+          onBlur={event=>{if(!composerRef.current?.contains(event.relatedTarget as Node|null)){setMention(null);setCommandMatch(null);}}}
+          onSelect={event=>{setMention(mentionAt(draft,event.currentTarget.selectionStart));setCommandMatch(piCommandAt(draft,event.currentTarget.selectionStart));}}
+          onChange={event=>{historyIndex.current=null;draftRef.current=event.target.value;setDraft(event.target.value);setMention(mentionAt(event.target.value,event.target.selectionStart));setMentionIndex(0);setCommandMatch(piCommandAt(event.target.value,event.target.selectionStart));setCommandIndex(0);}}
           onKeyDown={event=>{
+            if(commandMatch){
+              if(event.key==='ArrowDown'||event.key==='ArrowUp'){event.preventDefault();setCommandIndex(index=>commandOptions.length?(index+(event.key==='ArrowDown'?1:-1)+commandOptions.length)%commandOptions.length:0);return;}
+              if(event.key==='Escape'){event.preventDefault();setCommandMatch(null);return;}
+              if((event.key==='Enter'||event.key==='Tab')&&!event.shiftKey&&!event.ctrlKey&&!event.altKey&&commandOptions[commandIndex]){event.preventDefault();acceptCommand(commandOptions[commandIndex],event.key==='Enter');return;}
+            }
             if(mention){
               if(event.key==='ArrowDown'){event.preventDefault();if(mentionOptions.length)setMentionIndex(index=>Math.min(mentionOptions.length-1,index+1));return;}
               if(event.key==='ArrowUp'){event.preventDefault();if(mentionOptions.length)setMentionIndex(index=>Math.max(0,index-1));return;}
@@ -1300,6 +1395,7 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
         {showQueueToggle&&<button type="button" className="agent-input-queue-toggle" title="Show Queue" aria-label="Show queued messages" onClick={()=>setQueuePanelOpen(true)}><Icon name="queue" size={14}/></button>}
         {showQueuePanel&&queueCount>0&&<button type="button" className="agent-input-queue-clear" title="Clear Queue" aria-label="Clear queued messages" onClick={()=>void clearPendingQueue()}><Icon name="clear" size={13}/></button>}
         <footer><div className="agent-reference-actions">
+          <button type="button" title="Commands" aria-label="Commands" disabled={!selectedProjectId} onMouseDown={event=>event.preventDefault()} onClick={insertCommandTrigger}><Icon name="commands" size={14}/></button>
           <button type="button" title="Mention File or Folder" aria-label="Mention file or folder" disabled={!selectedProjectId} onClick={insertMentionTrigger}><Icon name="mention" size={14}/></button>
           <button type="button" title="Choose File" aria-label="Choose file" disabled={!selectedProjectId} onClick={()=>void chooseFiles()}><Icon name="add" size={14}/></button>
           <button type="button" title={draft.startsWith('!')&&!draft.startsWith('!!')?'Exclude Bash result from context':'Direct Bash'} aria-label="Toggle Direct Bash mode" disabled={!selectedProjectId} onClick={toggleDirectBash}>
@@ -1309,9 +1405,9 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
               aria-haspopup="listbox" aria-expanded={modelMenu} disabled={!selectedProjectId||current?.status==='running'} onClick={()=>modelMenu?setModelMenu(false):void loadModels()}>
           {selectedModel?`${selectedModel.id} · ${selectedThinking}`:'Select Model'}<Icon name="down" size={11}/></button></div>
           {current?.status==='running'||current?.status==='stopping'?<button className="agent-send stop" onClick={()=>void stop()}>{abortArmed?'Abort ?':<><Icon name="stop" size={14}/>Stop</>}</button>
-            :<button className="agent-send" disabled={!selectedProjectId||!draft.trim()||(!draftBash&&(!selectedModel||dirty))||!!current?.bash} onClick={submitInput}><Icon name="send" size={14}/>Send</button>}</footer>
+            :<button className="agent-send" disabled={!selectedProjectId||!draft.trim()||(!draftBash&&!draftBuiltin&&((!selectedModel&&!draftExtension)||dirty))||!!current?.bash} onClick={submitInput}><Icon name="send" size={14}/>Send</button>}</footer>
       </div>
-      {selectedProjectId&&<div className="agent-session-meta"><span className="agent-project-path" title={selectedProject?.root}>{selectedProject?.root}</span>
+      {selectedProjectId&&<div className="agent-session-meta"><span className="agent-project-path" title={selectedProject?.root}>{selectedProject?.root}</span><span className="agent-runtime-label">{runtimeLabel}</span>
         <div className="agent-context-control" ref={contextRef}><button className="agent-context-summary" aria-haspopup="dialog" aria-expanded={contextOpen} onClick={()=>setContextOpen(value=>!value)}>{formatContextPercent(usage.contextPercent)}</button>
           {contextOpen&&<section className="agent-context-popover" role="dialog" aria-label="Context usage"><header><strong>Context</strong><span>{(current?.isCompacting||contextOperation==='compact')&&'Compacting…'}</span>
             <button className="agent-icon-button" title="Context Detail" aria-label="Open context detail" disabled={!current} onClick={()=>void openContextDetail()}><Icon name="detail" size={13}/></button></header>
@@ -1331,6 +1427,11 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
             <div><dt>Runs</dt><dd>{usage.runs}</dd></div><div><dt>Tool calls</dt><dd>{usage.toolCalls}</dd></div><div><dt>Cost</dt><dd>${usage.cost.toFixed(6)}</dd></div>
           </dl></section>}</div>
       </div>}
+
+      {renameTarget&&<RenameSessionDialog key={renameTarget.sessionId} name={renameTarget.name} onClose={()=>{setRenameTarget(null);focusComposer(draftRef.current.length);}} onSave={async name=>{
+        await window.revu.agent.renameSession(renameTarget.projectId,renameTarget.sessionId,name).then(unwrap);
+        setChats(state=>({...state,[renameTarget.sessionId]:{...state[renameTarget.sessionId],name}}));await reloadSessions(renameTarget.projectId);
+      }}/>}
       {sessionInfoOpen&&<div className="agent-chat-modal-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)setSessionInfoOpen(false);}}>
         <section className="agent-chat-modal session-info-dialog" role="dialog" aria-modal="true" aria-label="Session Info">
           <header><strong>Session Info</strong><button className="agent-icon-button" onClick={()=>setSessionInfoOpen(false)} aria-label="Close"><Icon name="close" size={14}/></button></header>
@@ -1401,9 +1502,15 @@ export default function AgentChat({open,projects,activeProjectId,dirtyProjectIds
         if(selectedSessionId===session.id)startNewChat();return reloadSessions(session.projectId);
       }).catch(error=>notify('error',errorMessage(error)));}} onClone={session=>void cloneSession(session)} onExport={session=>void exportSession(session)}
       onFolderChanged={()=>void reloadSessions(selectedProjectId)} onClose={()=>setSessionDialog(false)}/>}
+      {forkTarget&&<ForkDialog key={forkTarget.sessionId} {...forkTarget} onClose={()=>{setForkTarget(null);focusComposer(draftRef.current.length);}} onFork={async entryId=>{
+        const response=await window.revu.agent.forkSession(forkTarget.projectId,forkTarget.sessionId,entryId).then(unwrap);
+        await adoptCreatedSession(forkTarget.projectId,response.snapshot,response.selectedText);
+      }}/>}
     {treeDialog&&current&&<SessionTreeDialog projectId={current.projectId} sessionId={current.sessionId} onClose={()=>setTreeDialog(false)}
       summaryOperation={current.summaryOperations.filter(operation=>operation.kind==='branchSummary').at(-1)} summaryNow={summaryWaiting?retryClock:Date.now()} onOpenSummaryJson={openSummaryJson}
       onNavigated={response=>void adoptTreeNavigation(response)} notify={notify}/>}
+    {!!cwdDialogs.length&&<CwdRecoveryDialog key={cwdDialogs[0].id} request={cwdDialogs[0]} onRespond={async accept=>{await window.revu.agent.respondSessionCwd(cwdDialogs[0].id,accept).then(unwrap);setCwdDialogs(items=>items.slice(1));}}/>}
+    {!!trustDialogs.length&&<ProjectTrustDialog key={trustDialogs[0].id??`${trustDialogs[0].projectId}:${trustDialogs[0].sessionId}`} trust={trustDialogs[0].trust} onSave={saveTrust} onClose={()=>void closeTrust()}/>}
     {modelDialog&&selectedProjectId&&<ModelDialog projectId={selectedProjectId} sessionId={selectedSessionId??undefined} onClose={()=>setModelDialog(false)}
       onChanged={()=>{if(!selectedSessionId)void loadNewChatDefaults(selectedProjectId);}} notify={notify}/>} 
   </>;

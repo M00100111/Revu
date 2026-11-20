@@ -44,6 +44,7 @@
       "package.json"
     ],
     "extraResources": [
+      {"from": ".pi-runtime/node-linux-x64/node", "to": "pi/node-linux-x64/node"},
       {
         "from": ".pi-runtime/node/node.exe",
         "to": "pi/node/node.exe"

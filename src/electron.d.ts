@@ -1,6 +1,15 @@
-import type { PiCompactionConfiguration, PiCompactionResponse, PiContextProjection, PiDirectBashState, PiDiscoveredSessionResponse, PiEntriesResponse, PiForkResponse, PiModelDefaults, PiModelSummary, PiProviderStatus, PiQueueState, PiSessionCatalog, PiSessionFolderResult, PiSessionInfo, PiSessionScope, PiSessionSearchResult, PiSessionSnapshot, PiSessionSort, PiSessionTreeResponse, PiThinkingLevel, PiTreeNavigationResponse, RevuPiEvent } from '../shared/piTypes';
+import type { PiRuntimeConfig,PiRuntimeInfo,PiRuntimeChange, PiTrustSaveResponse, PiProjectTrust, PiSlashCommand, PiTrustChoice, PiCompactionConfiguration, PiCompactionResponse, PiContextProjection, PiDirectBashState, PiDiscoveredSessionResponse, PiEntriesResponse, PiForkResponse, PiModelDefaults, PiModelSummary, PiProviderStatus, PiQueueState, PiSessionCatalog, PiSessionFolderResult, PiSessionInfo, PiSessionScope, PiSessionSearchResult, PiSessionSnapshot, PiSessionSort, PiSessionTreeResponse, PiThinkingLevel, PiTreeNavigationResponse, RevuPiEvent } from '../shared/piTypes';
 interface RevuResponse<T>{ok:boolean;value?:T;status?:number;error?:string}
 interface RevuAgentApi {
+  chooseBashPath():Promise<RevuResponse<string|null>>;
+  getRuntimeInfo():Promise<RevuResponse<PiRuntimeInfo>>;
+  setRuntime(config:PiRuntimeConfig):Promise<RevuResponse<PiRuntimeChange>>;
+  respondSessionCwd(requestId:string,accept:boolean):Promise<RevuResponse<void>>;
+  getCommands(projectId:string,sessionId?:string):Promise<RevuResponse<PiSlashCommand[]>>;
+  getProjectTrust(projectId:string,sessionId?:string):Promise<RevuResponse<PiProjectTrust>>;
+  saveProjectTrust(projectId:string,choice:PiTrustChoice,sessionId?:string):Promise<RevuResponse<PiTrustSaveResponse>>;
+  respondProjectTrust(requestId:string,choice:PiTrustChoice|null):Promise<RevuResponse<void>>;
+  reloadResources(projectId:string,sessionId:string):Promise<RevuResponse<PiSessionSnapshot>>;
   listSessions(projectId:string,scope?:PiSessionScope):Promise<RevuResponse<PiSessionCatalog>>;
   searchSessions(projectId:string,query:string,sort:PiSessionSort,scope?:PiSessionScope):Promise<RevuResponse<PiSessionSearchResult[]>>;
   openSession(projectId:string,sessionId:string):Promise<RevuResponse<PiSessionSnapshot>>;

@@ -1,9 +1,22 @@
+export interface PiRuntimeConfig {kind:'native'|'wsl';distribution?:string;nativeShellPath?:string}
+export interface PiRuntimeInfo {config:PiRuntimeConfig;distributions:string[];defaultDistribution?:string;platform:string;bashPaths:string[];user:string;shell?:string;ready:boolean;error?:string}
+export interface PiCwdRequest {id:string;saved:string;current:string}
+export interface PiRuntimeChange {info:PiRuntimeInfo;restarted:{previousId:string;snapshot:PiSessionSnapshot}[]}
 import type { Project } from './types';
 
 export type PiRuntimeStatus='starting'|'idle'|'running'|'stopping'|'error';
 export type PiThinkingLevel='off'|'minimal'|'low'|'medium'|'high'|'xhigh'|'max';
 export type PiSessionSort='threaded'|'relevance'|'recent';
 export type PiSessionScope='current'|'all';
+
+export interface PiSlashCommand {name:string;description?:string;source:'builtin'|'extension'|'prompt'|'skill'}
+export type PiTrustChoice='trust'|'parent'|'untrust';
+export interface PiProjectTrust {
+  cwd:string;parentPath?:string;saved:{path:string;decision:boolean}|null;
+  current:boolean|null;needsDecision:boolean;
+}
+export interface PiTrustRequest {id:string;trust:PiProjectTrust}
+export interface PiTrustSaveResponse {trust:PiProjectTrust;restarted:{previousId:string;snapshot:PiSessionSnapshot}[]}
 
 export interface PiSessionSummary {
   id:string;
@@ -203,11 +216,20 @@ export interface PiModelDefaults {
 export interface RevuPiEvent {
   sessionId:string;
   projectId:string;
-  type:'event'|'status'|'usage'|'error'|'sessions-changed'|'bash'|'retained-queue';
+  type:'event'|'status'|'usage'|'error'|'sessions-changed'|'bash'|'retained-queue'|'trust-request'|'warning'|'resources-changed'|'cwd-request'|'runtime-changed';
   payload?:unknown;
 }
 
 export type PiAgentRequest=
+  |{action:'getRuntimeInfo'}
+  |{action:'chooseBashPath'}
+  |{action:'setRuntime';config:PiRuntimeConfig}
+  |{action:'respondSessionCwd';requestId:string;accept:boolean}
+  |{action:'getCommands';projectId:string;sessionId?:string}
+  |{action:'getProjectTrust';projectId:string;sessionId?:string}
+  |{action:'saveProjectTrust';projectId:string;choice:PiTrustChoice;sessionId?:string}
+  |{action:'respondProjectTrust';requestId:string;choice:PiTrustChoice|null}
+  |{action:'reloadResources';projectId:string;sessionId:string}
   |{action:'listSessions';projectId:string;scope?:PiSessionScope}
   |{action:'searchSessions';projectId:string;query:string;sort:PiSessionSort;scope?:PiSessionScope}
   |{action:'openSession';projectId:string;sessionId:string}
