@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Project } from './editor';
 import Icon from './Icon';
 import AgentSelect,{type SelectGroup,type SelectOption} from './AgentSelect';
 import {ExtensionQuestionnaire} from './ExtensionInput';
 import type {PiExtensionPending,PiExtensionRequest} from '../shared/piTypes';
-import MarkdownContent from './MarkdownContent';
+import MarkdownContent, {linkedCodeReferences} from './MarkdownContent';
+import {CODE_PIN_TOOL,codeReferences,type CodeReference,type PinSource,type PinTarget} from '../shared/codePins';
 import SessionTreeDialog from './SessionTreeDialog';
 import SummaryCard from './SummaryCard';
 import { CwdRecoveryDialog,ForkDialog, ProjectTrustDialog, RenameSessionDialog } from './CommandDialogs';
@@ -32,14 +33,14 @@ export interface ChatState extends PiSessionSnapshot {tools:ToolState[];streamTe
 export interface ToolDetailRequest {
   id:string;projectId:string;sessionId:string;toolCallId:string;fileName:string;content:string;
 }
-interface RunItem {type:'answer'|'thinking'|'tool'|'fallback'|'bash'|'custom'|'branchSummary'|'compactionSummary'|'summaryOperation';key:string;text?:string;tool?:ToolState;streaming?:boolean;label?:string;raw?:unknown;meta?:string;bash?:PiDirectBashState;summary?:SummaryOperation}
+interface RunItem {type:'answer'|'thinking'|'tool'|'fallback'|'bash'|'custom'|'branchSummary'|'compactionSummary'|'summaryOperation';key:string;text?:string;tool?:ToolState;streaming?:boolean;label?:string;raw?:unknown;meta?:string;bash?:PiDirectBashState;summary?:SummaryOperation;pinSource?:PinSource;lastAnswerPart?:boolean}
 interface MessageUsage {input:number;output:number;cacheRead:number;cacheWrite:number;reasoning:number;totalTokens:number;cost:number}
 interface RunCall {key:string;type:'model'|'tool';name:string;durationMs?:number;usage?:MessageUsage}
 interface RunStats {elapsedMs?:number;modelTimeMs:number;toolTimeMs:number;assistantUsage:MessageUsage;toolUsage:MessageUsage;calls:RunCall[]}
 type AssistantStopReason='stop'|'toolUse'|'length'|'error'|'aborted'|'deferred';
 interface ChatRun {key:string;user:string;userTimestamp?:number;userEntryId?:string;items:RunItem[];stats:RunStats;lastEventAt?:number;stopReason?:AssistantStopReason}
 type SessionTone='idle'|'running'|'done'|'error'|'question';
-export interface AgentNavigationRequest {projectId:string;sessionId:string;runKey?:string;token:number}
+export interface AgentNavigationRequest {projectId:string;sessionId:string;runKey?:string;messageId?:string;token:number}
 export interface AgentNotice {level:'info'|'warning'|'success'|'error';message:string;projectId:string;sessionId:string;runKey?:string;question?:boolean}
 type Notify=(level:'info'|'warning'|'error',message:string)=>void;
 interface MentionMatch {start:number;end:number;query:string}
@@ -50,7 +51,10 @@ const unwrap=<T,>(result:{ok:boolean;value?:T;error?:string})=>{
   if(!result.ok)throw new Error(result.error||'Pi Agent request failed.');return result.value as T;
 };
 const record=(value:unknown):Record<string,unknown>=>value&&typeof value==='object'?value as Record<string,unknown>:{};
-const messageKey=(message:unknown)=>{const item=record(message);return `${String(item.role)}:${String(item.timestamp??'')}`;};
+const messageKey=(message:unknown)=>{const item=record(message);
+  if(item.role==='toolResult'&&typeof item.toolCallId==='string'&&item.toolCallId)return `toolResult:call:${item.toolCallId}`;
+  return `${String(item.role)}:${String(item.timestamp??'')}`;
+};
 const messageText=(message:unknown)=>{
   const item=record(message);const content=item.content;
   if(typeof content==='string')return content;
@@ -175,20 +179,32 @@ export const buildRuns=(state:ChatState):ChatRun[]=>{
     return operation?{...historical,...operation,cost:operation.cost??historical.cost,entryId:operation.entryId??historical.entryId}:historical;
   };
   const runs:ChatRun[]=[];const tools=new Map(state.tools.map(tool=>[tool.id,tool]));const placed=new Set<string>();let current:ChatRun|undefined;let userIndex=0;
+  const availablePins=new Map<string,CodeReference>();
+  const pendingPinCalls=new Set<string>();
   const ensureRun=()=>current??(current={key:runKey(runs.length),user:'',items:[],stats:emptyRunStats()},runs.push(current),current);
   for(const message of state.messages){const item=record(message);const role=item.role;
-    if(role==='user'){const text=messageText(message);const found=userEntries.findIndex((entry,index)=>index>=userIndex&&messageText(entry.message)===text);const entry=found>=0?userEntries[found]:undefined;if(found>=0)userIndex=found+1;
+    if(role==='user'){availablePins.clear();pendingPinCalls.clear();const text=messageText(message);const found=userEntries.findIndex((entry,index)=>index>=userIndex&&messageText(entry.message)===text);const entry=found>=0?userEntries[found]:undefined;if(found>=0)userIndex=found+1;
       current={key:runKey(runs.length),user:text,userTimestamp:messageTimestamp(message),userEntryId:entry?.id,items:[],stats:emptyRunStats()};runs.push(current);continue;}
     if(role==='assistant'&&Array.isArray(item.content)){const run=ensureRun();const usage=messageUsage(message);const durationMs=numberValue(item.durationMs);addUsage(run.stats.assistantUsage,usage);
+      const answers:RunItem[]=[];
       run.stopReason=assistantStopReason(item.stopReason)??run.stopReason;
       if(durationMs!==undefined)run.stats.modelTimeMs+=durationMs;run.stats.calls.push({key:`model-${run.stats.calls.length}`,type:'model',name:String(item.stopReason??'response'),durationMs,usage});
       const timestamp=messageTimestamp(message);if(timestamp!==undefined)run.lastEventAt=Math.max(run.lastEventAt??0,timestamp+(durationMs??0));for(const raw of item.content){const block=record(raw);
-      if(block.type==='text'&&typeof block.text==='string'&&block.text.trim())run.items.push({type:'answer',key:`answer-${run.items.length}`,text:block.text});
+      if(block.type==='text'&&typeof block.text==='string'&&block.text.trim()){
+        const answer:RunItem={type:'answer',key:`answer-${run.items.length}`,text:block.text};run.items.push(answer);answers.push(answer);
+      }
       if(block.type==='thinking'&&typeof block.thinking==='string'&&block.thinking.trim())run.items.push({type:'thinking',key:`thinking-${run.items.length}`,text:block.thinking});
       if(block.type==='toolCall'){const id=String(block.id??'');if(!id||placed.has(id))continue;const tool=tools.get(id)??{id,runKey:run.key,name:String(block.name??'Tool'),status:'running',args:block.arguments};
+        if(block.name===CODE_PIN_TOOL)pendingPinCalls.add(id);
         run.items.push({type:'tool',key:id,tool});placed.add(id);}
-    }}
+    }
+      const references=[...new Map(answers.flatMap(answer=>linkedCodeReferences(answer.text!,availablePins)).map(ref=>[ref.href,ref])).values()];
+      const pinSource:PinSource={projectId:state.projectId,sessionId:state.sessionId,messageId:messageKey(message),references};
+      for(const answer of answers)answer.pinSource=pinSource;
+      const last=answers.at(-1);if(last)last.lastAnswerPart=true;
+    }
     if(role==='toolResult'){const run=ensureRun();const id=String(item.toolCallId??'');const usage=messageUsage(message);const durationMs=numberValue(item.durationMs);addUsage(run.stats.toolUsage,usage);
+      if(pendingPinCalls.delete(id)&&!item.isError&&item.toolName===CODE_PIN_TOOL)for(const reference of codeReferences(item.details))availablePins.set(reference.href,reference);
       if(durationMs!==undefined)run.stats.toolTimeMs+=durationMs;run.stats.calls.push({key:`tool-${id||run.stats.calls.length}`,type:'tool',name:String(item.toolName??'Tool'),durationMs,usage});
       const timestamp=messageTimestamp(message);if(timestamp!==undefined)run.lastEventAt=Math.max(run.lastEventAt??0,timestamp);if(!id||placed.has(id))continue;const tool=tools.get(id);if(tool){run.items.push({type:'tool',key:id,tool});placed.add(id);}}
     if(role==='bashExecution'){const run=ensureRun();run.items.push({type:'bash',key:`bash-${run.items.length}-${String(item.timestamp??'')}`,bash:{
@@ -299,6 +315,17 @@ export const toolPresentation=(tool:ToolState):{label:string;detail:string;body?
     const path=typeof args.path==='string'?args.path:'';
     const diff=record(record(tool.result).details).diff;
     return {label:'edit',detail:path,body:typeof diff==='string'&&diff?diff:toolOutputText(tool)};
+  }
+  if(name===CODE_PIN_TOOL){
+    const ranges=Array.isArray(args.references)?args.references.map(value=>{
+      const ref=record(value);
+      return typeof ref.path==='string'?`${ref.path}:${String(ref.startLine)}–${String(ref.endLine)}`:'';
+    }).filter(Boolean):[];
+    const details=record(tool.result).details;
+    const references=codeReferences(details);
+    const body=Array.isArray(record(details).results)?toolOutputText(tool)
+      :references.map(ref=>[`${ref.path}:${ref.startLine}–${ref.endLine}`,ref.note].filter(Boolean).join('\n')).join('\n\n');
+    return {label:name,detail:ranges.join(', '),body:body||toolOutputText(tool)||undefined};
   }
   return {label:tool.name,detail:''};
 };
@@ -611,12 +638,14 @@ function ModelDialog({projectId,sessionId,onClose,onChanged,notify}:{projectId:s
   </div>;
 }
 
-export default function AgentChat({onOpenSettings,open,projects,activeProjectId,dirtyProjectIds,width,onResize,onResizeEnd,notify,navigationRequest,onNotice,onProjectAdded,onOpenToolDetail,onUpdateToolDetail}:{
+export default function AgentChat({onOpenSettings,open,projects,activeProjectId,dirtyProjectIds,width,onResize,onResizeEnd,notify,navigationRequest,onNotice,onProjectAdded,onOpenToolDetail,onUpdateToolDetail,onPinSession,onShowPins,onOpenCode,visiblePinSource}:{
   onOpenSettings:()=>void;open:boolean;projects:Project[];activeProjectId:string|null;dirtyProjectIds:ReadonlySet<string>;width:number;
   onResize:(width:number)=>void;onResizeEnd:(width:number)=>void;notify:Notify;
   navigationRequest:AgentNavigationRequest|null;onNotice:(notice:AgentNotice)=>void;
   onProjectAdded:(project:Project)=>Project;
   onOpenToolDetail:(detail:ToolDetailRequest)=>void;onUpdateToolDetail:(detail:ToolDetailRequest)=>void;
+  onPinSession:(sessionId:string|null,latest?:PinSource)=>void;onShowPins:(source:PinSource,hide:boolean)=>void;
+  onOpenCode:(target:PinTarget)=>void;visiblePinSource?:string;
 }){
   const [selectedProjectId,setSelectedProjectId]=useState<string>('');const [selectedSessionId,setSelectedSessionId]=useState<string|null>(null);
   const [sessions,setSessions]=useState<Record<string,PiSessionSummary[]>>({});const [chats,setChats]=useState<Record<string,ChatState>>({});
@@ -653,6 +682,7 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
   const [statsRunKey,setStatsRunKey]=useState('');const [statsMenuStyle,setStatsMenuStyle]=useState<React.CSSProperties>({});
   const [doneSessionIds,setDoneSessionIds]=useState<Set<string>>(()=>new Set());
   const [sourceMessageKeys,setSourceMessageKeys]=useState<Set<string>>(()=>new Set());const [copiedMessageKey,setCopiedMessageKey]=useState('');
+  const [archivedSource,setArchivedSource]=useState<{sessionId:string;text:string}|null>(null);
   const [newChatModel,setNewChatModel]=useState<PiModelSummary|undefined>();const [newChatThinking,setNewChatThinking]=useState<PiThinkingLevel>('medium');
   const [modelMenuStyle,setModelMenuStyle]=useState<React.CSSProperties>({});
   const [mention,setMention]=useState<MentionMatch|null>(null);const [mentionEntries,setMentionEntries]=useState<ProjectPathEntry[]>([]);
@@ -665,6 +695,8 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
   const composerRef=useRef<HTMLDivElement|null>(null);const textareaRef=useRef<HTMLTextAreaElement|null>(null);const draftRef=useRef(draft);const mentionRequest=useRef(0);const historyIndex=useRef<number|null>(null);draftRef.current=draft;
   const composerExpansionSource=useRef<'auto'|'manual'|null>(null);const composerManuallyCollapsed=useRef(false);
   const runRefs=useRef(new Map<string,HTMLElement>());const pendingRunKey=useRef<string|undefined>(undefined);const skipAutoScroll=useRef(false);
+  const pinMessageRefs=useRef(new Map<string,HTMLElement>());const pendingMessageId=useRef<string|undefined>(undefined);
+  const archivedSourceRef=useRef<HTMLElement|null>(null);
   const chatsRef=useRef(chats);const viewRef=useRef({open,selectedSessionId,projects,sessions});const erroredRuns=useRef(new Set<string>());const notifiedRuns=useRef(new Set<string>());
   const doneTimers=useRef(new Map<string,ReturnType<typeof setTimeout>>());const copiedTimer=useRef<ReturnType<typeof setTimeout>|undefined>(undefined);const abortTimer=useRef<ReturnType<typeof setTimeout>|undefined>(undefined);const bashHintTimer=useRef<ReturnType<typeof setTimeout>|undefined>(undefined);
   const wasOpen=useRef(open);const handledNavigationToken=useRef<number|undefined>(undefined);
@@ -717,7 +749,15 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
   const sessionTabs=openSessionIds[selectedProjectId]??[];
   const visibleSessionCount=Math.max(0,sessionTabCapacity-(!selectedSessionId&&selectedProjectId?1:0));
   const visibleSessionTabs=visibleSessionCount?sessionTabs.slice(-visibleSessionCount).reverse():[];
-  const runs=current?buildRuns(current):[];const usage=current?.usage??emptyUsage;
+  const runs=useMemo(()=>current?buildRuns(current):[],[current]);const usage=current?.usage??emptyUsage;
+  const latestPinSource=useMemo(()=>{
+    const latest=current?.messages.slice().reverse().find(message=>record(message).role==='assistant');
+    if(!current||!latest)return undefined;
+    const messageId=messageKey(latest);
+    return runs.flatMap(run=>run.items).find(item=>item.pinSource?.messageId===messageId)?.pinSource
+      ??{projectId:current.projectId,sessionId:current.sessionId,messageId,references:[]};
+  },[current,runs]);
+  useLayoutEffect(()=>{onPinSession(current?.sessionId??null,latestPinSource);},[current?.sessionId,latestPinSource,onPinSession]);
   const queue=current?.queue??EMPTY_QUEUE;const retainedQueue=current?.retainedQueue??EMPTY_QUEUE;
   const liveQueueCount=queue.steering.length+queue.followUp.length;const retainedQueueCount=retainedQueue.steering.length+retainedQueue.followUp.length;
   const queueCount=liveQueueCount+retainedQueueCount;
@@ -778,9 +818,10 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
     try{const catalog=await window.revu.agent.listSessions(projectId).then(unwrap);const items=catalog.sessions;setSessions(current=>({...current,[projectId]:items}));return items;}
     catch(error){notify('error',error instanceof Error?error.message:String(error));return [];}
   };
-  const openSessionById=async(projectId:string,sessionId:string,targetRunKey?:string)=>{setLoading(true);try{
-    const snapshot=await window.revu.agent.openSession(projectId,sessionId).then(unwrap);pendingRunKey.current=targetRunKey;
+  const openSessionById=async(projectId:string,sessionId:string,targetRunKey?:string,targetMessageId?:string)=>{setLoading(true);try{
+    const snapshot=await window.revu.agent.openSession(projectId,sessionId).then(unwrap);
     const entries=await window.revu.agent.getEntries(projectId,snapshot.sessionId).then(unwrap);
+    pendingRunKey.current=targetRunKey;pendingMessageId.current=targetMessageId;
     setChats(current=>{const next={...current,[snapshot.sessionId]:withEntries(withSnapshot(snapshot,current[snapshot.sessionId]),entries)};chatsRef.current=next;return next;});
     setOpenSessionIds(current=>{const ids=current[projectId]??[];const next=[...ids.filter(id=>id!==snapshot.sessionId),snapshot.sessionId];return {...current,[projectId]:next};});
     setSelectedProjectId(projectId);setSelectedSessionId(snapshot.sessionId);setDraft('');setSessionDialog(false);
@@ -853,7 +894,10 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
     return()=>{cancelled=true;};
   },[open]);
   useEffect(()=>{if(!navigationRequest)return;handledNavigationToken.current=navigationRequest.token;
-    void openSessionById(navigationRequest.projectId,navigationRequest.sessionId,navigationRequest.runKey??'__latest__');},[navigationRequest?.token]);
+    setArchivedSource(null);
+    const target=navigationRequest.messageId&&selectedSessionId===navigationRequest.sessionId?pinMessageRefs.current.get(navigationRequest.messageId):undefined;
+    if(target){target.scrollIntoView({block:'start'});target.focus({preventScroll:true});return;}
+    void openSessionById(navigationRequest.projectId,navigationRequest.sessionId,navigationRequest.messageId?undefined:navigationRequest.runKey??'__latest__',navigationRequest.messageId);},[navigationRequest?.token]);
   useLayoutEffect(()=>{if(!modelMenu||!modelControlRef.current)return;const trigger=modelControlRef.current.getBoundingClientRect();
     const panel=modelControlRef.current.closest('.agent-chat')?.getBoundingClientRect();const limitLeft=panel?panel.left+8:8;const limitRight=panel?panel.right-8:window.innerWidth-8;
     const width=Math.max(190,Math.min(236,limitRight-limitLeft));const left=Math.max(limitLeft,Math.min(limitRight-width,trigger.right-width));
@@ -1003,6 +1047,23 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
     const element=key?runRefs.current.get(key):undefined;if(key&&element&&bodyRef.current){skipAutoScroll.current=true;bodyRef.current.scrollTo({top:Math.max(0,element.offsetTop-12)});setActiveRunKey(key);}
     pendingRunKey.current=undefined;
   },[selectedSessionId,runs.length]);
+  useLayoutEffect(()=>{
+    const requested=pendingMessageId.current;if(!requested)return;
+    pendingMessageId.current=undefined;
+    const element=pinMessageRefs.current.get(requested);
+    if(!element){
+      const sourceEntry=current?.entries.find(entry=>entry.type==='message'&&messageKey(entry.message)===requested);
+      if(sourceEntry&&current){skipAutoScroll.current=true;setArchivedSource({sessionId:current.sessionId,text:messageText(sourceEntry.message)});}
+      else notify('warning','The source message is no longer available.');
+      return;
+    }
+    skipAutoScroll.current=true;
+    element.scrollIntoView({block:'start'});element.focus({preventScroll:true});
+  },[selectedSessionId,current?.entries,notify]);
+  useLayoutEffect(()=>{
+    if(archivedSource?.sessionId!==selectedSessionId)return;
+    archivedSourceRef.current?.scrollIntoView({block:'start'});archivedSourceRef.current?.focus({preventScroll:true});
+  },[archivedSource,selectedSessionId]);
   useEffect(()=>{if(skipAutoScroll.current){skipAutoScroll.current=false;return;}bodyRef.current?.scrollTo({top:bodyRef.current.scrollHeight});},[current?.messages,current?.streamText,current?.streamThinking,current?.tools,current?.summaryOperations]);
   const startNewChat=()=>{if(!selectedProjectId)return;setSelectedSessionId(null);setNewChatModel(undefined);setDraft('');setSessionDialog(false);
     composerExpansionSource.current=null;composerManuallyCollapsed.current=false;setComposerExpanded(false);void loadNewChatDefaults(selectedProjectId);};
@@ -1328,18 +1389,42 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
         {previewRun&&<aside className="agent-run-preview" style={{top:previewTop}}><strong>{previewRun.user||'Run'}</strong><p>{finalAnswer(previewRun)||'Pi is still working…'}</p></aside>}
         <div className="agent-chat-body" ref={bodyRef}>{!projects.length?<div className="agent-welcome"><strong>Open a folder to start</strong></div>
         :!current?null
-        :<>{runs.map(run=>{const messageKey=`${current.sessionId}:${run.key}`;const answerText=assistantText(run);const showSource=sourceMessageKeys.has(messageKey);
+        :<>{archivedSource?.sessionId===current.sessionId&&<section className="agent-archived-source" tabIndex={-1} ref={archivedSourceRef}>
+          <header><strong>Source from another branch</strong><button className="agent-icon-button" title="Close Source" aria-label="Close Source" onClick={()=>setArchivedSource(null)}><Icon name="close" size={12}/></button></header>
+          <MarkdownContent text={archivedSource.text}/>
+        </section>}{runs.map(run=>{const messageKey=`${current.sessionId}:${run.key}`;const answerText=assistantText(run);const showSource=sourceMessageKeys.has(messageKey);
           const latest=run.key===runs.at(-1)?.key;const showActions=shouldShowAssistantActions(latest,current.status);
           const autoRetry=latest?current.autoRetry:undefined;
           const retrying=!!autoRetry&&retryClock>=autoRetry.deadline;
           const answerIndex=run.items.reduce((last,item,index)=>item.type==='answer'?index:last,-1);
           const contentItems=answerIndex<0?run.items:run.items.slice(0,answerIndex+1);
           const trailingItems=answerIndex<0?[]:run.items.slice(answerIndex+1);
+          const footerSource=run.items[answerIndex]?.pinSource;
+          const pinButton=(source?:PinSource)=>{
+            if(!source?.references.length)return null;
+            const hide=visiblePinSource===source.messageId;
+            const title=hide?'Hide code annotations':'Show code annotations';
+            return <button type="button" title={title} aria-label={title} onClick={()=>onShowPins(source,hide)}><Icon name={hide?'hide':'pin'} size={14}/></button>;
+          };
           const renderItem=(part:RunItem)=>{
             if(part.summary)return <SummaryCard key={part.summary.id} operation={part.summary} now={summaryWaiting?retryClock:Date.now()} onOpenJson={openSummaryJson} onToggle={()=>requestAnimationFrame(updateRunRail)}/>;
-            if(part.type==='answer')return part.streaming||showSource
-              ?<div className={'agent-answer source '+(part.streaming?'streaming':'')} key={part.key}>{part.text}</div>
-              :<MarkdownContent text={part.text??''} key={part.key}/>;
+            if(part.type==='answer'){
+              const partKey=`${current.sessionId}:${part.pinSource?.messageId??part.key}`;
+              const partSource=sourceMessageKeys.has(partKey);
+              return <div key={part.key} className="agent-answer-part" tabIndex={part.lastAnswerPart?-1:undefined}
+                ref={part.lastAnswerPart&&part.pinSource?element=>{const id=part.pinSource!.messageId;if(element)pinMessageRefs.current.set(id,element);else pinMessageRefs.current.delete(id);}:undefined}>
+                {part.streaming||showSource||partSource?<div className={'agent-answer source '+(part.streaming?'streaming':'')}>{part.text}</div>
+                  :<MarkdownContent text={part.text??''} references={part.pinSource?.references} onCodeReference={reference=>{
+                    if(part.pinSource)onOpenCode({source:part.pinSource,reference});
+                  }}/>}
+                {part.lastAnswerPart&&footerSource!==part.pinSource&&!!part.pinSource?.references.length
+                  &&<div className="agent-message-actions" aria-label="Assistant message actions">
+                    <button type="button" title={partSource?'Show Preview':'Show Source'} aria-label={partSource?'Show Markdown preview':'Show Markdown source'}
+                      aria-pressed={partSource} onClick={()=>toggleMessageSource(partKey)}><Icon name="format" size={14}/></button>
+                    {pinButton(part.pinSource)}
+                  </div>}
+              </div>;
+            }
             if(part.type==='thinking')return <details className="agent-thinking" key={part.key} open={part.streaming||undefined} onToggle={()=>requestAnimationFrame(updateRunRail)}><summary title="Toggle thought process"><Icon name="thought" size={16}/><span>Thought process</span></summary><div>{part.text}</div></details>;
             if(part.type==='fallback')return <details className="agent-unknown-message" key={part.key} onToggle={()=>requestAnimationFrame(updateRunRail)}><summary><span>Unsupported message</span><code>{part.label}</code>
               <small>{part.text||'Raw message data is available.'}</small></summary><pre>{messageJson(part.raw)}</pre></details>;
@@ -1364,6 +1449,7 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
                   onClick={()=>void copyMessage(messageKey+'-assistant',answerText)}><Icon name={copiedMessageKey===messageKey+'-assistant'?'check':'copy'} size={14}/></button>
                 <button type="button" disabled={!answerText} title={showSource?'Show Preview':'Show Source'} aria-label={showSource?'Show Markdown preview':'Show Markdown source'}
                   aria-pressed={showSource} onClick={()=>toggleMessageSource(messageKey)}><Icon name="format" size={14}/></button>
+                {pinButton(footerSource)}
                 <button type="button" disabled title="Retry · Coming soon" aria-label="Retry · Coming soon"><Icon name="retry" size={14}/></button>
                 <button type="button" disabled title="More · Coming soon" aria-label="More · Coming soon"><Icon name="more" size={14}/></button>
               </div>}<div className="agent-response-meta">{run.stopReason&&<span className={`agent-stop-reason ${run.stopReason}`}>{stopReasonLabel(run.stopReason)}</span>}

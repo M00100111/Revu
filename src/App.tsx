@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { defineRevuThemes, monaco, type OpenFile, type Project } from './editor';
 import { api, errorMessage } from './files';
-import type { Entry } from '../shared/types';
+import type { Entry, Snapshot } from '../shared/types';
 import { useWorkspace } from './useWorkspace';
 import EditorArea from './EditorArea';
 import FileSidebar from './FileSidebar';
@@ -15,9 +15,14 @@ import WindowControls from './WindowControls';
 import NotificationCenter, { type AppNotification, type NotificationAction, type NotificationLevel } from './NotificationCenter';
 import { defaultTabExpansion, type FileTabExpansion, type FileTabOverflow } from './tabLayout';
 import AgentChat, { type AgentNavigationRequest, type AgentNotice, type ToolDetailRequest } from './AgentChat';
+import {placementsFor,useCodePins} from './useCodePins';
+import type {PinTarget} from '../shared/codePins';
+import type {PinPlacement} from '../shared/pinLayout';
+import {codeLineCount} from '../shared/codeSource';
 
 interface ToolDocument {
   id:string;projectId:string;sessionId:string;toolCallId:string;name:string;model:monaco.editor.ITextModel;
+  snapshotFile?:OpenFile;
 }
 type AppEditorTab=(EditorTabItem&{kind:'file';file:OpenFile})|(EditorTabItem&{kind:'tool';toolDocument:ToolDocument});
 
@@ -74,7 +79,7 @@ export default function App(){
   const [agentNavigation,setAgentNavigation]=useState<AgentNavigationRequest|null>(null);
   const [agentWidth,setAgentWidth]=useState(()=>savedWidth('revu-agent-width',400));
   const [picking,setPicking]=useState(false);
-  const [reveal,setReveal]=useState<{id:string;line:number}|null>(null);
+  const [reveal,setReveal]=useState<{id:string;line:number;href?:string;pinId?:string}|null>(null);
   const [reviewFilter,setReviewFilter]=useState('all');
   const [reviewSelected,setReviewSelected]=useState('');
   const [reviewReveal,setReviewReveal]=useState<{fileId:string;itemId:string;token:number}|null>(null);
@@ -126,6 +131,11 @@ export default function App(){
   const clearNotifications=useCallback(()=>setNotifications([]),[]);
   const workspace=useWorkspace(notifyError,notifyWarning);
   const {projects,projectsLoaded,documents,statuses,tick}=workspace;
+  const snapshots=useMemo(()=>toolDocuments.flatMap(document=>document.snapshotFile?[document.snapshotFile]:[]),[toolDocuments]);
+  const pins=useCodePins(documents,snapshots,tick);
+  const codeRequest=useRef(0);
+  const lastCodeReview=useRef<typeof reveal>(null);
+  const loadPinFile=useRef(workspace.load);loadPinFile.current=workspace.load;
   const editorRef=useRef<monaco.editor.IStandaloneCodeEditor|null>(null);
   const lastFile=useRef(new Map<string,string>());
   const lastToolDocument=useRef<string|null>(null);
@@ -133,6 +143,27 @@ export default function App(){
   const openFiles=tabs.map(id=>documents.find(file=>file.id===id)).filter((f):f is OpenFile=>!!f);
   const activeFile=openFiles.find(file=>file.id===activeId);
   const activeToolDocument=toolDocuments.find(document=>document.id===activeId);
+  const activeReviewFile=activeFile??activeToolDocument?.snapshotFile;
+  const focusReviewChunk=useCallback((file:OpenFile,itemId:string)=>{
+    setReviewFilter(current=>current==='all'||current===file.project.id?current:file.project.id);
+    setReviewSelected(file.id);
+    setReviewReveal(current=>({fileId:file.id,itemId,token:(current?.token??0)+1}));
+  },[]);
+  useEffect(()=>{
+    if(panel!=='review')return;
+    for(const {projectId,path} of pins.requiredFiles){
+      const project=projects.find(item=>item.id===projectId);
+      if(project)void loadPinFile.current(project,path).catch(()=>{});
+    }
+  },[panel,projects,pins.requiredFiles]);
+  useEffect(()=>{
+    if(panel!=='review'||!reveal||!activeReviewFile||activeReviewFile.id!==reveal.id||lastCodeReview.current===reveal)return;
+    const placements=pins.byFile.get(reveal.id);
+    const placement=reveal.pinId?placements?.find(pin=>pin.id===reveal.pinId)
+      :reveal.href?placements?.find(pin=>pin.reference.href===reveal.href):undefined;
+    if(!placement)return;
+    lastCodeReview.current=reveal;focusReviewChunk(activeReviewFile,placement.chunkId??placement.id);
+  },[panel,reveal,activeReviewFile,pins.byFile,focusReviewChunk]);
   const fileEditorTabs:AppEditorTab[]=openFiles.map(file=>({kind:'file',file,id:file.id,name:file.name,
     title:file.project.name+'/'+file.path,projectName:file.project.name,dirty:file.dirty}));
   const toolEditorTabs:AppEditorTab[]=toolDocuments.map(toolDocument=>({kind:'tool',toolDocument,id:toolDocument.id,name:toolDocument.name,
@@ -321,6 +352,56 @@ export default function App(){
       selectFile(file);if(line)setReveal({id:file.id,line});
     }catch(error){notifyError(errorMessage(error));}
   }
+  function revealListedPin(file:OpenFile,pin:PinPlacement){
+    const snapshot=toolDocuments.find(document=>document.id===file.id&&document.snapshotFile);
+    if(snapshot)selectToolDocument(snapshot);
+    else{
+      setTabs(current=>current.includes(file.id)?current:[...current,file.id]);selectFile(file);
+    }
+    setReveal({id:file.id,line:pin.line,pinId:pin.id});
+  }
+  async function openCode(target:PinTarget){
+    const request=++codeRequest.current;
+    const {source,reference}=target;
+    const project=projects.find(item=>item.id===source.projectId);if(!project)return;
+    const {path,hash,revision,startLine,href}=reference;
+    const encoding=reference.encoding??'utf-8';
+    try{
+      const file=encoding==='utf-8'?await workspace.load(project,path).catch(()=>undefined):undefined;
+      const placement=file?placementsFor(file,target):undefined;
+      if(file&&placement!==undefined&&(placement.length||file.computing)){
+        if(request!==codeRequest.current||!pins.selectReference(target))return;
+        setPanel('review');
+        setTabs(current=>current.includes(file.id)?current:[...current,file.id]);selectFile(file);
+        setReveal({id:file.id,line:startLine,href});return;
+      }
+      const id=JSON.stringify(['code-snapshot',project.id,path,hash,encoding]);
+      let document=toolDocuments.find(item=>item.id===id);
+      const snapshot=document?.snapshotFile?.synced??await api<Snapshot>('codeSnapshot',{projectId:project.id,path,hash,revision,encoding});
+      if(request!==codeRequest.current)return;
+      if(reference.endLine>codeLineCount(snapshot.text)){
+        notifyWarning(`Code reference is outside the source file: ${path}:${startLine}–${reference.endLine}.`);
+        return;
+      }
+      if(!pins.selectReference(target))return;
+      if(!document){
+        const name=path.split('/').at(-1)!;
+        const model=monaco.editor.createModel(snapshot.text,undefined,monaco.Uri.from({scheme:'revu-code-snapshot',path:`/${project.id}/${hash}/${encoding}/${path}`}));
+        const snapshotFile:OpenFile={
+          id,project,path,name,model,synced:snapshot,draftExists:true,baseline:'',baselineExists:false,dirty:false,version:1,
+          reviewText:snapshot.text,chunks:[],records:[],computing:false,syncing:false,saving:false,diffError:'',notice:'',subscription:{dispose(){}},
+        };
+        const label=`${name} · ${revision?.slice(0,7)??'Snapshot'}${encoding==='gb18030'?' · GB18030':''}`;
+        document={id,projectId:project.id,sessionId:source.sessionId,toolCallId:'',name:label,model,snapshotFile};
+        const opened=document;setToolDocuments(current=>[...current,opened]);
+      }
+      setPanel('review');selectToolDocument(document);setReveal({id,line:startLine,href});
+    }catch{if(request===codeRequest.current)notifyWarning(`Code reference expired: ${path}:${startLine}. The original version is unavailable.`);}
+  }
+  const openPinSource=({source}:PinTarget)=>{
+    setAgentOpen(true);
+    setAgentNavigation(current=>({projectId:source.projectId,sessionId:source.sessionId,messageId:source.messageId,token:(current?.token??0)+1}));
+  };
   function closeEditorTabs(targets:AppEditorTab[]){
     if(!targets.length)return;
     const fileTargets=targets.flatMap(target=>target.kind==='file'?[target.file]:[]);
@@ -411,14 +492,16 @@ export default function App(){
       onOpenFile={(project,path)=>void openFile(project,path)} onCloseProject={project=>void closeProject(project)}
       onExpandAllSubfolders={(project,path)=>void expandAllSubfolders(project,path)} onCollapseAllSubfolders={collapseAllSubfolders}
       onProjectToggle={toggleProject} onDirectoryToggle={toggleDirectory} onError={notifyError}/>}
-    {panel==='review'&&<ReviewDashboard projects={projects} documents={documents} statuses={statuses}
+    {panel==='review'&&<ReviewDashboard projects={projects} documents={documents} snapshots={snapshots} statuses={statuses}
       filter={reviewFilter} selected={reviewSelected} onFilterChange={setReviewFilter} onSelectedChange={setReviewSelected}
       revealTarget={reviewReveal}
       expandedRecords={expandedReviewRecords} onToggleReviewPreview={(file,itemId,line)=>{
         void openFile(file.project,file.path,line);toggleReviewPreview(itemId);
       }}
       width={sidebarWidth} onResize={resizeSidebar} onOpen={openFile} onAction={workspace.act}
+      onOpenSnapshot={fileId=>{const document=toolDocuments.find(item=>item.id===fileId);if(document)selectToolDocument(document);}}
       onBulk={workspace.bulk} onFileBulk={workspace.bulkFile}
+      pinsByFile={pins.byFile} keptIds={pins.keptIds} onPinAction={pins.updatePiece} onPinSource={openPinSource} onRevealPin={revealListedPin}
       split={reviewSplit} onSplitChange={setReviewSplit}
       chunkWidth={reviewChunkWidth} onChunkResize={setReviewChunkWidth} fileLabels={reviewFileLabels}/>}
     {panel==='settings'&&<SettingsSidebar width={sidebarWidth} onResize={resizeSidebar}
@@ -458,19 +541,25 @@ export default function App(){
         <div className="editor-container"><EditorArea file={activeFile} dark={dark} editorRef={editorRef}
           tick={tick} onAction={workspace.act} onReviewReveal={itemId=>{
             setPanel('review');
-            setReviewFilter(current=>current==='all'||current===activeFile.project.id?current:activeFile.project.id);
-            setReviewSelected(activeFile.id);
-            setReviewReveal(current=>({fileId:activeFile.id,itemId,token:(current?.token??0)+1}));
+            focusReviewChunk(activeFile,itemId);
           }} expandedRecords={expandedReviewRecords} onToggleReviewPreview={toggleReviewPreview}
-          revealLine={reveal?.id===activeFile.id?reveal.line:undefined}
+          reveal={reveal?.id===activeFile.id?reveal:undefined} pins={pins.byFile.get(activeFile.id)} keptIds={pins.keptIds}
+          onPinAction={pins.updatePiece} onPinSource={openPinSource}
           fontSize={fontSize}/></div>
         <footer className="status-bar"><span>{activeFile.dirty?'Unsaved':'Saved'}
           {activeFile.computing?' · Updating diff…':''}</span>
           <span>{activeFile.model.getLanguageId()}<span className="status-divider">UTF-8{activeFile.synced.bom?' BOM':''}</span></span></footer>
       </>:activeToolDocument?<>
-        <div className="breadcrumb"><span>Other</span><span>/</span><span>{activeToolDocument.name}</span></div>
-        <div className="editor-container"><ReadonlyEditor model={activeToolDocument.model} dark={dark} editorRef={editorRef} fontSize={fontSize}/></div>
-        <footer className="status-bar"><span>Read-only</span><span>JSON<span className="status-divider">UTF-8</span></span></footer>
+        <div className="breadcrumb"><span>{activeToolDocument.snapshotFile?.project.name??'Other'}</span><span>/</span><span>{activeToolDocument.snapshotFile?.path??activeToolDocument.name}</span></div>
+        <div className="editor-container">{activeToolDocument.snapshotFile
+          ?<EditorArea file={activeToolDocument.snapshotFile} dark={dark} editorRef={editorRef} fontSize={fontSize} tick={tick}
+            onAction={workspace.act} onReviewReveal={itemId=>{
+              if(activeToolDocument.snapshotFile){setPanel('review');focusReviewChunk(activeToolDocument.snapshotFile,itemId);}
+            }} expandedRecords={expandedReviewRecords} onToggleReviewPreview={toggleReviewPreview}
+            readOnly reveal={reveal?.id===activeToolDocument.id?reveal:undefined} pins={pins.byFile.get(activeToolDocument.id)} keptIds={pins.keptIds}
+            onPinAction={pins.updatePiece} onPinSource={openPinSource}/>
+          :<ReadonlyEditor model={activeToolDocument.model} dark={dark} editorRef={editorRef} fontSize={fontSize}/>}</div>
+        <footer className="status-bar"><span>Read-only</span><span>{activeToolDocument.snapshotFile?.model.getLanguageId()??'JSON'}<span className="status-divider">{(activeToolDocument.snapshotFile?.synced.encoding??'utf-8').toUpperCase()}</span></span></footer>
       </>:<div className="empty-state">
         {projects.length?<span className="empty-project-hint">Select a file from the sidebar</span>
           :<button className="open-folder-button" onClick={addFolder} disabled={picking}><Icon name="openFolder" size={19}/>{picking?'Opening…':'Open Folder'}</button>}
@@ -484,6 +573,7 @@ export default function App(){
       onResizeEnd={value=>localStorage.setItem('revu-agent-width',String(value))} notify={notify}
       navigationRequest={agentNavigation} onNotice={handleAgentNotice}
       onProjectAdded={workspace.adoptProject}
+      onPinSession={pins.selectSession} onShowPins={pins.selectSource} onOpenCode={target=>void openCode(target)} visiblePinSource={pins.visiblePinSource}
       onOpenToolDetail={openToolDetail} onUpdateToolDetail={updateToolDetail}/>
   </div>;
 }

@@ -27,6 +27,8 @@ const assets={
   fork:new URL('../assets/icons/chat/fork.svg',import.meta.url).href,
   tree:new URL('../assets/icons/chat/tree.svg',import.meta.url).href,
   format:new URL('../assets/icons/chat/format.svg',import.meta.url).href,
+  pin:new URL('../assets/icons/chat/pin.svg',import.meta.url).href,
+  hide:new URL('../assets/icons/chat/hide.svg',import.meta.url).href,
   image:new URL('../assets/icons/chat/image.svg',import.meta.url).href,
   json:new URL('../assets/icons/chat/json.svg',import.meta.url).href,
   send:new URL('../assets/icons/chat/send.svg',import.meta.url).href,

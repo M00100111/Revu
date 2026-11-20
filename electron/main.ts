@@ -5,6 +5,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { diff } from '../server/git';
 import { HttpError, Workspace } from '../server/workspace';
+import {isCodeEncoding} from '../shared/codeSource';
 import type { PiAgentRequest } from '../shared/piTypes';
 import { PiManager } from './piManager';
 
@@ -58,6 +59,11 @@ async function invoke(body:Record<string,any>){
     case 'chatPaths':return workspace.paths(project);
     case 'read':return workspace.read(project,body.path);
     case 'baseline':return {...await workspace.baseline(project,body.path),base:project.base};
+    case 'codeSnapshot':
+      if(typeof body.hash!=='string'||!/^[a-f0-9]{64}$/.test(body.hash))throw new HttpError(400,'Invalid content hash');
+      if(body.revision!==undefined&&(typeof body.revision!=='string'||!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(body.revision)))throw new HttpError(400,'Invalid commit ID');
+      if(body.encoding!==undefined&&!isCodeEncoding(body.encoding))throw new HttpError(400,'Invalid code reference encoding');
+      return workspace.codeSnapshot(project,body.path,body.hash,body.revision,body.encoding);
     case 'status':return workspace.status(project);
     case 'refreshBase':
       project.base=project.repo?await workspace.head(project.repo):null;

@@ -44,6 +44,63 @@ test('BOM and CRLF roundtrip; binary invalid UTF-8 rejected',()=>fixture(async(r
   assert.ok(decode(Buffer.from([255])).reason);
   assert.ok(decode(Buffer.from('a\0b')).reason);
 }));
+test('mixed working-tree endings are normalized only for a matching read-only code snapshot',()=>fixture(async(root,w)=>{
+  const p=w.get((await w.add(root)).id);
+  const path='mixed.txt',raw=Buffer.from('\uFEFFa\nb\r\nc\n'),normalized='a\nb\nc\n';
+  await writeFile(join(root,path),raw);
+  const editable=await w.read(p,path);
+  assert.equal(editable.text,'a\nb\r\nc\n');assert.ok(editable.reason);
+  assert.ok((await w.status(p)).files.find(file=>file.path===path)?.reason);
+  assert.deepEqual(await w.codeSnapshot(p,path,editable.hash),{text:normalized,hash:editable.hash,exists:true,bom:true});
+  const wrongHash=decode(Buffer.from('\uFEFF'+normalized)).hash;
+  await assert.rejects(w.codeSnapshot(p,path,wrongHash),/Referenced version is unavailable/);
+  await assert.rejects(w.save(p,path,editable.hash,normalized,true),/line endings/);
+  assert.deepEqual(await readFile(join(root,path)),raw);
+  await writeFile(join(root,path),'\uFEFF'+normalized);
+  await assert.rejects(w.codeSnapshot(p,path,editable.hash),/Referenced version is unavailable/);
+  for(const bytes of [Buffer.from('a\nb\rc\r\n'),Buffer.from('a\0b'),Buffer.from([255])]){
+    await writeFile(join(root,path),bytes);
+    await assert.rejects(w.codeSnapshot(p,path,decode(bytes).hash),/Referenced version is unavailable/);
+  }
+}));
+test('mixed committed endings are readable by exact revision or matching base hash, but remain status-only in Review',()=>fixture(async(root,w)=>{
+  const path='file.txt',mixed='one\ntwo\r\nthree\n';
+  await writeFile(join(root,path),mixed);
+  await git(root,['add',path]);await git(root,['commit','-qm','mixed endings']);
+  const p=w.get((await w.add(root)).id);
+  const old=await w.baseline(p,path);
+  assert.ok(old.reason);assert.equal(old.text,mixed);
+  const edited='one\ntwo\nthree\n';
+  await writeFile(join(root,path),edited);
+  assert.ok((await w.status(p)).files.find(file=>file.path===path)?.reason);
+  const fromRevision=await w.codeSnapshot(p,path,old.hash,p.base!);
+  assert.deepEqual(fromRevision,{text:edited,hash:old.hash,exists:true,bom:false});
+  assert.deepEqual(await w.codeSnapshot(p,path,old.hash),fromRevision);
+  await assert.rejects(w.codeSnapshot(p,path,decode(Buffer.from(edited)).hash,p.base!),/Referenced version is unavailable/);
+  assert.equal(await readFile(join(root,path),'utf8'),edited);
+}));
+test('GB18030 snapshots decode exact bytes read-only and never reclassify a .pyc as text',()=>fixture(async(root,w)=>{
+  const path='legacy.py',compiled='cached.PYC';
+  const raw=Buffer.concat([Buffer.from([0xd6,0xd0,0xce,0xc4]),Buffer.from('\r\nsecond\n')]);
+  await writeFile(join(root,path),raw);
+  await writeFile(join(root,compiled),raw);
+  await git(root,['add',path]);await git(root,['commit','-qm','legacy encoding']);
+  const p=w.get((await w.add(root)).id);
+  const regular=await w.read(p,path);
+  assert.equal(regular.reason,'Invalid UTF-8 text. Status only.');
+  const bytecode=await w.read(p,compiled);
+  assert.equal(bytecode.reason,'Binary file. Status only.');
+  await assert.rejects(w.codeSnapshot(p,compiled,bytecode.hash,undefined,'gb18030'),/Referenced version is unavailable/);
+  await assert.rejects(w.codeSnapshot(p,path,regular.hash),/Referenced version is unavailable/);
+  await assert.rejects(w.save(p,path,regular.hash,'normalized',false),/Invalid UTF-8/);
+  const snapshot={text:'中文\nsecond\n',hash:regular.hash,exists:true,bom:false,encoding:'gb18030'};
+  assert.deepEqual(await w.codeSnapshot(p,path,regular.hash,undefined,'gb18030'),snapshot);
+  assert.deepEqual(await readFile(join(root,path)),raw);
+  await writeFile(join(root,path),'new content\n');
+  assert.deepEqual(await w.codeSnapshot(p,path,regular.hash,p.base!,'gb18030'),snapshot);
+  assert.deepEqual(await w.codeSnapshot(p,path,regular.hash,undefined,'gb18030'),snapshot);
+  assert.equal(await readFile(join(root,path),'utf8'),'new content\n');
+}));
 test('project boundary, deduplication, deleted file and staged rename status',()=>fixture(async(root,w)=>{
   const project=await w.add(root),p=w.get(project.id);
   assert.equal((await w.add(root)).id,project.id);

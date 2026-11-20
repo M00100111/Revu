@@ -1,3 +1,5 @@
+import type {CodeEncoding} from './codeSource';
+
 export interface Project {
   id: string;
   name: string;
@@ -13,6 +15,7 @@ export interface Snapshot {
   exists: boolean;
   bom: boolean;
   reason?: string;
+  encoding?: CodeEncoding;
 }
 export interface ChangeFile { path: string; status: string; reason?: string }
 export interface ProjectStatus {

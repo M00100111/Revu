@@ -3,6 +3,7 @@ import { readFile, readdir, realpath, stat, open, unlink, mkdir } from 'node:fs/
 import { watch, type FSWatcher } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import type { Project, Snapshot, ProjectStatus, ChangeFile, ProjectPathEntry } from '../shared/types';
+import {decodeCodeText,isKnownBinaryCodePath,type CodeEncoding} from '../shared/codeSource';
 import { git } from './git';
 
 export interface Registered extends Project { repo: string | null; watcher?: FSWatcher; gitWatcher?: FSWatcher }
@@ -10,17 +11,19 @@ export class HttpError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
 const hash = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
-export function decode(bytes: Buffer): Snapshot {
-  const bom = bytes.subarray(0, 3).equals(Buffer.from([239, 187, 191]));
-  let text = '', reason: string | undefined;
-  try {
-    text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-    if (text.includes('\0')) reason = 'Binary file. Status only.';
-    else if (/\r(?!\n)/.test(text) || (/\r\n/.test(text) && /(?<!\r)\n/.test(text))) {
-      reason = 'Mixed or unsupported line endings. Status only.';
-    }
-  } catch { reason = 'Invalid UTF-8 text. Status only.'; }
-  return { text, bom, hash: hash(bytes), exists: true, reason };
+const sourceReasons={
+  binary:'Binary file. Status only.',
+  'bare-cr':'Unsupported line endings (bare CR). Status only.',
+  'mixed-line-endings':'Mixed line endings. Status only.',
+};
+export function decode(bytes:Buffer,{referenceEncoding,knownBinary=false}:{referenceEncoding?:CodeEncoding;knownBinary?:boolean}={}):Snapshot {
+  const encoding=referenceEncoding??'utf-8';
+  const bom=encoding==='utf-8'&&bytes.subarray(0,3).equals(Buffer.from([239,187,191]));
+  const {text,issue}=decodeCodeText(bytes,encoding,knownBinary);
+  const snapshot={text,bom,hash:hash(bytes),exists:true,...(encoding==='gb18030'?{encoding}:{})};
+  if(referenceEncoding&&issue==='mixed-line-endings')return {...snapshot,text:text.replace(/\r\n/g,'\n')};
+  const reason=issue==='invalid-encoding'?`Invalid ${encoding.toUpperCase()} text. Status only.`:issue?sourceReasons[issue]:undefined;
+  return {...snapshot,reason};
 }
 export class Workspace {
   projects = new Map<string, Registered>();
@@ -132,22 +135,35 @@ export class Workspace {
     return [...found].map(([path,kind])=>({path:kind==='directory'?`${path}/`:path,kind}))
       .sort((a,b)=>a.path.localeCompare(b.path));
   }
-  async read(p: Registered, path: string): Promise<Snapshot> {
-    try { return decode(await readFile(await this.path(p, path, true))); }
+  async read(p: Registered, path: string, referenceEncoding?:CodeEncoding): Promise<Snapshot> {
+    try{
+      const actual=await this.path(p,path,true);
+      return decode(await readFile(actual),{referenceEncoding,knownBinary:isKnownBinaryCodePath(path)||isKnownBinaryCodePath(actual)});
+    }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { text: '', hash: 'missing', exists: false, bom: false };
       throw error;
     }
   }
-  async baseline(p: Registered, path: string) {
+  async baseline(p: Registered, path: string, revision=p.base, referenceEncoding?:CodeEncoding):Promise<Snapshot> {
     await this.path(p, path, true);
-    if (!p.repo || !p.base) return { text: '', bom: false, exists:false };
+    if (!p.repo || !revision) return { text: '', bom: false, exists:false, hash:'missing' };
     const repoPath = relative(p.repo, resolve(p.root, path)).split(sep).join('/');
-    const listing = (await git(p.repo, ['ls-tree', '-z', p.base, '--', repoPath])).toString();
-    if (!listing) return { text: '', bom: false, exists:false };
+    const listing = (await git(p.repo, ['ls-tree', '-z', revision, '--', repoPath])).toString();
+    if (!listing) return { text: '', bom: false, exists:false, hash:'missing' };
     const match = /^(\d+) \w+ ([a-f0-9]+)\t/.exec(listing);
-    if (!match || !['100644','100755'].includes(match[1])) return { text: '', bom: false, exists:true, reason: 'Unsupported file type' };
-    return decode(await git(p.repo, ['cat-file', 'blob', match[2]]));
+    if (!match || !['100644','100755'].includes(match[1])) return { text: '', bom: false, exists:true, hash:'missing', reason: 'Unsupported file type' };
+    return decode(await git(p.repo, ['cat-file', 'blob', match[2]]),{referenceEncoding,knownBinary:isKnownBinaryCodePath(path)});
+  }
+  async codeSnapshot(p:Registered,path:string,expectedHash:string,revision?:string,encoding:CodeEncoding='utf-8'):Promise<Snapshot>{
+    let snapshot:Snapshot;
+    if(revision)snapshot=await this.baseline(p,path,revision+'^{commit}',encoding);
+    else{
+      const disk=await this.read(p,path,encoding);
+      snapshot=disk.hash===expectedHash?disk:await this.baseline(p,path,p.base,encoding);
+    }
+    if(!snapshot.exists||snapshot.hash!==expectedHash||snapshot.reason)throw new HttpError(404,'Referenced version is unavailable');
+    return snapshot;
   }
   async status(p: Registered): Promise<ProjectStatus> {
     if (!p.repo) return { files: [], head: null, base: null, changedHead: false, branch:null };

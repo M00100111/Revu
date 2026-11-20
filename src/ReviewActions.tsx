@@ -1,8 +1,22 @@
 import type { Chunk, ReviewAction, ReviewRecord } from '../shared/types';
 import type { OpenFile } from './editor';
+import type {PinPlacement} from '../shared/pinLayout';
 export type ActionHandler=(file:OpenFile,id:string,action:ReviewAction,version:number)=>void;
-export function reviewItems(file:OpenFile) {
+export type PinActionHandler=(pin:PinPlacement,action:'keep'|'hide'|'close')=>void;
+export function reviewItems(file:Pick<OpenFile,'chunks'|'records'>) {
   return [...file.chunks,...file.records].sort((a,b)=>a.start-b.start);
+}
+export function PinActions({pin,kept,onAction,onSource,onReveal}:{
+  pin:PinPlacement;kept:boolean;onAction:PinActionHandler;onSource:(pin:PinPlacement)=>void;onReveal:()=>void;
+}){
+  return <div className="review-actions pin">
+    <span className="review-state">Pin</span>
+    <span className="review-line">L{pin.startLine}{pin.endLine!==pin.startLine?`–${pin.endLine}`:''}</span>
+    <button type="button" className="review-jump-space" title="Go to code" aria-label="Go to code" onClick={onReveal}/>
+    {!kept&&<button type="button" onClick={()=>onAction(pin,'keep')}>Keep</button>}
+    <button type="button" onClick={()=>onSource(pin)}>Source</button>
+    <button type="button" onClick={()=>onAction(pin,kept?'close':'hide')}>{kept?'Close':'Hide'}</button>
+  </div>;
 }
 export function ReviewActions({file,item,onAction,onNavigate,navigationDisabled=false,detailsExpanded=false,onToggleDetails,onReveal}:{
   file:OpenFile;item:Chunk|ReviewRecord;onAction:ActionHandler;

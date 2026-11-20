@@ -26,6 +26,9 @@ async function preparePiApp(){
   await cp(resolve('scripts','pi-launcher.mjs'),join(piAppDir,'revu-launcher.mjs'));
   await mkdir(join(piAppDir,'revu-extensions'),{recursive:true});
   await cp(resolve('pi-extensions','ask-user.ts'),join(piAppDir,'revu-extensions','ask-user.ts'));
+  await cp(resolve('pi-extensions','pin-code.ts'),join(piAppDir,'revu-extensions','pin-code.ts'));
+  await mkdir(join(piAppDir,'shared'),{recursive:true});
+  for(const name of ['codePins.ts','codeSource.ts'])await cp(resolve('shared',name),join(piAppDir,'shared',name));
   const chunksDir=join(piAppDir,'bundle','chunks');const chunks=await readdir(chunksDir);
   let patched=false;
   for(const name of chunks.filter(value=>value.endsWith('.js'))){

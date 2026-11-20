@@ -78,7 +78,7 @@ export function useWorkspace(onError: (message: string) => void,onNotice:(messag
     const task = (async () => {
       const [snapshot, base] = await Promise.all([
         api<Snapshot>('read', {projectId:project.id,path}),
-        api<{text:string;bom?:boolean;exists:boolean;reason?:string}>('baseline', {projectId:project.id,path}),
+        api<Snapshot>('baseline', {projectId:project.id,path}),
       ]);
       if (snapshot.reason) throw new Error(snapshot.reason);
       if(!snapshot.exists)snapshot.bom=base.bom??false;
@@ -89,7 +89,7 @@ export function useWorkspace(onError: (message: string) => void,onNotice:(messag
       }
       const file: OpenFile = {
         id, project, path, name:path.split('/').pop()!, model, synced:snapshot,draftExists:snapshot.exists,
-        baseline:base.text,baselineExists:base.exists, reason:base.reason, dirty:false, version:1, reviewText:snapshot.text,
+        baseline:base.text,baselineHash:base.hash,baselineExists:base.exists, reason:base.reason, dirty:false, version:1, reviewText:snapshot.text,
         chunks:[], records:[], computing:false, syncing:false, saving:false,
         diffError:'', notice:'', subscription:{dispose(){}},
       };
@@ -300,10 +300,10 @@ export function useWorkspace(onError: (message: string) => void,onNotice:(messag
             const updated=await api<Project>('refreshBase',{projectId:project.id});
             Object.assign(project,updated);
             for(const file of affected){
-              const base=await api<{text:string;exists:boolean;reason?:string}>('baseline',{
+              const base=await api<Snapshot>('baseline',{
                 projectId:project.id,path:file.path,
               });
-              file.baseline=base.text;file.baselineExists=base.exists;file.reason=base.reason;
+              file.baseline=base.text;file.baselineHash=base.hash;file.baselineExists=base.exists;file.reason=base.reason;
               file.records=[];file.chunks=[];file.reviewText=file.model.getValue();schedule(file);
             }
             setProjects([...projectRef.current]);

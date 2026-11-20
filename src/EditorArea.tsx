@@ -4,33 +4,28 @@ import { Fragment, useEffect, useRef, useState, type MutableRefObject } from 're
 import type { Chunk, ReviewRecord } from '../shared/types';
 import { changedRanges, inlineDiff } from '../shared/inlineDiff';
 import { monaco, type OpenFile } from './editor';
-import { reviewItems, ReviewActions, type ActionHandler } from './ReviewActions';
+import { reviewItems, ReviewActions, PinActions, type ActionHandler,type PinActionHandler } from './ReviewActions';
 import DiffPreview from './DiffPreview';
+import type {PinPlacement} from '../shared/pinLayout';
 
 const EDITOR_FONT="'Cascadia Code', Consolas, 'Courier New', monospace";
+const noPins:PinPlacement[]=[];
+type Portal={toolbarNode:HTMLElement;previewNode?:HTMLElement;item:Chunk|ReviewRecord|PinPlacement};
 
-export default function EditorArea({file,dark,editorRef,tick,onAction,onReviewReveal,expandedRecords,onToggleReviewPreview,revealLine,fontSize}:{
+export default function EditorArea({file,dark,editorRef,tick,onAction,onReviewReveal,expandedRecords,onToggleReviewPreview,reveal,fontSize,pins=noPins,keptIds,onPinAction,onPinSource,readOnly=false}:{
   file:OpenFile;dark:boolean;editorRef:MutableRefObject<monaco.editor.IStandaloneCodeEditor|null>;
   tick:number;onAction:ActionHandler;onReviewReveal:(itemId:string)=>void;
   expandedRecords:ReadonlySet<string>;onToggleReviewPreview:(itemId:string)=>void;
-  revealLine?:number;fontSize:number;
+  reveal?:{line:number;href?:string;pinId?:string};fontSize:number;pins?:PinPlacement[];keptIds:ReadonlySet<string>;readOnly?:boolean;
+  onPinAction:PinActionHandler;onPinSource:(pin:PinPlacement)=>void;
 }){
   const [editor,setEditor]=useState<monaco.editor.IStandaloneCodeEditor|null>(null);
-  const [portals,setPortals]=useState<{toolbarNode:HTMLElement;previewNode?:HTMLElement;item:Chunk|ReviewRecord}[]>([]);
+  const [portals,setPortals]=useState<Portal[]>([]);
+  const lastReveal=useRef<typeof reveal>(undefined);
   const actionRef=useRef(onAction); actionRef.current=onAction;
   const editorLineHeight=Math.round(fontSize*12/7);
+  const requestedPin=reveal?.pinId?pins.find(pin=>pin.id===reveal.pinId):reveal?.href?pins.find(pin=>pin.reference.href===reveal.href):undefined;
   useEffect(()=>()=>{editorRef.current=null;},[editorRef]);
-  useEffect(()=>{
-    if(!editor)return;
-    const reveal=()=>{
-      if(editor.getModel()===file.model&&revealLine){
-        const line=Math.max(1,Math.min(revealLine,file.model.getLineCount()));
-        editor.revealLineInCenter(line);editor.setPosition({lineNumber:line,column:1});
-      }
-    };
-    const changed=editor.onDidChangeModel(reveal);reveal();
-    return()=>changed.dispose();
-  },[editor,file.id,revealLine]);
   useEffect(()=>{
     if(!editor)return;
     let zones:string[]=[];
@@ -52,12 +47,26 @@ export default function EditorArea({file,dark,editorRef,tick,onAction,onReviewRe
       }
     };
     const render=()=>{
-      const nextPortals:{toolbarNode:HTMLElement;previewNode?:HTMLElement;item:Chunk|ReviewRecord}[]=[];
+      const nextPortals:Portal[]=[];
       editor.changeViewZones(accessor=>{
         zones.forEach(id=>accessor.removeZone(id));zones=[];
         if(editor.getModel()!==file.model){decorations.clear();return;}
         const marks:monaco.editor.IModelDeltaDecoration[]=[];
         const rows=(text:string)=>text?text.replace(/\r?\n$/,'').split('\n').length:0;
+        const addZone=(node:HTMLElement,afterLineNumber:number,height:number)=>{
+          node.style.overflow='hidden';
+          zones.push(accessor.addZone({afterLineNumber,heightInPx:height,domNode:node,suppressMouseDown:false}));
+        };
+        for(const pin of pins){
+          if(pin.chunkId!==undefined)continue;
+          const node=document.createElement('div');node.className='inline-review pin';
+          const toolbar=document.createElement('div');toolbar.className='inline-review-toolbar';node.append(toolbar);
+          nextPortals.push({toolbarNode:toolbar,item:pin});
+          addZone(node,pin.line-1,32);
+          marks.push({range:new monaco.Range(pin.line,1,pin.lastLine,1),options:{
+            isWholeLine:true,className:'code-pin-line',linesDecorationsClassName:'code-pin-gutter',
+          }});
+        }
         for(const item of reviewItems(file)){
           const position=file.model.getPositionAt(item.start);
           const line=Math.max(1,Math.min(file.model.getLineCount(),position.lineNumber));
@@ -65,7 +74,8 @@ export default function EditorArea({file,dark,editorRef,tick,onAction,onReviewRe
           const node=document.createElement('div');node.className='inline-review '+(record?'reviewed':item.kind);
           const toolbar=document.createElement('div');toolbar.className='inline-review-toolbar';node.append(toolbar);
           const expanded=!!record&&expandedRecords.has(record.id);
-          const showPreview=record?expanded:!!item.oldText;
+          const focusedOldRows=requestedPin?.chunkId===item.id?requestedPin.oldRows:undefined;
+          const showPreview=record?(expanded||!!focusedOldRows):!!item.oldText;
           let preview:HTMLElement|undefined;
           let previewHeight=0;
           if(showPreview){
@@ -75,13 +85,16 @@ export default function EditorArea({file,dark,editorRef,tick,onAction,onReviewRe
             const previewRows=rows(item.oldText)+(record?rows(item.newText):0);
             previewHeight=previewRows*editorLineHeight;
             preview.style.height=previewHeight+'px';node.append(preview);
+            if(focusedOldRows){
+              const marker=document.createElement('div');marker.className='code-pin-old-marker';
+              marker.style.top=focusedOldRows.start*editorLineHeight+'px';
+              marker.style.height=(focusedOldRows.end-focusedOldRows.start+1)*editorLineHeight+'px';preview.append(marker);
+            }
           }
           nextPortals.push({toolbarNode:toolbar,previewNode:preview,item});
-          node.style.overflow='hidden';
           const height=32+previewHeight;
           const atEOF=item.start===file.model.getValueLength()&&position.column>1;
-          zones.push(accessor.addZone({afterLineNumber:atEOF?line:line-1,
-            heightInPx:height,domNode:node,suppressMouseDown:false}));
+          addZone(node,atEOF?line:line-1,height);
           if(record){
             if(item.end>item.start){
               const end=file.model.getPositionAt(item.end);
@@ -123,7 +136,37 @@ export default function EditorArea({file,dark,editorRef,tick,onAction,onReviewRe
       decorations.clear();selectionDecorations.clear();
       editor.changeViewZones(accessor=>zones.forEach(id=>accessor.removeZone(id)));
     };
-  },[editor,file.id,tick,expandedRecords,editorLineHeight]);  return <><Editor path={file.model.uri.toString()} theme={dark?'revu-dark':'revu-light'}
+  },[editor,file.id,tick,expandedRecords,editorLineHeight,pins,requestedPin]);
+  useEffect(()=>{
+    if(!editor||!reveal||lastReveal.current===reveal)return;
+    const go=()=>{
+      if(editor.getModel()!==file.model||lastReveal.current===reveal)return;
+      const pin=requestedPin;
+      if((reveal.href||reveal.pinId)&&!pin)return;
+      const line=Math.max(1,Math.min(pin?.line??reveal.line,file.model.getLineCount()));
+      editor.revealLineInCenter(line);editor.setPosition({lineNumber:line,column:1});
+      if(pin){
+        const id=pin.chunkId??pin.id;
+        const portal=portals.find(item=>item.item.id===id);
+        if(!portal?.toolbarNode.isConnected)return;
+        for(const entry of portals)entry.toolbarNode.parentElement?.classList.toggle('active',entry===portal);
+        if(pin.oldRows&&portal.previewNode){
+          const top=portal.previewNode.getBoundingClientRect().top-(editor.getDomNode()?.getBoundingClientRect().top??0);
+          editor.setScrollTop(editor.getScrollTop()+top+pin.oldRows.start*editorLineHeight-editor.getLayoutInfo().height/2);
+        }
+      }
+      lastReveal.current=reveal;
+    };
+    const changed=editor.onDidChangeModel(go);go();
+    return()=>changed.dispose();
+  },[editor,file.id,reveal,requestedPin,portals,tick,editorLineHeight]);
+  const revealItem=(itemId:string,line:number)=>{
+    if(!editor)return;
+    editor.revealLineInCenter(line);editor.setPosition({lineNumber:line,column:1});editor.focus();
+    for(const portal of portals)portal.toolbarNode.parentElement?.classList.toggle('active',portal.item.id===itemId);
+    onReviewReveal(itemId);
+  };
+  return <><Editor path={file.model.uri.toString()} theme={dark?'revu-dark':'revu-light'}
     keepCurrentModel saveViewState
     onMount={instance=>{editorRef.current=instance;setEditor(instance);}}
     loading={<div className="editor-loading">Opening editor…</div>}
@@ -132,20 +175,16 @@ export default function EditorArea({file,dark,editorRef,tick,onAction,onReviewRe
       scrollBeyondLastLine:false,smoothScrolling:true,renderLineHighlight:'line',
       overviewRulerLanes:0,hideCursorInOverviewRuler:true,lineNumbersMinChars:4,
       glyphMargin:false,folding:true,tabSize:2,stickyScroll:{enabled:false},
-      wordWrap:file.model.getLanguageId()==='markdown'?'on':'off',
+      wordWrap:file.model.getLanguageId()==='markdown'?'on':'off',readOnly,
     }}/>
-    {portals.map(({toolbarNode,previewNode,item})=><Fragment key={item.id}>
+    {portals.map(({toolbarNode,previewNode,item})=>'reference' in item
+      ? createPortal(<PinActions pin={item} kept={keptIds.has(item.id)} onAction={onPinAction} onSource={onPinSource}
+        onReveal={()=>revealItem(item.id,item.line)}/>,toolbarNode,item.id):<Fragment key={item.id}>
       {createPortal(<ReviewActions file={file} item={item} onAction={(...args)=>actionRef.current(...args)}
-        onReveal={()=>{
-          if(!editor)return;
-          const position=file.model.getPositionAt(item.start);
-          editor.revealLineInCenter(position.lineNumber);editor.setPosition({lineNumber:position.lineNumber,column:1});editor.focus();
-          for(const portal of portals)portal.toolbarNode.parentElement?.classList.toggle('active',portal.item.id===item.id);
-          onReviewReveal(item.id);
-        }}
+        onReveal={()=>revealItem(item.id,file.model.getPositionAt(item.start).lineNumber)}
         detailsExpanded={'decision' in item&&expandedRecords.has(item.id)}
         onToggleDetails={'decision' in item?()=>onToggleReviewPreview(item.id):undefined}
-        navigationDisabled={portals.length<=1} onNavigate={direction=>{
+        navigationDisabled={file.chunks.length+file.records.length<=1} onNavigate={direction=>{
           if(!editor)return;const items=reviewItems(file);const index=items.findIndex(entry=>entry.id===item.id);
           const target=items[(index+direction+items.length)%items.length];if(!target)return;
           const position=file.model.getPositionAt(target.start);editor.revealLineInCenter(position.lineNumber);

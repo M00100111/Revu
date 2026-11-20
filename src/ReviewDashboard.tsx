@@ -1,36 +1,54 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeFile, ProjectStatus, ReviewBulkAction } from '../shared/types';
 import type { OpenFile, Project } from './editor';
-import { reviewItems, ReviewActions, type ActionHandler } from './ReviewActions';
+import { reviewItems, ReviewActions, PinActions, type ActionHandler, type PinActionHandler } from './ReviewActions';
+import type {PinPlacement} from '../shared/pinLayout';
 import ResizeHandle from './ResizeHandle';
 import ProjectDropdown from './ProjectDropdown';
 import Icon from './Icon';
 import type { ReviewFileLabels } from './SettingsPage';
 
-interface ReviewFileRow {project:Project;status?:ChangeFile;file?:OpenFile;path:string}
+interface ReviewFileRow {id:string;project:Project;status?:ChangeFile;file?:OpenFile;path:string;snapshot?:boolean}
 const MIN_DETAIL_HEIGHT=120;
 const MIN_CHANGES_HEIGHT=160;
 const REVIEW_HEADER_HEIGHT=54;
 const REVIEW_RESIZE_HEIGHT=6;
 const firstPreviewLine=(text:string)=>text.split(/\r?\n/).find(line=>line.trim().length>0)??'';
 const displayPath=(path:string,labels:ReviewFileLabels)=>labels==='name'?path.split(/[\\/]/).pop()??path:path;
+export function dashboardChunks(file:Pick<OpenFile,'chunks'|'records'>,pins:readonly PinPlacement[]){
+  const notes=new Map<string,Set<string>>();
+  const standalone:PinPlacement[]=[];
+  for(const pin of pins){
+    if(pin.chunkId===undefined)standalone.push(pin);
+    else if(pin.reference.note){
+      const existing=notes.get(pin.chunkId)??new Set<string>();
+      existing.add(pin.reference.note);notes.set(pin.chunkId,existing);
+    }
+  }
+  const items=[...reviewItems(file),...standalone].sort((first,second)=>first.line-second.line);
+  return {items,notes};
+}
 
 const savedChangesHeight=()=>{
   const value=Number(localStorage.getItem('revu-review-changes-height'));
   return Number.isFinite(value)&&value>=MIN_CHANGES_HEIGHT?value:null;
 };
 
-export default function ReviewDashboard({projects,documents,statuses,filter,selected,revealTarget,expandedRecords,onToggleReviewPreview,width,onResize,onOpen,onAction,onBulk,onFileBulk,onFilterChange,onSelectedChange,split,onSplitChange,chunkWidth,onChunkResize,fileLabels}:{
+export default function ReviewDashboard({projects,documents,snapshots,statuses,filter,selected,revealTarget,expandedRecords,onToggleReviewPreview,width,onResize,onOpen,onOpenSnapshot,onAction,onBulk,onFileBulk,onFilterChange,onSelectedChange,split,onSplitChange,chunkWidth,onChunkResize,fileLabels,pinsByFile,keptIds,onPinAction,onPinSource,onRevealPin}:{
   projects:Project[];documents:OpenFile[];statuses:Record<string,ProjectStatus>;
+  snapshots:OpenFile[];
   filter:string;selected:string;
   revealTarget:{fileId:string;itemId:string;token:number}|null;
   expandedRecords:ReadonlySet<string>;onToggleReviewPreview:(file:OpenFile,itemId:string,line:number)=>void;
   width:number;onResize:(width:number)=>void;onOpen:(project:Project,path:string,line?:number)=>void;
+  onOpenSnapshot:(fileId:string)=>void;
   onAction:ActionHandler;onBulk:(projectIds:string[],action:ReviewBulkAction)=>void;
   onFileBulk:(file:OpenFile,action:ReviewBulkAction)=>void;
   onFilterChange:(filter:string)=>void;onSelectedChange:(selected:string)=>void;
   split:boolean;onSplitChange:(split:boolean)=>void;chunkWidth:number;onChunkResize:(width:number)=>void;
   fileLabels:ReviewFileLabels;
+  pinsByFile:ReadonlyMap<string,PinPlacement[]>;keptIds:ReadonlySet<string>;
+  onPinAction:PinActionHandler;onPinSource:(pin:PinPlacement)=>void;onRevealPin:(file:OpenFile,pin:PinPlacement)=>void;
 }){
   const [changesHeight,setChangesHeight]=useState<number|null>(savedChangesHeight);
   const dashboardRef=useRef<HTMLElement|null>(null);
@@ -52,23 +70,27 @@ export default function ReviewDashboard({projects,documents,statuses,filter,sele
     observer.observe(dashboard);return()=>observer.disconnect();
   },[clampChangesHeight]);
   useEffect(()=>{if(filter!=='all'&&!projects.some(project=>project.id===filter))onFilterChange('all');},[filter,projects,onFilterChange]);
-  const scoped=projects.filter(project=>filter==='all'||project.id===filter);
+  const scoped=useMemo(()=>projects.filter(project=>filter==='all'||project.id===filter),[filter,projects]);
   const rows=useMemo(()=>scoped.flatMap(project=>{
     const status=statuses[project.id];
     const paths=new Set([...(status?.files.map(file=>file.path)??[]),...documents.filter(file=>file.project.id===project.id&&
-      (file.chunks.length||file.records.length||file.dirty)).map(file=>file.path)]);
-    return [...paths].sort().map(path=>({project,path,status:status?.files.find(file=>file.path===path),
+      (file.chunks.length||file.records.length||file.dirty||pinsByFile.has(file.id))).map(file=>file.path)]);
+    const fileRows:ReviewFileRow[]=[...paths].sort().map(path=>({id:project.id+'/'+path,project,path,status:status?.files.find(file=>file.path===path),
       file:documents.find(file=>file.project.id===project.id&&file.path===path)}));
-  }),[scoped,statuses,documents]);
-  useEffect(()=>{if(selected&&!rows.some(row=>row.project.id+'/'+row.path===selected))onSelectedChange('');},[rows,selected,onSelectedChange]);
+    return [...fileRows,...snapshots.filter(file=>file.project.id===project.id&&pinsByFile.has(file.id))
+      .map<ReviewFileRow>(file=>({id:file.id,project,path:file.path,file,snapshot:true}))];
+  }),[scoped,statuses,documents,snapshots,pinsByFile]);
+  useEffect(()=>{if(selected&&!rows.some(row=>row.id===selected))onSelectedChange('');},[rows,selected,onSelectedChange]);
   useEffect(()=>{
     if(!revealTarget||revealTarget.fileId!==selected)return;
     const frame=requestAnimationFrame(()=>chunkRefs.current.get(revealTarget.itemId)
       ?.scrollIntoView({block:'center',inline:'nearest',behavior:'smooth'}));
     return()=>cancelAnimationFrame(frame);
   },[revealTarget?.token,selected]);
-  const current=rows.find(row=>row.project.id+'/'+row.path===selected);
-  const currentItems=current?.file?reviewItems(current.file):[];
+  const current=rows.find(row=>row.id===selected);
+  const currentFile=current?.file;
+  const currentChunks=currentFile?dashboardChunks(currentFile,pinsByFile.get(currentFile.id)??[]):undefined;
+  const currentItems=currentChunks?.items??[];
   const pending=rows.reduce((sum,row)=>sum+(row.file?.chunks.length??0),0);
   const reviewed=rows.reduce((sum,row)=>sum+(row.file?.records.length??0),0);
   const activeProject=projects.length===1?projects[0]:projects.find(project=>project.id===filter);
@@ -76,14 +98,20 @@ export default function ReviewDashboard({projects,documents,statuses,filter,sele
   const grouped=projects.length>1&&filter==='all';
   const bulk=(action:ReviewBulkAction)=>onBulk(scoped.map(project=>project.id),action);
   const fileRow=(row:ReviewFileRow)=>{
-    const key=row.project.id+'/'+row.path,file=row.file;
-    const status=(row.status?.status??'M')[0].toUpperCase();
+    const {id:key,file}=row;
+    const pinCount=(pinsByFile.get(key)??[]).filter(pin=>pin.chunkId===undefined).length;
+    const pinOnly=!row.status&&!!pinCount&&!file?.chunks.length&&!file?.records.length&&!file?.dirty;
+    const status=(row.status?.status??(pinOnly?'P':'M'))[0].toUpperCase();
     const reviewedOnly=!!file&&!file.chunks.length&&!!file.records.length;
     const nameClass=reviewedOnly?'review-complete':'status-'+status.toLowerCase();
     const unavailable=!file||file.computing||file.syncing||file.saving||!!(file.syncError||file.diffError||file.reason);
-    const open=()=>{onSelectedChange(key);if(!(row.status?.reason&&!row.file))onOpen(row.project,row.path);};
+    const open=()=>{
+      onSelectedChange(key);
+      if(row.snapshot)onOpenSnapshot(key);
+      else if(!(row.status?.reason&&!file))onOpen(row.project,row.path);
+    };
     return <div key={key} className={'review-file-row '+(selected===key?'active':'')}>
-      <button className={'review-file-name '+nameClass} title={row.path} onClick={open}>{displayPath(row.path,fileLabels)}</button>
+      <button className={'review-file-name '+nameClass} title={row.path} onClick={open}>{displayPath(row.path,fileLabels)}{row.snapshot?' · Snapshot':''}</button>
       <div className="review-file-actions">
         <button className="action-accept" disabled={unavailable||!file?.chunks.length}
           onClick={()=>file&&onFileBulk(file,'accept')}>Accept</button>
@@ -93,33 +121,43 @@ export default function ReviewDashboard({projects,documents,statuses,filter,sele
           onClick={()=>file&&onFileBulk(file,'undo')}>Undo</button>
       </div>
       <button className="review-file-summary" onClick={open}>
-        {file?.chunks.length??0} pending · {file?.records.length??0} reviewed
+        {pinOnly?`${pinCount} pinned`:`${file?.chunks.length??0} pending · ${file?.records.length??0} reviewed${pinCount?` · ${pinCount} pinned`:''}`}
       </button>
       <span className={'review-file-status status-'+status.toLowerCase()}>{status}</span>
     </div>;
   };
   const detail=<section className="review-detail">
-        {!current?<p className="sidebar-empty">Select a changed file</p>:<>
+        {!current?<p className="sidebar-empty">Select a file to view chunks</p>:<>
           <div className="review-detail-heading"><strong title={current.path}>{displayPath(current.path,fileLabels)}</strong>
             <span>{currentItems.length} chunk{currentItems.length===1?'':'s'}</span></div>
           {(current.status?.reason||current.file?.reason)&&
             <p className="review-warning">{current.status?.reason||current.file?.reason}</p>}
           {current.file?.computing&&<p className="tree-note">Updating diff…</p>}
           {current.file?.diffError&&<p className="review-warning">{current.file.diffError}</p>}
-          {current.file&&currentItems.map(item=>{
+          {currentFile&&currentItems.map(item=>{
+            const active=revealTarget?.fileId===selected&&revealTarget.itemId===item.id;
+            const setRef=(node:HTMLDivElement|null)=>{if(node)chunkRefs.current.set(item.id,node);else chunkRefs.current.delete(item.id);};
+            if('reference' in item){
+              const reveal=()=>onRevealPin(currentFile,item);
+              return <div className="dashboard-chunk" aria-current={active||undefined} key={item.id} ref={setRef}>
+                <PinActions pin={item} kept={keptIds.has(item.id)} onAction={onPinAction} onSource={onPinSource} onReveal={reveal}/>
+                <button className="chunk-preview" title="Go to code" onClick={reveal}><span>{item.preview.trimStart()||'\u00a0'}</span></button>
+                {item.reference.note&&<div className="code-pin-notes">{item.reference.note}</div>}
+              </div>;
+            }
             const record='decision' in item;
             const expanded=record&&expandedRecords.has(item.id);
-            const active=revealTarget?.fileId===selected&&revealTarget.itemId===item.id;
-            return <div className={'dashboard-chunk '+(active?'active':'')} key={item.id}
-              ref={node=>{if(node)chunkRefs.current.set(item.id,node);else chunkRefs.current.delete(item.id);}}>
-              <ReviewActions file={current.file!} item={item} onAction={onAction}
-                detailsExpanded={expanded} onToggleDetails={record?()=>onToggleReviewPreview(current.file!,item.id,item.line):undefined}
+            const notes=currentChunks?.notes.get(item.id);
+            return <div className={'dashboard-chunk '+(active?'active':'')} key={item.id} ref={setRef}>
+              <ReviewActions file={currentFile} item={item} onAction={onAction}
+                detailsExpanded={expanded} onToggleDetails={record?()=>onToggleReviewPreview(currentFile,item.id,item.line):undefined}
                 onReveal={()=>onOpen(current.project,current.path,item.line)}/>
               <button className="chunk-preview" title="Go to code"
                 onClick={()=>onOpen(current.project,current.path,item.line)}>
                 <span className="removed">{firstPreviewLine(item.oldText)?'- '+firstPreviewLine(item.oldText):''}</span>
                 <span className="added">{firstPreviewLine(item.newText)?'+ '+firstPreviewLine(item.newText):''}</span>
               </button>
+              {!!notes?.size&&<div className="code-pin-notes">{[...notes].map(note=><div key={note}>{note}</div>)}</div>}
             </div>;
           })}
         </>}
@@ -145,7 +183,7 @@ export default function ReviewDashboard({projects,documents,statuses,filter,sele
           const height=changesHeight??changesRef.current?.getBoundingClientRect().height??MIN_CHANGES_HEIGHT;
           setChangesHeight(clampChangesHeight(height+(event.key==='ArrowUp'?12:-12)));
         }}/>;
-  const changes=<section ref={changesRef} className={'review-changes '+(split?'split':'')} aria-label="Changed files"
+  const changes=<section ref={changesRef} className={'review-changes '+(split?'split':'')} aria-label="Review files"
         style={split||changesHeight===null?undefined:{flexBasis:changesHeight}}>
         <header className="review-changes-header">
           {projects.length===1?<strong className="review-project-name" title={projects[0].name}>{projects[0].name}</strong>:
