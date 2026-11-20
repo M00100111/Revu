@@ -1,6 +1,5 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell, type OpenDialogOptions, type SaveDialogOptions } from 'electron';
 import { randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { diff } from '../server/git';
@@ -109,7 +108,6 @@ async function invokeAgent(body:PiAgentRequest,sourceWindow?:BrowserWindow|null)
     case 'openSession':return piManager.openSession(body.projectId,body.sessionId);
     case 'openDiscoveredSession':{
       const session=await piManager.discoveredSession(body.projectId,body.sessionId);
-      if(!session.cwd||!existsSync(session.cwd))throw new Error('The session project folder no longer exists.');
       const project=await workspace.add(session.cwd);await persistOpenFolders();
       return {project,snapshot:await piManager.openSessionFile(project.id,session.id,session.path)};
     }

@@ -1,12 +1,23 @@
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, isAbsolute, join, resolve, win32 } from 'node:path';
 
 export function nativePiAgentDir(home=homedir()){return join(home,'.pi','agent');}
 export function nativePiSessionsDir(home=homedir()){return join(nativePiAgentDir(home),'sessions');}
 export function nativePiSessionDir(cwd:string,home=homedir()){
   const safe=`--${resolve(cwd).replace(/^[/\\]/,'').replace(/[/\\:]/g,'-')}--`;
   return join(nativePiSessionsDir(home),safe);
+}
+
+export function piSessionHostPath(path:string,platform=process.platform){
+  if(platform!=='win32')return path;
+  const mount=/^\/mnt\/([a-z])(?:\/(.*))?$/.exec(path);
+  return mount?win32.normalize(mount[1].toUpperCase()+':\\'+(mount[2]??'')):path;
+}
+
+export function piSessionProjectAvailable(cwd:string){
+  return isAbsolute(cwd)&&(process.platform!=='win32'||win32.parse(cwd).root.length>1)&&existsSync(cwd);
 }
 
 export interface PiSessionCopySource {path:string;parentSessionPath?:string}

@@ -3,7 +3,17 @@ import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { copyPiSessions, nativePiSessionDir } from '../electron/piSessionStorage';
+import { copyPiSessions, nativePiSessionDir, piSessionHostPath } from '../electron/piSessionStorage';
+import { piSessionProjectKey } from '../shared/piSession';
+
+test('Windows and WSL drive paths share a project key without merging unrelated projects',()=>{
+  const native=piSessionProjectKey('D:\\CodeProject\\Test1');
+  assert.equal(piSessionProjectKey(piSessionHostPath('/mnt/d/CodeProject/Test1/','win32')),native);
+  assert.equal(piSessionProjectKey(piSessionHostPath('/mnt/d','win32')),piSessionProjectKey('d:/'));
+  assert.notEqual(piSessionProjectKey(piSessionHostPath('/mnt/c/CodeProject/Test1','win32')),native);
+  assert.notEqual(piSessionProjectKey(piSessionHostPath('/home/user/Test1','win32')),native);
+  assert.equal(piSessionHostPath('/mnt/d/CodeProject/Test1','linux'),'/mnt/d/CodeProject/Test1');
+});
 
 test('native session directory uses Pi cwd encoding',()=>{
   const path=nativePiSessionDir('D:\\CodeProject\\Revu','C:\\Users\\RaY');

@@ -1,5 +1,13 @@
 const record=(value:unknown):Record<string,unknown>=>value&&typeof value==='object'?value as Record<string,unknown>:{};
 
+export function piSessionProjectKey(cwd:string){
+  const windowsDrive=/^[A-Za-z]:[\\/]/.test(cwd);
+  const path=windowsDrive||cwd.startsWith('\\\\')?cwd.replace(/\\/g,'/'):cwd;
+  const key=path.replace(/\/+$/,'');
+  if(windowsDrive)return (key.length===2?key+'/':key).toLowerCase();
+  return key||path;
+}
+
 export const countPiSessionRuns=(entries:unknown[])=>entries.reduce<number>((total,entry)=>{
   const value=record(entry);
   return total+(value.type==='message'&&record(value.message).role==='user'?1:0);

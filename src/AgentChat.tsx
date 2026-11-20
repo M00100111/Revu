@@ -13,7 +13,7 @@ import { CwdRecoveryDialog,ForkDialog, ProjectTrustDialog, RenameSessionDialog }
 import { mergePiCommands, parsePiCommand, piCommandAt, piQueueWarning, UNSUPPORTED_PI_COMMANDS } from '../shared/piCommands';
 import { historicalSummary, summaryActive, updateSummaryOperations, type SummaryOperation } from '../shared/piSummary';
 import { showContextMenu } from './ContextMenu';
-import { isReservedPiSessionName, threadPiSessions,type ThreadedPiSession } from '../shared/piSession';
+import { isReservedPiSessionName, piSessionProjectKey, threadPiSessions,type ThreadedPiSession } from '../shared/piSession';
 import { inlineDiff } from '../shared/inlineDiff';
 import type { ProjectPathEntry } from '../shared/types';
 import type {
@@ -406,6 +406,13 @@ const assistantText=(run:ChatRun)=>run.items.filter(item=>item.type==='answer'&&
 export const shouldShowAssistantActions=(isLatest:boolean,status:PiRuntimeStatus)=>!isLatest||(status!=='starting'&&status!=='running');
 const formatTime=(value:number)=>new Intl.DateTimeFormat(undefined,{hour:'2-digit',minute:'2-digit'}).format(value);
 const formatFullTime=(value:number)=>new Intl.DateTimeFormat(undefined,{dateStyle:'medium',timeStyle:'short'}).format(value);
+function formatSessionTime(date:Date){
+  const twoDigits=(value:number)=>String(value).padStart(2,'0');
+  const year=String(date.getFullYear()).padStart(4,'0');
+  const month=twoDigits(date.getMonth()+1);
+  const day=twoDigits(date.getDate());
+  return year+'-'+month+'-'+day+' '+twoDigits(date.getHours())+':'+twoDigits(date.getMinutes());
+}
 const sessionTone=(status:PiRuntimeStatus,done:boolean,question=false):SessionTone=>question?'question':done?'done':status==='error'?'error':
   status==='running'||status==='starting'||status==='stopping'?'running':'idle';
 const sessionStatusLabel=(tone:SessionTone)=>tone==='question'?'Question':tone==='running'?'Running':tone==='done'?'Done':tone==='error'?'Error':'Idle';
@@ -457,8 +464,6 @@ export function updateEvent(current:ChatState,event:unknown):ChatState{
   return current;
 }
 
-function sessionCwdKey(path:string){const value=path.replace(/\\/g,'/').replace(/\/$/,'');return /^[A-Za-z]:\//.test(value)?value.toLocaleLowerCase():value;}
-
 function SessionDialog({projects,projectId,selectedSessionId,sessions,doneSessionIds,onProject,onOpen,onNew,onRename,onDelete,onClone,onExport,onFolderChanged,onClose,notify}:{
   projects:Project[];projectId:string;sessions:PiSessionSummary[];onProject:(id:string)=>void;
   selectedSessionId:string|null;doneSessionIds:ReadonlySet<string>;
@@ -471,17 +476,17 @@ function SessionDialog({projects,projectId,selectedSessionId,sessions,doneSessio
   const [scope,setScope]=useState<PiSessionScope>('current');const [namedOnly,setNamedOnly]=useState(false);
   const [catalog,setCatalog]=useState<PiSessionCatalog>({groups:[],sessions:[]});const [catalogLoading,setCatalogLoading]=useState(false);
   const [folderMenuOpen,setFolderMenuOpen]=useState(false);const folderMenuRef=useRef<HTMLDivElement>(null);
-  const selectedProject=projects.find(project=>project.id===projectId)??projects[0];const [selectedCwd,setSelectedCwd]=useState(()=>sessionCwdKey(selectedProject?.root??''));
+  const selectedProject=projects.find(project=>project.id===projectId)??projects[0];const [selectedCwd,setSelectedCwd]=useState(()=>piSessionProjectKey(selectedProject?.root??''));
   const trimmedQuery=query.trim();
   useEffect(()=>localStorage.setItem('revu-session-sort',sort),[sort]);
   useEffect(()=>{if(!folderMenuOpen)return;const close=(event:MouseEvent)=>{if(!folderMenuRef.current?.contains(event.target as Node))setFolderMenuOpen(false);};
     document.addEventListener('mousedown',close);return()=>document.removeEventListener('mousedown',close);},[folderMenuOpen]);
-  useEffect(()=>{if(scope==='current'&&selectedProject)setSelectedCwd(sessionCwdKey(selectedProject.root));},[scope,selectedProject?.root]);
+  useEffect(()=>{if(scope==='current'&&selectedProject)setSelectedCwd(piSessionProjectKey(selectedProject.root));},[scope,selectedProject?.root]);
   useEffect(()=>{
     if(scope!=='all'){setCatalog({groups:[],sessions:[]});setCatalogLoading(false);return;}
     let cancelled=false;setCatalogLoading(true);
     void window.revu.agent.listSessions(projectId,'all').then(unwrap).then(value=>{if(!cancelled){setCatalog(value);
-      setSelectedCwd(current=>value.groups.some(group=>group.key===current)?current:sessionCwdKey(selectedProject?.root??value.groups[0]?.cwd??''));}})
+      setSelectedCwd(current=>value.groups.some(group=>group.key===current)?current:piSessionProjectKey(selectedProject?.root??value.groups[0]?.cwd??''));}})
       .catch(error=>{if(!cancelled){setCatalog({groups:[],sessions:[]});notify('error',errorMessage(error));}})
       .finally(()=>{if(!cancelled)setCatalogLoading(false);});
     return()=>{cancelled=true;};
@@ -494,11 +499,12 @@ function SessionDialog({projects,projectId,selectedSessionId,sessions,doneSessio
     }).catch(()=>{if(!cancelled)setResults([]);}).finally(()=>{if(!cancelled)setSearching(false);}),150);
     return()=>{cancelled=true;clearTimeout(timer);};
   },[projectId,trimmedQuery,sort,scope,sessions]);
-  const openGroups:PiSessionGroup[]=projects.map(project=>({key:sessionCwdKey(project.root),name:project.name,cwd:project.root,available:true}));
-  const projectGroups=scope==='current'?openGroups:[...new Map([...openGroups,...catalog.groups].map(group=>[group.key,group])).values()];
+  const openGroups:PiSessionGroup[]=projects.map(project=>({key:piSessionProjectKey(project.root),name:project.name,cwd:project.root,available:true}));
+  const openGroupKeys=new Set(openGroups.map(group=>group.key));
+  const projectGroups=scope==='current'?openGroups:[...openGroups,...catalog.groups.filter(group=>!openGroupKeys.has(group.key))];
   const sourceSessions=scope==='current'?sessions:catalog.sessions;
-  const visibleSessions=sourceSessions.filter(session=>sessionCwdKey(session.cwd)===selectedCwd&&(!namedOnly||(session.hasName&&!isReservedPiSessionName(session.name))));
-  const visibleResults=results.filter(session=>sessionCwdKey(session.cwd)===selectedCwd&&(!namedOnly||(session.hasName&&!isReservedPiSessionName(session.name))));
+  const visibleSessions=sourceSessions.filter(session=>piSessionProjectKey(session.cwd)===selectedCwd&&(!namedOnly||(session.hasName&&!isReservedPiSessionName(session.name))));
+  const visibleResults=results.filter(session=>piSessionProjectKey(session.cwd)===selectedCwd&&(!namedOnly||(session.hasName&&!isReservedPiSessionName(session.name))));
   const chooseSessionFolder=async()=>{setFolderMenuOpen(false);try{const result=await window.revu.agent.chooseSessionFolder(projectId).then(unwrap);if(!result)return;
     onFolderChanged();notify('info',result.copied?`Session folder changed. Copied ${result.copied} ${result.copied===1?'session':'sessions'}.`:'Session folder changed.');
   }catch(error){notify('error',errorMessage(error));}};
@@ -510,7 +516,8 @@ function SessionDialog({projects,projectId,selectedSessionId,sessions,doneSessio
     ['Older',(item:PiSessionSummary)=>item.modifiedAt<today-6*86400000],
   ] as const;
   const renderSession=(session:PiSessionSummary|PiSessionSearchResult,thread?:ThreadedPiSession<PiSessionSummary>)=>{const tone=sessionTone(session.status,doneSessionIds.has(session.id),session.question);const enabled=(session.status==='idle'||session.status==='error')&&session.hasSessionFile!==false&&!session.isCompacting&&!session.question;
-    const openProject=projects.find(project=>sessionCwdKey(project.root)===sessionCwdKey(session.cwd));const canRuntimeAction=enabled&&!!openProject;
+    const modifiedAt=new Date(session.modifiedAt);
+    const openProject=projects.find(project=>piSessionProjectKey(project.root)===piSessionProjectKey(session.cwd));const canRuntimeAction=enabled&&!!openProject;
     const actionSession=openProject?{...session,projectId:openProject.id,scope:'current' as const}:session;
     const contextMenu=async(event:React.MouseEvent)=>{const action=await showContextMenu(event,[{id:'clone',label:'Clone',disabled:!canRuntimeAction},{id:'export',label:'Export',disabled:!canRuntimeAction}] as const);
       if(action==='clone')onClone(actionSession);if(action==='export')onExport(actionSession);};
@@ -519,7 +526,7 @@ function SessionDialog({projects,projectId,selectedSessionId,sessions,doneSessio
         if(isReservedPiSessionName(normalized)){notify('error','Names ending in (Fork), (Clone), or a numbered variant are reserved.');return;}onRename(session,normalized);setRenaming(null);}}>
         <input autoFocus value={name} onChange={event=>setName(event.target.value)}/><button type="submit">Save</button><button type="button" onClick={()=>setRenaming(null)}>Cancel</button>
       </form>:<>
-        <button className="session-select" onClick={()=>onOpen(session)}><span className="session-title">{thread&&thread.depth>0&&<i className="session-thread-prefix">{thread.ancestorContinues.map(value=>value?'│  ':'   ').join('')}{thread.isLast?'└─ ':'├─ '}</i>}<b>{session.name}</b></span>{'matchSnippet' in session&&session.matchSnippet&&<em>{session.matchSnippet}</em>}<small>{formatTime(session.modifiedAt)} · {session.runCount} {session.runCount===1?'run':'runs'}</small></button>
+        <button className="session-select" onClick={()=>onOpen(session)}><span className="session-title">{thread&&thread.depth>0&&<i className="session-thread-prefix">{thread.ancestorContinues.map(value=>value?'│  ':'   ').join('')}{thread.isLast?'└─ ':'├─ '}</i>}<b>{session.name}</b></span>{'matchSnippet' in session&&session.matchSnippet&&<em>{session.matchSnippet}</em>}<small><time dateTime={modifiedAt.toISOString()}>{formatSessionTime(modifiedAt)}</time> · {session.runCount} {session.runCount===1?'run':'runs'}</small></button>
         <span className={`session-status ${tone}`}><i/>{sessionStatusLabel(tone)}</span>
         <div className="session-actions"><button className="session-action" onClick={()=>{setRenaming(session.id);setName(session.name);}}>Rename</button>
           <button className="session-action" onClick={()=>onDelete(session)}>Delete</button></div>
@@ -533,7 +540,7 @@ function SessionDialog({projects,projectId,selectedSessionId,sessions,doneSessio
         {folderMenuOpen&&<div className="session-folder-menu" role="menu"><button role="menuitem" onClick={()=>void chooseSessionFolder()}>Session Folder</button></div>}
       </div><button className="agent-icon-button" onClick={onClose} aria-label="Close"><Icon name="close" size={15}/></button></div></header>
       <div className="session-project-bar"><nav className="session-project-tabs" aria-label="Projects">{projectGroups.map(group=><button key={group.key} title={group.cwd}
-        className={group.key===selectedCwd?'active':''} onClick={()=>{setSelectedCwd(group.key);if(scope==='current'){const project=projects.find(item=>sessionCwdKey(item.root)===group.key);if(project)onProject(project.id);}}}>{group.name}</button>)}</nav>
+        className={group.key===selectedCwd?'active':''} onClick={()=>{setSelectedCwd(group.key);if(scope==='current'){const project=projects.find(item=>piSessionProjectKey(item.root)===group.key);if(project)onProject(project.id);}}}>{group.name}</button>)}</nav>
         <div className="session-scope-switch" role="group" aria-label="Session scope"><button className={scope==='current'?'active':''} onClick={()=>setScope('current')}>Current</button><button className={scope==='all'?'active':''} onClick={()=>setScope('all')}>All</button></div></div>
       <div className="session-search"><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="Search conversations..." aria-label="Search conversations"/>
         <AgentSelect compact align="end" showCheck={false} value={sort} placeholder="Sort" groups={[{options:[{value:'threaded',label:'Threaded'},{value:'relevance',label:'Relevant'},{value:'recent',label:'Recent'}]}]}
@@ -828,7 +835,7 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
   }catch(error){notify('error',error instanceof Error?error.message:String(error));setModelDialog(true);}finally{setLoading(false);}};
   const openSession=async(session:PiSessionSummary,targetRunKey?:string)=>openSessionById(session.projectId,session.id,targetRunKey);
   const openCatalogSession=async(session:PiSessionSummary)=>{
-    const project=projects.find(item=>sessionCwdKey(item.root)===sessionCwdKey(session.cwd));
+    const project=projects.find(item=>piSessionProjectKey(item.root)===piSessionProjectKey(session.cwd));
     if(session.scope==='current'&&project){await openSessionById(project.id,session.id);return;}
     setLoading(true);try{
       const response=await window.revu.agent.openDiscoveredSession(session.projectId,session.id).then(unwrap);onProjectAdded(response.project);

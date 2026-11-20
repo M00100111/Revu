@@ -21,6 +21,7 @@ export interface PiTrustSaveResponse {trust:PiProjectTrust;restarted:{previousId
 export interface PiSessionSummary {
   id:string;
   projectId:string;
+  /** Project directory with Windows drive mounts translated to host paths. */
   cwd:string;
   name:string;
   hasName:boolean;

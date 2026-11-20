@@ -9,14 +9,14 @@ import type {
   PiQueueState,PiRuntimeStatus,PiSessionCatalog,PiSessionInfo,PiSessionScope,PiSessionSearchResult,PiSessionSnapshot,PiSessionSort,
   PiSessionSummary,PiSessionTreeResponse,PiThinkingLevel,PiTreeNavigationResponse,PiUsageStats,RevuPiEvent,
 } from '../shared/piTypes';
-import { calculatePiCacheHitPercent, countPiSessionRuns, derivedPiSessionName, isReservedPiSessionName } from '../shared/piSession';
+import { calculatePiCacheHitPercent, countPiSessionRuns, derivedPiSessionName, isReservedPiSessionName, piSessionProjectKey } from '../shared/piSession';
 import { searchPiSessions } from '../shared/piSessionSearch';
 import { acceptPiQueueHead, cleanPiQueue, emptyPiQueue, mergePiQueues } from '../shared/piQueue';
 import { parsePiCommand, PI_BUILTIN_COMMANDS, piQueueWarning } from '../shared/piCommands';
 import { directoryExists,replaceSessionCwd,runtimeInfo,runtimeLaunch,sessionCwd,wslPath } from './piRuntime';
 import {extensionRequest,PiExtensionUI} from '../shared/piExtensionUI';
 import type {PiExtensionReply,PiExtensionPending} from '../shared/piTypes';
-import { copyPiSessions, nativePiSessionDir, nativePiSessionsDir } from './piSessionStorage';
+import { copyPiSessions, nativePiSessionDir, nativePiSessionsDir, piSessionHostPath, piSessionProjectAvailable } from './piSessionStorage';
 
 type PiModule=typeof import('@earendil-works/pi-coding-agent');
 type NativeRpcClient=InstanceType<PiModule['RpcClient']>;
@@ -332,8 +332,14 @@ export class PiManager {
 
   private async listedSessions(projectId:string,scope:PiSessionScope){
     const project=this.project(projectId);const {SessionManager}=await this.module();const location=await this.sessionLocation(project.root);
-    if(scope==='current')return SessionManager.list(project.root,location.dir);
-    if(location.custom)return SessionManager.listAll(location.dir);
+    if(scope==='current'&&(!location.custom||process.platform!=='win32'))return SessionManager.list(project.root,location.dir);
+    if(location.custom){
+      const sessions=await SessionManager.listAll(location.dir);
+      if(scope==='all')return sessions;
+      // Pi's shared-directory filter compares cwd using the host's path rules.
+      const projectKey=piSessionProjectKey(project.root);
+      return sessions.filter(session=>piSessionProjectKey(piSessionHostPath(session.cwd))===projectKey);
+    }
     let entries;
     try{entries=await readdir(this.nativeSessionsDir,{withFileTypes:true});}
     catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return [];throw error;}
@@ -351,14 +357,12 @@ export class PiManager {
     return session;
   }
 
-  private sessionPathKey(path:string){const normalized=path.replace(/\\/g,'/');return process.platform==='win32'?normalized.toLocaleLowerCase():normalized;}
-
-  private cwdKey(path:string){const normalized=resolve(path).replace(/\\/g,'/');return process.platform==='win32'?normalized.toLocaleLowerCase():normalized;}
+  private sessionPathKey(path:string){const normalized=piSessionHostPath(path).replace(/\\/g,'/');return process.platform==='win32'?normalized.toLocaleLowerCase():normalized;}
 
   private summaries(projectId:string,scope:PiSessionScope,listed:Awaited<ReturnType<PiModule['SessionManager']['list']>>):PiSessionSummary[]{
     const idsByPath=new Map(listed.map(session=>[this.sessionPathKey(session.path),session.id]));
     return listed.map(session=>({
-      id:session.id,projectId,cwd:session.cwd,name:session.name||session.firstMessage.trim().slice(0,80)||'New Chat',hasName:!!session.name,scope,
+      id:session.id,projectId,cwd:piSessionHostPath(session.cwd),name:session.name||session.firstMessage.trim().slice(0,80)||'New Chat',hasName:!!session.name,scope,
       firstMessage:session.firstMessage,createdAt:session.created.getTime(),modifiedAt:session.modified.getTime(),
       runCount:0,status:this.runtimes.get(session.id)?.status??'idle' as PiRuntimeStatus,hasSessionFile:true,
       isCompacting:this.runtimes.get(session.id)?.isCompacting,
@@ -377,10 +381,14 @@ export class PiManager {
       result.unshift({id:runtime.sessionId,projectId,cwd:project.root,name:'New Chat',hasName:false,scope,firstMessage:'',createdAt:Date.now(),
         modifiedAt:Date.now(),runCount:0,status:runtime.status,hasSessionFile:!!runtime.sessionPath&&existsSync(runtime.sessionPath),isCompacting:runtime.isCompacting,question:!!runtime.ui.size});
     }
-    const groups=[...new Map(result.filter(item=>item.cwd).map(item=>[this.cwdKey(item.cwd),{
-      key:this.cwdKey(item.cwd),name:basename(item.cwd)||item.cwd,cwd:item.cwd,available:existsSync(item.cwd),
-    }])).values()].sort((a,b)=>a.name.localeCompare(b.name)||a.cwd.localeCompare(b.cwd));
-    return {groups,sessions:result.sort((a,b)=>b.modifiedAt-a.modifiedAt)};
+    const groups=new Map<string,PiSessionCatalog['groups'][number]>();
+    for(const {cwd} of result){
+      if(!cwd)continue;
+      const key=piSessionProjectKey(cwd);
+      if(!groups.has(key))groups.set(key,{key,name:basename(cwd)||cwd,cwd,available:piSessionProjectAvailable(cwd)});
+    }
+    return {groups:[...groups.values()].sort((a,b)=>a.name.localeCompare(b.name)||a.cwd.localeCompare(b.cwd)),
+      sessions:result.sort((a,b)=>b.modifiedAt-a.modifiedAt)};
   }
 
   async searchSessions(projectId:string,query:string,sort:PiSessionSort,scope:PiSessionScope='current'):Promise<PiSessionSearchResult[]>{
@@ -458,7 +466,12 @@ export class PiManager {
     return this.snapshot(handle);
   }
 
-  async discoveredSession(projectId:string,sessionId:string){return this.findSession(projectId,sessionId,'all');}
+  async discoveredSession(projectId:string,sessionId:string){
+    const session=await this.findSession(projectId,sessionId,'all');
+    const cwd=piSessionHostPath(session.cwd);
+    if(!piSessionProjectAvailable(cwd))throw new Error('The session project folder no longer exists.');
+    return {id:session.id,path:session.path,cwd};
+  }
 
   async openSessionFile(projectId:string,sessionId:string,path:string){
     this.selectedSessionId=sessionId;const existing=this.runtimes.get(sessionId);
