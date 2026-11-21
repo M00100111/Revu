@@ -27,6 +27,19 @@ async function preparePiApp(){
   await mkdir(join(piAppDir,'revu-extensions'),{recursive:true});
   await cp(resolve('pi-extensions','ask-user.ts'),join(piAppDir,'revu-extensions','ask-user.ts'));
   await cp(resolve('pi-extensions','pin-code.ts'),join(piAppDir,'revu-extensions','pin-code.ts'));
+  const subagentSource=join(piSourceRoot,'examples','extensions','subagent');
+  const subagentDir=join(piAppDir,'revu-extensions','subagent');
+  await mkdir(subagentDir,{recursive:true});
+  const subagent=await readFile(join(subagentSource,'index.ts'),'utf8');
+  await writeFile(join(subagentDir,'index.ts'),replaceOnce(subagent,'task,\n\t\texitCode: 0,','task,\n\t\texitCode: -1,','subagent in-progress exit code'));
+  const discovery=await readFile(join(subagentSource,'agents.ts'),'utf8');
+  await writeFile(join(subagentDir,'agents.ts'),replaceOnce(discovery,'loadAgentsFromDir(userDir, "user")',
+    '[...loadAgentsFromDir(path.join(__dirname, "agents"), "user"), ...loadAgentsFromDir(userDir, "user")]','bundled agent defaults'));
+  await mkdir(join(subagentDir,'agents'),{recursive:true});
+  for(const name of await readdir(join(subagentSource,'agents'))){
+    const definition=await readFile(join(subagentSource,'agents',name),'utf8');
+    await writeFile(join(subagentDir,'agents',name),definition.replace(/^model: [^\r\n]+\r?\n/m,''));
+  }
   await mkdir(join(piAppDir,'shared'),{recursive:true});
   for(const name of ['codePins.ts','codeSource.ts'])await cp(resolve('shared',name),join(piAppDir,'shared',name));
   const chunksDir=join(piAppDir,'bundle','chunks');const chunks=await readdir(chunksDir);
@@ -88,7 +101,7 @@ async function preparePiApp(){
     source=replaceOnce(source,'this.process.kill("SIGTERM"),await new Promise','this.options.stopProcess&&await this.options.stopProcess(),this.process.kill("SIGTERM"),await new Promise','RPC process shutdown');
     source=replaceOnce(source,'getShellPath(){let shellPath=this.settings.shellPath;', 'getShellPath(){let shellPath=process.env.REVU_PI_SHELL_PATH??this.settings.shellPath;','Runtime shell override');
     source=replaceOnce(source,'sessionManager=await createSessionManager(parsed,cwd,sessionDir,startupSettingsManager),missingSessionCwdIssue=',
-      'sessionManager=await createSessionManager(parsed,cwd,sessionDir,startupSettingsManager),revuSessionId=process.env.REVU_PI_SESSION_ID,revuInit=revuSessionId&&!sessionManager.getEntries().length?sessionManager.newSession({id:revuSessionId}):void 0,missingSessionCwdIssue=','Empty session identity');
+      'sessionManager=await createSessionManager(parsed,cwd,sessionDir,startupSettingsManager),revuSessionId=parsed.mode==="rpc"&&process.env.REVU_PI_SESSION_ID,revuInit=revuSessionId&&!sessionManager.getEntries().length?sessionManager.newSession({id:revuSessionId}):void 0,missingSessionCwdIssue=','Empty session identity');
     source=replaceOnce(source,'stream2.on("end",onEnd),()=>{stream2.off("data",onData)', 'stream2.on("end",onEnd),stream2.resume(),()=>{stream2.off("data",onData)','RPC bootstrap input resume');
     const trustImport=/import\{([^}]*\bProjectTrustStore\b[^}]*)\}from"([^"]+)"/.exec(source);
     if(!trustImport)throw new Error('Could not find Pi trust exports.');

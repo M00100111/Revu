@@ -10,6 +10,7 @@ import MarkdownContent, {linkedCodeReferences} from './MarkdownContent';
 import {CODE_PIN_TOOL,codeReferences,type CodeReference,type PinSource,type PinTarget} from '../shared/codePins';
 import SessionTreeDialog from './SessionTreeDialog';
 import SummaryCard from './SummaryCard';
+import SubagentCard from './SubagentCard';
 import { CwdRecoveryDialog,ForkDialog, ProjectTrustDialog, RenameSessionDialog } from './CommandDialogs';
 import { mergePiCommands, parsePiCommand, piCommandAt, piQueueWarning, UNSUPPORTED_PI_COMMANDS } from '../shared/piCommands';
 import { historicalSummary, summaryActive, updateSummaryOperations, type SummaryOperation } from '../shared/piSummary';
@@ -396,13 +397,15 @@ function TimelineSummaryCard({item,onToggle}:{item:RunItem;onToggle:()=>void}){
 }
 function BashCard({bash,laterUserMessage,onAbort,onToggle}:{bash:PiDirectBashState;laterUserMessage:boolean;onAbort?:()=>void;onToggle:()=>void}){
   const status=bash.status==='running'?'running':bash.cancelled?'cancelled':bash.exitCode!==undefined&&bash.exitCode!==null?`exit ${bash.exitCode}`:bash.status==='error'?'error':'done';
+  const tone=status==='running'||status==='cancelled'?status:bash.status==='error'||(bash.exitCode!=null&&bash.exitCode!==0)?'failed':'done';
   const output=bash.output||(bash.status==='running'?'Waiting for output…':'(no output)');
   return <details className={`agent-bash-message ${bash.excludeFromContext?'excluded':'direct'} ${bash.status}`} open={!laterUserMessage||bash.status==='running'} onToggle={onToggle}><summary><span className="agent-bash-head"><strong>{bash.excludeFromContext?'!!bash':'!bash'}</strong>
-    <code title={bash.command}>{bash.command}</code></span><span>{status}</span>
+    <code title={bash.command}>{bash.command}</code></span><span className="execution-status" data-status={tone}>{status}</span>
     {bash.status==='running'&&onAbort&&<button type="button" className="agent-bash-stop" title="Stop Bash" aria-label="Stop Bash" onClick={event=>{event.preventDefault();event.stopPropagation();onAbort();}}>Stop</button>}</summary>
     <pre>{output}{bash.error?`\n${bash.error}`:''}{bash.truncated&&bash.fullOutputPath?`\n\nOutput truncated. Full output: ${bash.fullOutputPath}`:''}</pre></details>;
 }
 function ToolCard({tool,now,onOpenDetail,onToggle}:{tool:ToolState;now:number;onOpenDetail:()=>void;onToggle:()=>void}){
+  if(tool.name==='subagent')return <SubagentCard tool={tool} onOpenDetail={onOpenDetail} onToggle={onToggle}/>;
   const ask=tool.name==='ask_user'?askUserPresentation(tool):undefined;
   const view=ask?{label:tool.name,detail:ask.detail,body:toolOutputText(tool)}:toolPresentation(tool);
   const body=view.body??messageJson({input:tool.args,output:tool.result});

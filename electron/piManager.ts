@@ -345,7 +345,7 @@ export class PiManager {
     if(sessionPath){const change=await this.checkSessionCwd(projectId,sessionPath,config,launch.cwd,background);if(change)await replaceSessionCwd(change.path,change.saved,change.current);}
     if(projectId)this.project(projectId);if((this.changingTrust||this.changingRuntime)&&!trustRestart)throw new Error('Runtime changed. Try again.');
     const targetPath=launch.targetPath;
-    const extensions=await Promise.all(['ask-user.ts','pin-code.ts'].map(name=>targetPath(join(paths.root,'app','revu-extensions',name))));
+    const extensions=await Promise.all(['ask-user.ts','pin-code.ts','subagent/index.ts'].map(name=>targetPath(join(paths.root,'app','revu-extensions',name))));
     const args=[trusted?'--approve':'--no-approve',...extensions.flatMap(path=>['--extension',path]),'--session-dir',await targetPath(dir),'--append-system-prompt',`Runtime: ${config.kind==='wsl'?'WSL/'+config.distribution:process.platform==='darwin'?'macOS':'Windows'}; cwd: ${launch.cwd}. Historical paths may differ.`];
     if(sessionPath)args.push('--session',await targetPath(sessionPath));else if(ephemeral)args.push('--no-session');
     const env:Record<string,string>={...launch.env,PI_SKIP_VERSION_CHECK:'1',REVU_PI_SESSION_ID:!sessionPath?expectedId??'':''};const secrets=await this.readSecrets();for(const provider of PROVIDERS)env[provider.env]=secrets[provider.id]??'';
