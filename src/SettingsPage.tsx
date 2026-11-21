@@ -58,12 +58,13 @@ export function SettingsSidebar({width,onResize,category,onCategoryChange}:{
 }
 
 export default function SettingsPage({category,syncWidths,onChange,mixed,onModeChange,hideSingleProjectTabs,onHideSingleProjectTabsChange,fontSize,
-  onFontSizeChange,onResetEditor,fileTabOverflow,onFileTabOverflowChange,reviewFileLabels,onReviewFileLabelsChange,dark,onThemeChange,
+  onFontSizeChange,onResetEditor,previewMode,onPreviewModeChange,fileTabOverflow,onFileTabOverflowChange,reviewFileLabels,onReviewFileLabelsChange,dark,onThemeChange,
   showThemeSwitcher,onShowThemeSwitcherChange,lightThemeColor,darkThemeColor,onLightThemeColorChange,onDarkThemeColorChange,onResetThemeColors}:{
   category:SettingsCategory;syncWidths:boolean;onChange:(value:boolean)=>void;
   mixed:boolean;onModeChange:(mixed:boolean)=>void;hideSingleProjectTabs:boolean;
   onHideSingleProjectTabsChange:(value:boolean)=>void;fontSize:number;
   onFontSizeChange:(value:number)=>void;onResetEditor:()=>void;
+  previewMode:boolean;onPreviewModeChange:(value:boolean)=>void;
   fileTabOverflow:FileTabOverflow;onFileTabOverflowChange:(value:FileTabOverflow)=>void;
   reviewFileLabels:ReviewFileLabels;onReviewFileLabelsChange:(value:ReviewFileLabels)=>void;
   dark:boolean;onThemeChange:(dark:boolean)=>void;showThemeSwitcher:boolean;onShowThemeSwitcherChange:(value:boolean)=>void;
@@ -101,6 +102,13 @@ export default function SettingsPage({category,syncWidths,onChange,mixed,onModeC
         </div>
       </>:category==='editor'?<>
         <div className="settings-title-row"><h1>Editor</h1><button onClick={onResetEditor}>Reset</button></div>
+        <div className="setting-row">
+          <span><strong>File Open Mode</strong><small>Choose how files open from the file tree.</small></span>
+          <div className="setting-options" role="group" aria-label="File Open Mode">
+            <button aria-pressed={previewMode} className={previewMode?'active':''} onClick={()=>onPreviewModeChange(true)}>Preview</button>
+            <button aria-pressed={!previewMode} className={!previewMode?'active':''} onClick={()=>onPreviewModeChange(false)}>Keep Open</button>
+          </div>
+        </div>
         <label className="setting-row">
           <span><strong>Font size</strong><small>Set the editor font size from 10 to 24 pixels.</small></span>
           <FontSizeSetting fontSize={fontSize} onChange={onFontSizeChange}/>

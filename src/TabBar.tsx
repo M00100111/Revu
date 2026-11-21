@@ -1,14 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import Icon from './Icon';
-import { showContextMenu } from './ContextMenu';
+import { api } from './files';
 import { countTabRows, defaultTabExpansion, nextTabExpansion, type FileTabExpansion, type FileTabOverflow } from './tabLayout';
 export type TabContextAction='close'|'closeOthers'|'closeAll';
-export interface EditorTabItem {id:string;name:string;title:string;projectName:string;dirty:boolean}
-export default function TabBar({ tabs, activeId, onSelect, onClose, onContextAction, mixed,
+export interface EditorTabItem {id:string;name:string;title:string;projectName:string;groupId:string|null;dirty:boolean;preview?:boolean}
+export default function TabBar({ tabs, activeId, onSelect, onClose, onKeep, onContextAction, mixed,
   overflowMode,expansion,onExpansionChange,underWindowControls }: {
   tabs: EditorTabItem[]; activeId: string | null; onSelect: (tab: EditorTabItem) => void;
   onClose: (tab: EditorTabItem) => void;onContextAction:(tab:EditorTabItem,action:TabContextAction)=>void;
-  mixed: boolean;overflowMode:FileTabOverflow;expansion:FileTabExpansion;
+  onKeep:(id:string)=>void;mixed: boolean;overflowMode:FileTabOverflow;expansion:FileTabExpansion;
   onExpansionChange:(expansion:FileTabExpansion)=>void;underWindowControls:boolean;
 }) {
   const barRef=useRef<HTMLDivElement|null>(null);
@@ -47,10 +47,10 @@ export default function TabBar({ tabs, activeId, onSelect, onClose, onContextAct
     <div ref={tabsRef} className="tabs" aria-label="Open files">
       {tabs.map(tab => <div key={tab.id} className={'tab ' + (tab.id === activeId ? 'active' : '')}
         ref={tab.id===activeId?activeRef:undefined}
-        onContextMenu={async event=>{const action=await showContextMenu(event,[{id:'close',label:'Close'},{id:'closeOthers',label:'Close Others'},{id:'closeAll',label:'Close All'}] as const);if(action)onContextAction(tab,action);}}>
+        onContextMenu={async event=>{event.preventDefault();const action=await api<TabContextAction|null>('tabMenu',{scope:'file'});if(action)onContextAction(tab,action);}}>
         <button className="tab-select" title={tab.title}
-          aria-pressed={tab.id === activeId} onClick={() => onSelect(tab)}>
-          <Icon name="editorDocument" size={14} /><span>{tab.name}</span>
+          aria-pressed={tab.id === activeId} onClick={() => onSelect(tab)} onDoubleClick={()=>onKeep(tab.id)}>
+          <Icon name="editorDocument" size={14} /><span className={tab.preview?'preview-name':undefined}>{tab.name}</span>
           {mixed && <small className="tab-project">{tab.projectName}</small>}
         </button>
         <button className={'tab-close ' + (tab.dirty ? 'dirty' : '')}

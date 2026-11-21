@@ -17,6 +17,15 @@ const workspace=new Workspace(projectId=>mainWindow?.webContents.send('revu:proj
 let piManager:PiManager|null=null;
 
 const openFoldersPath=()=>join(app.getPath('userData'),'open-folders.json');
+const recentFoldersPath=()=>join(app.getPath('userData'),'recent-folders.json');
+let recentFolders:string[]=[];
+let historyWrite=Promise.resolve();
+async function rememberFolder(root:string){
+  recentFolders=[root,...recentFolders.filter(path=>path.toLowerCase()!==root.toLowerCase())].slice(0,10);
+  historyWrite=historyWrite.then(()=>writeFile(recentFoldersPath(),JSON.stringify(recentFolders),'utf8'))
+    .catch(error=>console.warn('Failed to remember recent folders',error));
+  await historyWrite;
+}
 async function persistOpenFolders(){
   try{
     const roots=[...workspace.projects.values()].map(project=>project.root);
@@ -40,12 +49,31 @@ async function restoreOpenFolders(){
 }
 
 async function invoke(body:Record<string,any>){
+  if(body.action==='tabMenu'){
+    const win=mainWindow;if(!win)return null;
+    return new Promise<string|null>(resolve=>{
+      const item=(id:string,label:string)=>({label,click:()=>resolve(id)});
+      const menu=Menu.buildFromTemplate(body.scope==='file'
+        ?[item('close','Close'),item('closeOthers','Close Others'),item('closeAll','Close All')]
+        :[item('close','Close Tabs'),item('closeAll','Close All Tabs'),
+          ...(body.scope==='project'?[{type:'separator' as const},item('folder','Close Folder')]:[])]);
+      menu.popup({window:win,callback:()=>setImmediate(()=>resolve(null))});
+    });
+  }
+  if(body.action==='recentFolders')return recentFolders;
+  if(body.action==='openRecent'){
+    if(!recentFolders.includes(body.root))throw new HttpError(400,'Folder is no longer in Recent Folders.');
+    const existing=[...workspace.projects.values()].find(project=>project.root===body.root);
+    const project=existing?workspace.public(existing):await workspace.add(body.root);
+    await rememberFolder(project.root);await persistOpenFolders();return project;
+  }
   if(body.action==='projects')return [...workspace.projects.values()].map(project=>workspace.public(project));
   if(body.action==='pick'){
     if(!mainWindow)return null;
     const result=await dialog.showOpenDialog(mainWindow,{title:'Open Folder',properties:['openDirectory','createDirectory']});
     if(result.canceled)return null;
     const project=await workspace.add(result.filePaths[0]);
+    await rememberFolder(project.root);
     await persistOpenFolders();
     return project;
   }
@@ -108,7 +136,7 @@ async function invokeAgent(body:PiAgentRequest,sourceWindow?:BrowserWindow|null)
     case 'openSession':return piManager.openSession(body.projectId,body.sessionId);
     case 'openDiscoveredSession':{
       const session=await piManager.discoveredSession(body.projectId,body.sessionId);
-      const project=await workspace.add(session.cwd);await persistOpenFolders();
+      const project=await workspace.add(session.cwd);await rememberFolder(project.root);await persistOpenFolders();
       return {project,snapshot:await piManager.openSessionFile(project.id,session.id,session.path)};
     }
     case 'newSession':return piManager.newSession(body.projectId);
@@ -260,6 +288,13 @@ app.whenReady().then(async()=>{
   });
   await piManager.initialize();
   await restoreOpenFolders();
+  try{
+    const saved:unknown=JSON.parse(await readFile(recentFoldersPath(),'utf8'));
+    if(Array.isArray(saved))recentFolders=saved.filter((path):path is string=>typeof path==='string').slice(0,10);
+  }catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')console.warn('Failed to read recent folders',error);}
+  if(!recentFolders.length){
+    for(const project of workspace.projects.values())await rememberFolder(project.root);
+  }
   createWindow();
   app.on('activate',()=>{if(BrowserWindow.getAllWindows().length===0)createWindow();});
 });

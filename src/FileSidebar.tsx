@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState, type DragEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
+import type { EditorTabItem } from './TabBar';
+import { api, errorMessage } from './files';
 import type { OpenFile, Project } from './editor';
 import FileTree from './FileTree';
 import Icon from './Icon';
@@ -13,17 +15,31 @@ const savedOrder=()=>{
   }catch{return [];}
 };
 
-export default function FileSidebar({width,projects,projectsLoaded,openFiles,activeFile,mixed,picking,collapsedProjects,
-  expandedDirectories,onResize,onAddFolder,onSelectFile,onOpenFile,onCloseProject,onExpandAllSubfolders,onCollapseAllSubfolders,
+export default function FileSidebar({width,projects,projectsLoaded,tabs,activeId,activeFile,mixed,picking,collapsedProjects,
+  expandedDirectories,onResize,onAddFolder,onSelectTab,onKeep,onOpenFile,onCloseProject,onExpandAllSubfolders,onCollapseAllSubfolders,
   onProjectToggle,onDirectoryToggle,onError}:{
-  width:number;projects:Project[];projectsLoaded:boolean;openFiles:OpenFile[];activeFile?:OpenFile;mixed:boolean;picking:boolean;
+  width:number;projects:Project[];projectsLoaded:boolean;tabs:EditorTabItem[];activeId:string|null;activeFile?:OpenFile;mixed:boolean;picking:boolean;
   collapsedProjects:ReadonlySet<string>;expandedDirectories:ReadonlySet<string>;
-  onResize:(width:number)=>void;onAddFolder:()=>void;onSelectFile:(file:OpenFile)=>void;
-  onOpenFile:(project:Project,path:string)=>void;onCloseProject:(project:Project)=>void;
+  onResize:(width:number)=>void;onAddFolder:(root?:string)=>void;onSelectTab:(tab:EditorTabItem)=>void;onKeep:(id:string)=>void;
+  onOpenFile:(project:Project,path:string,keep:boolean)=>void;onCloseProject:(project:Project)=>void;
   onExpandAllSubfolders:(project:Project,path:string)=>void;onCollapseAllSubfolders:(project:Project,path:string)=>void;
   onProjectToggle:(root:string,open:boolean)=>void;onDirectoryToggle:(key:string)=>void;onError:(message:string)=>void;
 }){
   const rootsKey=projects.map(project=>project.root).join('\0');
+  const [historyOpen,setHistoryOpen]=useState(false);
+  const [recent,setRecent]=useState<string[]>([]);
+  const historyRef=useRef<HTMLDivElement>(null);
+  useEffect(()=>{
+    if(!historyOpen)return;
+    let live=true;
+    void api<string[]>('recentFolders').then(paths=>{if(live)setRecent(paths);}).catch(error=>{
+      if(live){onError(errorMessage(error));setHistoryOpen(false);}
+    });
+    const outside=(event:PointerEvent)=>{if(!historyRef.current?.contains(event.target as Node))setHistoryOpen(false);};
+    const escape=(event:KeyboardEvent)=>{if(event.key==='Escape'){setHistoryOpen(false);historyRef.current?.querySelector('button')?.focus();}};
+    window.addEventListener('pointerdown',outside);window.addEventListener('keydown',escape);
+    return()=>{live=false;window.removeEventListener('pointerdown',outside);window.removeEventListener('keydown',escape);};
+  },[historyOpen,onError]);
   const [order,setOrder]=useState(()=>{
     const saved=savedOrder();return saved.length?saved:[OPEN_EDITORS_KEY];
   });
@@ -60,20 +76,20 @@ export default function FileSidebar({width,projects,projectsLoaded,openFiles,act
   };
   const dragClass=(key:string)=>'sidebar-top-entry '+(dragged===key?'dragging ':'')+
     (drop?.key===key?(drop.after?'drop-after':'drop-before'):'');
-  const editorRow=(file:OpenFile,showProject:boolean)=><button key={file.id}
-    className={'open-editor-row '+(activeFile?.id===file.id?'active':'')} title={file.project.name+'/'+file.path}
-    onClick={()=>onSelectFile(file)}>
-    <Icon name="file" size={13}/><span>{file.name}</span>
-    {showProject&&<small>{file.project.name}</small>}{file.dirty&&<i className="dirty-dot"/>}
+  const editorRow=(tab:EditorTabItem,showProject:boolean)=><button key={tab.id}
+    className={'open-editor-row '+(activeId===tab.id?'active':'')} title={tab.title}
+    onClick={()=>onSelectTab(tab)} onDoubleClick={()=>onKeep(tab.id)}>
+    <Icon name="file" size={13}/><span className={tab.preview?'preview-name':undefined}>{tab.name}</span>
+    {showProject&&<small>{tab.projectName}</small>}{tab.dirty&&<i className="dirty-dot"/>}
   </button>;
   const openEditorsContent=()=>{
-    if(!openFiles.length)return <p className="tree-note">No open editors</p>;
-    if(mixed)return <div className="open-editor-list">{openFiles.map(file=>editorRow(file,true))}</div>;
-    if(projects.length===1)return <div className="open-editor-list">{openFiles.map(file=>editorRow(file,false))}</div>;
-    return <div className="open-editor-groups">{orderedProjects.map(project=>{
-      const files=openFiles.filter(file=>file.project.id===project.id);
-      return files.length?<section key={project.id}><div className="open-editor-project">{project.name}</div>
-        <div className="open-editor-list">{files.map(file=>editorRow(file,false))}</div></section>:null;
+    if(!tabs.length)return <p className="tree-note">No open editors</p>;
+    if(mixed||tabs.every(tab=>tab.groupId===tabs[0].groupId))
+      return <div className="open-editor-list">{tabs.map(tab=>editorRow(tab,mixed))}</div>;
+    return <div className="open-editor-groups">{[...orderedProjects,{id:null,name:'Other'}].map(group=>{
+      const items=tabs.filter(tab=>tab.groupId===group.id);
+      return items.length?<section key={group.id??'other'}><div className="open-editor-project">{group.name}</div>
+        <div className="open-editor-list">{items.map(tab=>editorRow(tab,false))}</div></section>:null;
     })}</div>;
   };
   const openEditors=<details key={OPEN_EDITORS_KEY} className={dragClass(OPEN_EDITORS_KEY)} open={!openEditorsCollapsed}
@@ -99,15 +115,24 @@ export default function FileSidebar({width,projects,projectsLoaded,openFiles,act
       }}><Icon name="down" size={12}/><Icon name="folder" size={15}/><span>{project.name}</span></summary>
     <FileTree projectId={project.id} projectRoot={project.root}
       activePath={activeFile?.project.id===project.id?activeFile.path:null}
-      onOpen={path=>onOpenFile(project,path)} onError={onError}
+      onOpen={(path,keep)=>onOpenFile(project,path,keep)} onError={onError}
       expandedDirectories={expandedDirectories} onDirectoryToggle={onDirectoryToggle}
       onExpandAllSubfolders={path=>onExpandAllSubfolders(project,path)}
       onCollapseAllSubfolders={path=>onCollapseAllSubfolders(project,path)}/>
   </details>;
   return <aside className="explorer" style={{width}}>
-    <header className="explorer-header"><span>File</span><button className="icon-button" onClick={onAddFolder}
-      disabled={picking} title="Open folder" aria-label="Open folder"><Icon name="openFolder" size={17}/></button></header>
-    {projects.length?<div className="tree-scroll">{order.map(key=>key===OPEN_EDITORS_KEY?openEditors:
+    <header className="explorer-header"><span>File</span><div className="file-header-actions">
+      <div ref={historyRef}><button className="icon-button" title="Recent Folders" aria-label="Recent Folders"
+        aria-expanded={historyOpen} disabled={picking} onClick={()=>setHistoryOpen(open=>!open)}><Icon name="history" size={17}/></button>
+        {historyOpen&&<div className="project-dropdown-menu recent-folders">
+          {recent.length?recent.map(path=><button key={path} title={path} onClick={()=>{setHistoryOpen(false);onAddFolder(path);}}>
+            <span>{path.split(/[\\/]/).filter(Boolean).at(-1)??path}</span><small>{path}</small>
+          </button>):<small>No recent folders</small>}
+        </div>}
+      </div>
+      <button className="icon-button" onClick={()=>onAddFolder()}
+      disabled={picking} title="Open folder" aria-label="Open folder"><Icon name="openFolder" size={17}/></button></div></header>
+    {projects.length||tabs.length?<div className="tree-scroll">{order.map(key=>key===OPEN_EDITORS_KEY?openEditors:
       projectByRoot.has(key)?projectEntry(projectByRoot.get(key)!):null)}</div>:<p className="sidebar-empty">No folders open</p>}
     <ResizeHandle width={width} onResize={onResize}/>
   </aside>;

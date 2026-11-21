@@ -6,7 +6,7 @@ import { invalidateFileReview, mapRange, reconcile, replaceExact } from '../shar
 import { planBulkReview } from '../shared/bulkReview';
 import { externalSyncKind, rebaseExternalReview, resetForExternalSnapshot } from './externalSync';
 
-export function useWorkspace(onError: (message: string) => void,onNotice:(message:string)=>void) {
+export function useWorkspace(onError: (message: string) => void,onNotice:(message:string)=>void,onEdit:(id:string)=>void) {
   const [projects, setProjects] = useState<Project[]>([]);
   const projectRef = useRef(projects);
   projectRef.current = projects;
@@ -81,6 +81,7 @@ export function useWorkspace(onError: (message: string) => void,onNotice:(messag
         api<Snapshot>('baseline', {projectId:project.id,path}),
       ]);
       if (snapshot.reason) throw new Error(snapshot.reason);
+      if(!projectRef.current.some(item=>item.id===project.id))throw new Error('Folder has been closed.');
       if(!snapshot.exists)snapshot.bom=base.bom??false;
       const model = monaco.editor.createModel(snapshot.text, undefined,
         monaco.Uri.from({scheme:'file',path:'/' + id}));
@@ -95,6 +96,7 @@ export function useWorkspace(onError: (message: string) => void,onNotice:(messag
       };
       file.subscription = model.onDidChangeContent(() => {
         if(!internalEdits.current.has(file.id)){
+          onEdit(file.id);
           file.draftExists=true;
           file.records=invalidateFileReview(file.records);
         }
@@ -336,15 +338,9 @@ export function useWorkspace(onError: (message: string) => void,onNotice:(messag
   }
   refreshRef.current = refresh;
 
-  async function addProject() {
-    const project = await api<Project | null>('pick');
-    if(!project) return null;
-    const existing = projectRef.current.find(item => item.id === project.id);
-    if(existing) return existing;
-    projectRef.current = [...projectRef.current,project];
-    setProjects(projectRef.current);
-    void refresh(project);
-    return project;
+  async function addProject(root?:string) {
+    const project = root?await api<Project>('openRecent',{root}):await api<Project|null>('pick');
+    return project?adoptProject(project):null;
   }
 
   function adoptProject(project:Project){

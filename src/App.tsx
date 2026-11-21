@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { fileMenuTargets, updateFileTabs } from './editorTabs';
 import { defineRevuThemes, monaco, type OpenFile, type Project } from './editor';
 import { api, errorMessage } from './files';
 import type { Entry, Snapshot } from '../shared/types';
@@ -58,7 +59,10 @@ export default function App(){
     review:savedWidth('revu-review-sidebar-width',250),
     settings:savedWidth('revu-settings-sidebar-width',250),
   }));
-  const [tabs,setTabs]=useState<string[]>([]);
+  const [{ids:tabs,previews},dispatchTabs]=useReducer(updateFileTabs,{ids:[],previews:[]});
+  const keepTab=useCallback((id:string)=>dispatchTabs({type:'keep',id}),[]);
+  const [previewMode,setPreviewMode]=useState(()=>localStorage.getItem('revu-file-open-mode')==='preview');
+  const treeOpens=useRef(Promise.resolve());
   const [toolDocuments,setToolDocuments]=useState<ToolDocument[]>([]);
   const [activeId,setActiveId]=useState<string|null>(null);
   const [projectId,setProjectId]=useState<string|null>(null);
@@ -129,7 +133,7 @@ export default function App(){
   const readAllNotifications=useCallback(()=>setNotifications(current=>current.map(item=>
     item.read?item:{...item,read:true})),[]);
   const clearNotifications=useCallback(()=>setNotifications([]),[]);
-  const workspace=useWorkspace(notifyError,notifyWarning);
+  const workspace=useWorkspace(notifyError,notifyWarning,keepTab);
   const {projects,projectsLoaded,documents,statuses,tick}=workspace;
   const snapshots=useMemo(()=>toolDocuments.flatMap(document=>document.snapshotFile?[document.snapshotFile]:[]),[toolDocuments]);
   const pins=useCodePins(documents,snapshots,tick);
@@ -165,9 +169,9 @@ export default function App(){
     lastCodeReview.current=reveal;focusReviewChunk(activeReviewFile,placement.chunkId??placement.id);
   },[panel,reveal,activeReviewFile,pins.byFile,focusReviewChunk]);
   const fileEditorTabs:AppEditorTab[]=openFiles.map(file=>({kind:'file',file,id:file.id,name:file.name,
-    title:file.project.name+'/'+file.path,projectName:file.project.name,dirty:file.dirty}));
+    title:file.project.name+'/'+file.path,projectName:file.project.name,groupId:file.project.id,dirty:file.dirty,preview:previews.includes(file.id)}));
   const toolEditorTabs:AppEditorTab[]=toolDocuments.map(toolDocument=>({kind:'tool',toolDocument,id:toolDocument.id,name:toolDocument.name,
-    title:'Other/'+toolDocument.name,projectName:'Other',dirty:false}));
+    title:'Other/'+toolDocument.name,projectName:'Other',groupId:null,dirty:false}));
   const editorTabs:AppEditorTab[]=[...fileEditorTabs,...toolEditorTabs];
   const visibleEditorTabs=mixed?editorTabs:otherSelected?toolEditorTabs:fileEditorTabs.filter(tab=>tab.kind==='file'&&tab.file.project.id===projectId);
   const tabScope=mixed?'mixed':otherSelected?'other':projectId;
@@ -179,7 +183,7 @@ export default function App(){
     if(tabs.every(id=>documentIds.has(id)))return;
     const activeIndex=activeId?tabs.indexOf(activeId):-1;
     const remaining=tabs.filter(id=>documentIds.has(id));
-    setTabs(remaining);
+    dispatchTabs({type:'remove',ids:new Set(tabs.filter(id=>!documentIds.has(id)))});
     if(activeId&&!documentIds.has(activeId)&&!toolIds.has(activeId)){
       const nextId=remaining[Math.min(Math.max(activeIndex,0),remaining.length-1)]??null;
       const next=documents.find(file=>file.id===nextId);
@@ -207,6 +211,8 @@ export default function App(){
     localStorage.setItem('revu-settings-sidebar-width',String(widths.settings));
   },[syncWidths,widths]);
   useEffect(()=>localStorage.setItem('revu-editor-tab-mode',mixed?'mixed':'isolated'),[mixed]);
+  useEffect(()=>localStorage.setItem('revu-file-open-mode',previewMode?'preview':'keep'),[previewMode]);
+  useEffect(()=>{if(activeId)dispatchTabs({type:'activate',id:activeId});},[activeId]);
   useEffect(()=>localStorage.setItem('revu-file-tab-overflow',fileTabOverflow),[fileTabOverflow]);
   useEffect(()=>setFileTabExpansion(defaultTabExpansion(fileTabOverflow)),[fileTabOverflow,tabScope]);
   useEffect(()=>localStorage.setItem('revu-hide-single-project-tabs',String(hideSingleProjectTabs)),[hideSingleProjectTabs]);
@@ -318,11 +324,11 @@ export default function App(){
       const next=new Set(current);if(next.has(id))next.delete(id);else next.add(id);return next;
     });
   }
-  async function addFolder(){
+  async function addFolder(root?:string){
     if(picking)return;setPicking(true);
     try{
-      const project=await workspace.addProject();if(!project)return;
-      if(!mixed||!activeFile)selectProject(project.id);
+      const project=await workspace.addProject(root);if(!project)return;
+      if(root||!mixed||!activeFile)selectProject(project.id);
       setPanel('files');
     }catch(error){notifyError(errorMessage(error));}finally{setPicking(false);}
   }
@@ -345,18 +351,22 @@ export default function App(){
       return current;
     });
   },[]);
-  async function openFile(project:Project,path:string,line?:number){
+  function showFile(file:OpenFile,mode:'select'|'keep'|'preview'='select'){
+    dispatchTabs({type:'open',id:file.id,projectId:file.project.id,mixed,mode:file.dirty?'keep':mode});
+    selectFile(file);
+  }
+  async function openFile(project:Project,path:string,line?:number,mode:'select'|'keep'|'preview'='select'){
     try{
       const file=await workspace.load(project,path);
-      setTabs(current=>current.includes(file.id)?current:[...current,file.id]);
-      selectFile(file);if(line)setReveal({id:file.id,line});
+      if(file.model.isDisposed())return;
+      showFile(file,mode);if(line)setReveal({id:file.id,line});
     }catch(error){notifyError(errorMessage(error));}
   }
   function revealListedPin(file:OpenFile,pin:PinPlacement){
     const snapshot=toolDocuments.find(document=>document.id===file.id&&document.snapshotFile);
     if(snapshot)selectToolDocument(snapshot);
     else{
-      setTabs(current=>current.includes(file.id)?current:[...current,file.id]);selectFile(file);
+      showFile(file);
     }
     setReveal({id:file.id,line:pin.line,pinId:pin.id});
   }
@@ -372,7 +382,7 @@ export default function App(){
       if(file&&placement!==undefined&&(placement.length||file.computing)){
         if(request!==codeRequest.current||!pins.selectReference(target))return;
         setPanel('review');
-        setTabs(current=>current.includes(file.id)?current:[...current,file.id]);selectFile(file);
+        showFile(file);
         setReveal({id:file.id,line:startLine,href});return;
       }
       const id=JSON.stringify(['code-snapshot',project.id,path,hash,encoding]);
@@ -429,7 +439,7 @@ export default function App(){
         if(fallback)selectFile(fallback);else{setOtherSelected(false);setActiveId(null);}
       }else setActiveId(null);
     }
-    setTabs(current=>current.filter(id=>!closing.has(id)));
+    dispatchTabs({type:'remove',ids:closing});
     const closedTools=toolDocuments.filter(document=>closing.has(document.id));
     setToolDocuments(current=>current.filter(document=>!closing.has(document.id)));
     for(const document of closedTools)document.model.dispose();
@@ -440,8 +450,15 @@ export default function App(){
   };
   const tabContext=(tab:EditorTabItem,action:TabContextAction)=>{
     const item=editorTabs.find(candidate=>candidate.id===tab.id);if(!item)return;
-    closeEditorTabs(action==='close'?[item]:action==='closeOthers'?editorTabs.filter(candidate=>candidate.id!==item.id):editorTabs);
+    closeEditorTabs(fileMenuTargets(editorTabs,item,action,mixed));
   };
+  async function projectMenu(event:React.MouseEvent,project?:Project){
+    event.preventDefault();
+    const action=await api<string|null>('tabMenu',{scope:project?'project':'other'});
+    if(action==='folder'&&project)void closeProject(project);
+    if(action==='close')closeEditorTabs(editorTabs.filter(tab=>tab.groupId===(project?.id??null)));
+    if(action==='closeAll')closeEditorTabs(editorTabs);
+  }
   async function closeProject(project:Project){
     const affected=documents.filter(file=>file.project.id===project.id);
     const affectedTools=toolDocuments.filter(document=>document.projectId===project.id);
@@ -452,7 +469,7 @@ export default function App(){
     const remainingTools=toolDocuments.filter(document=>document.projectId!==project.id);
     try{
       await workspace.removeProject(project);
-      setTabs(current=>current.filter(id=>!affected.some(file=>file.id===id)));lastFile.current.delete(project.id);
+      dispatchTabs({type:'remove',ids:new Set(affected.map(file=>file.id))});lastFile.current.delete(project.id);
       setToolDocuments(current=>current.filter(document=>document.projectId!==project.id));
       for(const document of affectedTools)document.model.dispose();
       if(activeFile?.project.id===project.id||activeToolDocument?.projectId===project.id){
@@ -486,10 +503,13 @@ export default function App(){
       onClose={()=>setNotificationsOpen(false)} onDismissToast={dismissToast}
       onDelete={deleteNotification} onActivate={activateNotification} onReadAll={readAllNotifications} onClear={clearNotifications}/>
     {panel==='files'&&<FileSidebar width={sidebarWidth} projects={projects} projectsLoaded={projectsLoaded}
-      openFiles={openFiles} activeFile={activeFile}
+      tabs={editorTabs} activeFile={activeFile} activeId={activeId}
       mixed={mixed} picking={picking} collapsedProjects={collapsedProjects} expandedDirectories={expandedDirectories}
-      onResize={resizeSidebar} onAddFolder={()=>void addFolder()} onSelectFile={selectFile}
-      onOpenFile={(project,path)=>void openFile(project,path)} onCloseProject={project=>void closeProject(project)}
+      onResize={resizeSidebar} onAddFolder={addFolder} onSelectTab={selectEditorTab} onKeep={keepTab}
+      onOpenFile={(project,path,keep)=>{
+        const mode=keep?'keep':previewMode?'preview':'select';
+        treeOpens.current=treeOpens.current.then(()=>openFile(project,path,undefined,mode));
+      }} onCloseProject={project=>void closeProject(project)}
       onExpandAllSubfolders={(project,path)=>void expandAllSubfolders(project,path)} onCollapseAllSubfolders={collapseAllSubfolders}
       onProjectToggle={toggleProject} onDirectoryToggle={toggleDirectory} onError={notifyError}/>}
     {panel==='review'&&<ReviewDashboard projects={projects} documents={documents} snapshots={snapshots} statuses={statuses}
@@ -509,7 +529,8 @@ export default function App(){
     {panel==='settings'?<SettingsPage category={settingsCategory} syncWidths={syncWidths} onChange={changeWidthSync}
       mixed={mixed} onModeChange={setMixed} hideSingleProjectTabs={hideSingleProjectTabs}
       onHideSingleProjectTabsChange={setHideSingleProjectTabs} fontSize={fontSize}
-      onFontSizeChange={setFontSize} onResetEditor={()=>setFontSize(14)}
+      previewMode={previewMode} onPreviewModeChange={setPreviewMode}
+      onFontSizeChange={setFontSize} onResetEditor={()=>{setFontSize(14);setPreviewMode(false);}}
       fileTabOverflow={fileTabOverflow} onFileTabOverflowChange={setFileTabOverflow}
       reviewFileLabels={reviewFileLabels} onReviewFileLabelsChange={setReviewFileLabels}
       dark={dark} onThemeChange={setDark} showThemeSwitcher={showThemeSwitcher}
@@ -521,16 +542,16 @@ export default function App(){
       {(projects.length>0||toolDocuments.length>0)&&<>
         {showProjectBar&&<div className="project-bar"><div className="project-tabs" aria-label="Project tabs">
           {projects.map(project=><button key={project.id} className={'project-tab '+(!otherSelected&&project.id===projectId?'active':'')}
-            aria-pressed={!otherSelected&&project.id===projectId} onClick={()=>selectProject(project.id)}>
+            aria-pressed={!otherSelected&&project.id===projectId} onClick={()=>selectProject(project.id)} onContextMenu={event=>void projectMenu(event,project)}>
             <Icon name="projectFolder" size={14}/><span>{project.name}</span>
             {documents.some(file=>file.project.id===project.id&&file.dirty)&&<span className="dirty-dot"/>}
           </button>)}
-          {!!toolDocuments.length&&<button className={'project-tab '+(otherSelected?'active':'')} aria-pressed={otherSelected} onClick={selectOther}>
+          {!!toolDocuments.length&&<button className={'project-tab '+(otherSelected?'active':'')} aria-pressed={otherSelected} onClick={selectOther} onContextMenu={event=>void projectMenu(event)}>
             <Icon name="projectFolder" size={14}/><span>Other</span>
           </button>}
         </div></div>}
         <TabBar tabs={visibleEditorTabs} activeId={activeId} onSelect={selectEditorTab} onClose={closeEditorTab}
-          onContextAction={tabContext}
+          onContextAction={tabContext} onKeep={keepTab}
           mixed={mixed} overflowMode={fileTabOverflow} expansion={fileTabExpansion}
           onExpansionChange={setFileTabExpansion}
           underWindowControls={!showProjectBar}/>
@@ -562,7 +583,7 @@ export default function App(){
         <footer className="status-bar"><span>Read-only</span><span>{activeToolDocument.snapshotFile?.model.getLanguageId()??'JSON'}<span className="status-divider">{(activeToolDocument.snapshotFile?.synced.encoding??'utf-8').toUpperCase()}</span></span></footer>
       </>:<div className="empty-state">
         {projects.length?<span className="empty-project-hint">Select a file from the sidebar</span>
-          :<button className="open-folder-button" onClick={addFolder} disabled={picking}><Icon name="openFolder" size={19}/>{picking?'Opening…':'Open Folder'}</button>}
+          :<button className="open-folder-button" onClick={()=>void addFolder()} disabled={picking}><Icon name="openFolder" size={19}/>{picking?'Opening…':'Open Folder'}</button>}
         <div className="shortcut-hint"><kbd>Ctrl</kbd> + <kbd>S</kbd><span>Save</span><i/><kbd>Ctrl</kbd> + <kbd>F</kbd><span>Find</span></div>
       </div>}
     </main>

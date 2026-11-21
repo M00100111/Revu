@@ -60,6 +60,7 @@ const assets={
   file:new URL('../assets/icons/file/files.svg',import.meta.url).href,
   folder:new URL('../assets/icons/file/folder.svg',import.meta.url).href,
   openFolder:new URL('../assets/icons/file/openFolder.svg',import.meta.url).href,
+  history:new URL('../assets/icons/file/history.svg',import.meta.url).href,
   merge:new URL('../assets/icons/review/mergeReviewPanes.svg',import.meta.url).href,
   split:new URL('../assets/icons/review/splitReviewPanes.svg',import.meta.url).href,
 } as const;

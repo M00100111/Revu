@@ -5,7 +5,7 @@ import Icon from './Icon';
 import { showContextMenu } from './ContextMenu';
 type Props = {
   projectId: string; projectRoot:string; activePath: string | null;
-  onOpen: (path: string) => void; onError: (message: string) => void;
+  onOpen: (path: string,keep:boolean) => void; onError: (message: string) => void;
   expandedDirectories: ReadonlySet<string>; onDirectoryToggle: (key: string) => void;
   onExpandAllSubfolders:(path:string)=>void;onCollapseAllSubfolders:(path:string)=>void;
   path?: string; depth?: number;
@@ -34,7 +34,7 @@ export default function FileTree({ projectId, projectRoot, activePath, onOpen, o
             expandedDirectories={expandedDirectories} onDirectoryToggle={onDirectoryToggle}
             onExpandAllSubfolders={onExpandAllSubfolders} onCollapseAllSubfolders={onCollapseAllSubfolders}/>
         : <li key={entry.name}><button className={'tree-row '+(activePath===entryPath?'active':'')}
-            style={{paddingLeft:16+depth*14}} title={entryPath} onClick={()=>onOpen(entryPath)}>
+            style={{paddingLeft:16+depth*14}} title={entryPath} onClick={event=>onOpen(entryPath,event.detail>=2)}>
             <Icon name="file" size={15}/><span>{entry.name}</span>
           </button></li>;
     })}
