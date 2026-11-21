@@ -47,10 +47,10 @@ export function SettingsSidebar({width,onResize,category,onCategoryChange}:{
     <header className="explorer-header"><span>Settings</span></header>
     <nav className="settings-categories" aria-label="Settings categories">
       <button className={category==='interaction'?'active':''} onClick={()=>onCategoryChange('interaction')}>Interaction</button>
-      <button className={category==='editor'?'active':''} onClick={()=>onCategoryChange('editor')}>Editor</button>
-      <button className={category==='review'?'active':''} onClick={()=>onCategoryChange('review')}>Review</button>
       <button className={category==='appearance'?'active':''} onClick={()=>onCategoryChange('appearance')}>Appearance</button>
       <button className={category==='activity-bar'?'active':''} onClick={()=>onCategoryChange('activity-bar')}>Activity Bar</button>
+      <button className={category==='editor'?'active':''} onClick={()=>onCategoryChange('editor')}>Editor</button>
+      <button className={category==='review'?'active':''} onClick={()=>onCategoryChange('review')}>Review</button>
       <button className={category==='chat'?'active':''} onClick={()=>onCategoryChange('chat')}>Chat</button>
     </nav>
     <ResizeHandle width={width} onResize={onResize}/>
@@ -79,6 +79,8 @@ export default function SettingsPage({category,syncWidths,onChange,mixed,onModeC
           <span><strong>Sync sidebar widths</strong><small>Use the same width for File, Review, and Settings.</small></span>
           <input type="checkbox" checked={syncWidths} onChange={event=>onChange(event.target.checked)}/>
         </label>
+      </>:category==='editor'?<>
+        <div className="settings-title-row"><h1>Editor</h1><button onClick={onResetEditor}>Reset</button></div>
         <div className="setting-row">
           <span><strong>Editor tab mode</strong><small>Keep file tabs separated by project or show them together.</small></span>
           <div className="setting-options" role="group" aria-label="Editor tab mode">
@@ -100,8 +102,6 @@ export default function SettingsPage({category,syncWidths,onChange,mixed,onModeC
             <button className={fileTabOverflow==='wrap'?'active':''} onClick={()=>onFileTabOverflowChange('wrap')}>Wrap automatically</button>
           </div>
         </div>
-      </>:category==='editor'?<>
-        <div className="settings-title-row"><h1>Editor</h1><button onClick={onResetEditor}>Reset</button></div>
         <div className="setting-row">
           <span><strong>File Open Mode</strong><small>Choose how files open from the file tree.</small></span>
           <div className="setting-options" role="group" aria-label="File Open Mode">

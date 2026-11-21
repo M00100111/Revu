@@ -249,8 +249,11 @@ export type PiAgentRequest=
   |{action:'listSessions';projectId:string;scope?:PiSessionScope}
   |{action:'searchSessions';projectId:string;query:string;sort:PiSessionSort;scope?:PiSessionScope}
   |{action:'openSession';projectId:string;sessionId:string}
+  |{action:'getSessionSnapshot';projectId:string;sessionId:string}
+  |{action:'leaveSession';sessionId:string}
   |{action:'openDiscoveredSession';projectId:string;sessionId:string}
   |{action:'newSession';projectId:string}
+  |{action:'latestSession'|'prepareNew'|'abandonNew';projectId:string}
   |{action:'getSessionInfo';projectId:string;sessionId:string}
   |{action:'chooseSessionFolder';projectId:string}
   |{action:'getEntries';projectId:string;sessionId:string;sinceEntryId?:string}

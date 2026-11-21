@@ -132,7 +132,8 @@ kbd { font: inherit; border: 1px solid var(--border); border-radius: 3px; paddin
 .open-editor-groups { display: grid; gap: 5px; padding-bottom: 5px; }
 .open-editor-project { padding: 5px 8px 3px 25px; color: var(--muted); font-size: 10px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .open-editor-list { display: grid; gap: 1px; }
-.open-editor-row { display: flex; align-items: center; gap: 7px; width: 100%; height: 29px; padding: 0 8px 0 24px; border-radius: 4px; color: var(--muted); text-align: left; font-size: 11px; }
+.open-editor-row, .open-editor-empty { display: flex; align-items: center; height: 29px; padding: 0 8px 0 24px; color: var(--muted); font-size: 11px; }
+.open-editor-row { gap: 7px; width: 100%; border-radius: 4px; text-align: left; }
 .open-editor-row:hover { background: var(--hover); color: var(--text); }
 .open-editor-row.active { background: var(--active); color: var(--text); }
 .open-editor-row > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -303,7 +304,14 @@ kbd { font: inherit; border: 1px solid var(--border); border-radius: 3px; paddin
 .agent-session-tab.status-done { color: var(--status-done); }
 .agent-session-tab.status-error { color: var(--status-error); }
 .agent-session-more { margin-left: auto; }
-.agent-session-more-menu { z-index: 2200; overflow-x: hidden; overflow-y: auto; padding: 4px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg); box-shadow: 0 10px 28px #0003; }.agent-session-more-menu button { display: flex; width: 100%; min-height: 33px; align-items: flex-start; gap: 8px; padding: 7px 8px; border-radius: 4px; color: var(--text); font-size: 11px; line-height: 1.4; text-align: left; }.agent-session-more-menu button:hover,.agent-session-more-menu button.selected { background: var(--hover); }.agent-session-more-menu button > span { min-width: 0; flex: 1; overflow-wrap: anywhere; white-space: normal; }.session-menu-status { width: 6px; height: 6px; flex: 0 0 6px; margin-top: 5px; border-radius: 50%; background: var(--muted); }.session-menu-status.running { background: var(--status-running); }.session-menu-status.done { background: var(--status-done); }.session-menu-status.error { background: var(--status-error); }
+.agent-session-more-menu { z-index: 2200; overflow-x: hidden; overflow-y: auto; padding: 4px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg); box-shadow: 0 10px 28px #0003; }
+.agent-session-more-menu button { display: flex; width: 100%; min-height: 33px; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 4px; color: var(--text); font-size: 11px; line-height: 1.4; text-align: left; }
+.agent-session-more-menu button:hover,.agent-session-more-menu button.selected { background: var(--hover); }
+.agent-session-more-menu button > span { min-width: 0; flex: 1; overflow-wrap: anywhere; white-space: normal; }
+.session-menu-status { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: var(--muted); }
+.session-menu-status.running { background: var(--status-running); }
+.session-menu-status.done { background: var(--status-done); }
+.session-menu-status.error { background: var(--status-error); }
 .agent-new-chat { margin-left: auto; }
 .agent-icon-button { display: grid; width: 28px; height: 28px; flex: 0 0 28px; place-items: center; padding: 0; border-radius: 4px; color: var(--muted); }
 .agent-icon-button:hover:enabled { background: var(--hover); color: var(--text); }
@@ -631,3 +639,4 @@ kbd { font: inherit; border: 1px solid var(--border); border-radius: 3px; paddin
 .agent-extension-input .agent-extension-field > textarea { height:min(220px,35dvh); min-height:120px; overflow-y:auto; padding:8px 9px; border:1px solid var(--border); border-radius:5px; font:inherit; }
 .agent-extension-input > footer { flex-shrink:0; justify-content:flex-end; }
 .agent-extension-navigation { display:flex; align-items:center; gap:4px; margin-right:auto; }
+.session-menu-project { padding: 6px 8px 2px; color: var(--muted); font-size: 11px; font-weight: 600; overflow-wrap: anywhere; }

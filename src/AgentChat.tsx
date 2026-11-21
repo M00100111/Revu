@@ -655,6 +655,11 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
   onOpenCode:(target:PinTarget)=>void;visiblePinSource?:string;
 }){
   const [selectedProjectId,setSelectedProjectId]=useState<string>('');const [selectedSessionId,setSelectedSessionId]=useState<string|null>(null);
+  const previousSessionId=useRef<string|null>(null);
+  useEffect(()=>{
+    if(!selectedSessionId&&previousSessionId.current)void window.revu.agent.leaveSession(previousSessionId.current).then(unwrap).catch(error=>notify('warning',errorMessage(error)));
+    previousSessionId.current=selectedSessionId;
+  },[selectedSessionId,notify]);
   const [sessions,setSessions]=useState<Record<string,PiSessionSummary[]>>({});const [chats,setChats]=useState<Record<string,ChatState>>({});
   const [draft,setDraft]=useState('');const [sessionDialog,setSessionDialog]=useState(false);const [modelDialog,setModelDialog]=useState(false);
   const [treeDialog,setTreeDialog]=useState(false);
@@ -704,11 +709,24 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
   const runRefs=useRef(new Map<string,HTMLElement>());const pendingRunKey=useRef<string|undefined>(undefined);const skipAutoScroll=useRef(false);
   const pinMessageRefs=useRef(new Map<string,HTMLElement>());const pendingMessageId=useRef<string|undefined>(undefined);
   const archivedSourceRef=useRef<HTMLElement|null>(null);
-  const chatsRef=useRef(chats);const viewRef=useRef({open,selectedSessionId,projects,sessions});const erroredRuns=useRef(new Set<string>());const notifiedRuns=useRef(new Set<string>());
+  const chatsRef=useRef(chats);const viewRef=useRef({open,selectedSessionId,projects,sessions,openSessionIds});const erroredRuns=useRef(new Set<string>());const notifiedRuns=useRef(new Set<string>());
   const doneTimers=useRef(new Map<string,ReturnType<typeof setTimeout>>());const copiedTimer=useRef<ReturnType<typeof setTimeout>|undefined>(undefined);const abortTimer=useRef<ReturnType<typeof setTimeout>|undefined>(undefined);const bashHintTimer=useRef<ReturnType<typeof setTimeout>|undefined>(undefined);
-  const wasOpen=useRef(open);const handledNavigationToken=useRef<number|undefined>(undefined);
+  const wasOpen=useRef(false);const handledNavigationToken=useRef<number|undefined>(undefined);
+  const chatNavigation=useRef(0);
+  const [draftProject,setDraftProject]=useState('');
+  const sending=useRef(false);
+  function prepareDraft(projectId:string){
+    const navigation=chatNavigation.current;
+    void window.revu.agent.prepareNew(projectId).then(unwrap).catch(error=>{if(navigation===chatNavigation.current)notify('warning',errorMessage(error));});
+    setDraftProject(projectId);
+  }
+  useEffect(()=>{
+    if(!draftProject)return;
+    if(!open||selectedProjectId!==draftProject||selectedSessionId)setDraftProject('');
+    return ()=>{void window.revu.agent.abandonNew(draftProject);};
+  },[draftProject,open,selectedProjectId,selectedSessionId]);
   const hasPendingNavigation=!!navigationRequest&&handledNavigationToken.current!==navigationRequest.token;
-  chatsRef.current=chats;viewRef.current={open,selectedSessionId,projects,sessions};
+  chatsRef.current=chats;viewRef.current={open,selectedSessionId,projects,sessions,openSessionIds};
   const clearDone=useCallback((sessionId:string)=>{
     const timer=doneTimers.current.get(sessionId);if(timer)clearTimeout(timer);doneTimers.current.delete(sessionId);
     setDoneSessionIds(current=>{if(!current.has(sessionId))return current;const next=new Set(current);next.delete(sessionId);return next;});
@@ -754,6 +772,7 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
   },[selectedSessionId,activeQuestion?.id,open]);
   const hasRunningTool=!!current?.tools.some(tool=>tool.status==='running');
   const sessionTabs=openSessionIds[selectedProjectId]??[];
+  const projectsWithChats=projects.filter(project=>openSessionIds[project.id]?.length);
   const visibleSessionCount=Math.max(0,sessionTabCapacity-(!selectedSessionId&&selectedProjectId?1:0));
   const visibleSessionTabs=visibleSessionCount?sessionTabs.slice(-visibleSessionCount).reverse():[];
   const runs=useMemo(()=>current?buildRuns(current):[],[current]);const usage=current?.usage??emptyUsage;
@@ -811,12 +830,12 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
   useEffect(()=>{if(!inputWarning)return;const timer=setTimeout(()=>setInputWarning(''),5000);return()=>clearTimeout(timer);},[inputWarning]);
   useEffect(()=>{
     setCommands([]);setCommandsError('');setCommandMatch(null);setCommandIndex(0);
-    if(!selectedProjectId||!open)return;
+    if(!selectedProjectId||!open||!selectedSessionId&&draftProject!==selectedProjectId)return;
     let cancelled=false;setCommandsLoading(true);
     void window.revu.agent.getCommands(selectedProjectId,selectedSessionId??undefined).then(unwrap).then(items=>{if(!cancelled)setCommands(items);})
       .catch(error=>{if(!cancelled)setCommandsError(errorMessage(error));}).finally(()=>{if(!cancelled)setCommandsLoading(false);});
     return()=>{cancelled=true;};
-  },[open,selectedProjectId,selectedSessionId,commandRevision]);
+  },[open,selectedProjectId,selectedSessionId,commandRevision,draftProject]);
   useEffect(()=>{setCommandIndex(0);},[commandMatch?.query,commands]);
   useEffect(()=>{setForkTarget(null);setRenameTarget(null);setInputWarning('');},[selectedProjectId,selectedSessionId]);
   useEffect(()=>{if(commandMatch)composerRef.current?.querySelector('[aria-label="Commands"] [aria-selected="true"]')?.scrollIntoView({block:'nearest'});},[commandMatch,commandIndex]);
@@ -825,25 +844,27 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
     try{const catalog=await window.revu.agent.listSessions(projectId).then(unwrap);const items=catalog.sessions;setSessions(current=>({...current,[projectId]:items}));return items;}
     catch(error){notify('error',error instanceof Error?error.message:String(error));return [];}
   };
-  const openSessionById=async(projectId:string,sessionId:string,targetRunKey?:string,targetMessageId?:string)=>{setLoading(true);try{
+  const openSessionById=async(projectId:string,sessionId:string,targetRunKey?:string,targetMessageId?:string)=>{const request=++chatNavigation.current;setLoading(true);try{
     const snapshot=await window.revu.agent.openSession(projectId,sessionId).then(unwrap);
     const entries=await window.revu.agent.getEntries(projectId,snapshot.sessionId).then(unwrap);
+    if(request!==chatNavigation.current)return;
     pendingRunKey.current=targetRunKey;pendingMessageId.current=targetMessageId;
     setChats(current=>{const next={...current,[snapshot.sessionId]:withEntries(withSnapshot(snapshot,current[snapshot.sessionId]),entries)};chatsRef.current=next;return next;});
     setOpenSessionIds(current=>{const ids=current[projectId]??[];const next=[...ids.filter(id=>id!==snapshot.sessionId),snapshot.sessionId];return {...current,[projectId]:next};});
     setSelectedProjectId(projectId);setSelectedSessionId(snapshot.sessionId);setDraft('');setSessionDialog(false);
-  }catch(error){notify('error',error instanceof Error?error.message:String(error));setModelDialog(true);}finally{setLoading(false);}};
+  }catch(error){if(request===chatNavigation.current){notify('error',errorMessage(error));setModelDialog(true);}}finally{if(request===chatNavigation.current)setLoading(false);}};
   const openSession=async(session:PiSessionSummary,targetRunKey?:string)=>openSessionById(session.projectId,session.id,targetRunKey);
   const openCatalogSession=async(session:PiSessionSummary)=>{
     const project=projects.find(item=>piSessionProjectKey(item.root)===piSessionProjectKey(session.cwd));
     if(session.scope==='current'&&project){await openSessionById(project.id,session.id);return;}
-    setLoading(true);try{
+    const request=++chatNavigation.current;setLoading(true);try{
       const response=await window.revu.agent.openDiscoveredSession(session.projectId,session.id).then(unwrap);onProjectAdded(response.project);
       const snapshot=response.snapshot;const entries=await window.revu.agent.getEntries(response.project.id,snapshot.sessionId).then(unwrap);
+      if(request!==chatNavigation.current)return;
       setChats(current=>{const next={...current,[snapshot.sessionId]:withEntries(withSnapshot(snapshot,current[snapshot.sessionId]),entries)};chatsRef.current=next;return next;});
       setOpenSessionIds(current=>({...current,[response.project.id]:[...(current[response.project.id]??[]).filter(id=>id!==snapshot.sessionId),snapshot.sessionId]}));
       setSelectedProjectId(response.project.id);setSelectedSessionId(snapshot.sessionId);setDraft('');setSessionDialog(false);
-    }catch(error){notify('error',errorMessage(error));}finally{setLoading(false);}
+    }catch(error){if(request===chatNavigation.current)notify('error',errorMessage(error));}finally{if(request===chatNavigation.current)setLoading(false);}
   };
   const openSessionInfo=async()=>{
     if(!current)return;setUsageOpen(false);setSessionInfo(undefined);setSessionInfoError('');setSessionInfoOpen(true);
@@ -856,6 +877,7 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
     try{
       const defaults=await window.revu.agent.getModelDefaults(projectId).then(unwrap);if(request!==draftConfigRequest.current)return;setNewChatThinking(defaults.thinkingLevel);
       if(!defaults.provider||!defaults.modelId){setNewChatModel(undefined);return;}
+      setNewChatModel({provider:defaults.provider,id:defaults.modelId,contextWindow:0,reasoning:false});
       try{const available=await window.revu.agent.listModels(projectId).then(unwrap);if(request!==draftConfigRequest.current)return;setModels(available);
         setNewChatModel(available.find(model=>model.provider===defaults.provider&&model.id===defaults.modelId)
           ??{provider:defaults.provider,id:defaults.modelId,contextWindow:0,reasoning:false});}
@@ -868,11 +890,13 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
       setSelectedProjectId(activeProjectId??projects[0]?.id??'');setSelectedSessionId(null);
     }
   },[activeProjectId,projects,selectedProjectId]);
-  useEffect(()=>{if(selectedProjectId)void reloadSessions(selectedProjectId);},[selectedProjectId]);
+  const hasSelectedSession=!!selectedSessionId;
+  useEffect(()=>{if(open&&selectedProjectId&&hasSelectedSession)void reloadSessions(selectedProjectId);},[open,selectedProjectId,hasSelectedSession]);
+  useEffect(()=>{if(open&&sessionDialog&&selectedProjectId)void reloadSessions(selectedProjectId);},[open,sessionDialog,selectedProjectId]);
   useLayoutEffect(()=>{activeSessionTabRef.current?.scrollIntoView({block:'nearest',inline:'nearest'});},[selectedProjectId,selectedSessionId,sessionTabs.length]);
   useLayoutEffect(()=>{const container=sessionTabsRef.current;if(!container)return;const update=()=>setSessionTabCapacity(Math.max(1,Math.floor((container.clientWidth+3)/95)));
     update();const observer=new ResizeObserver(update);observer.observe(container);return()=>observer.disconnect();},[]);
-  useEffect(()=>{if(selectedProjectId&&!selectedSessionId)void loadNewChatDefaults(selectedProjectId);},[selectedProjectId,selectedSessionId]);
+  useEffect(()=>{if(open&&draftProject===selectedProjectId&&selectedProjectId&&!selectedSessionId)void loadNewChatDefaults(selectedProjectId);},[open,draftProject,selectedProjectId,selectedSessionId]);
   useEffect(()=>{
     if(!mention||!selectedProjectId){mentionRequest.current++;setMentionEntries([]);setMentionLoading(false);setMentionError('');return;}
     const request=++mentionRequest.current;setMentionLoading(true);setMentionError('');
@@ -888,18 +912,18 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
   useEffect(()=>{setSessionInfoOpen(false);setSessionInfo(undefined);setSessionInfoError('');},[selectedSessionId]);
   useEffect(()=>{if(!sessionInfoOpen)return;const keydown=(event:KeyboardEvent)=>{if(event.key==='Escape')setSessionInfoOpen(false);};window.addEventListener('keydown',keydown);return()=>window.removeEventListener('keydown',keydown);},[sessionInfoOpen]);
   useEffect(()=>{
-    const opening=open&&!wasOpen.current;wasOpen.current=open;
+    const available=open&&projects.length>0;
+    const opening=available&&!wasOpen.current;wasOpen.current=available;
     if(!opening||hasPendingNavigation)return;
     const projectId=activeProjectId??projects[0]?.id??'';if(!projectId)return;
-    let cancelled=false;
+    const request=++chatNavigation.current;
     setSelectedProjectId(projectId);setSelectedSessionId(null);setNewChatModel(undefined);setDraft('');setSessionDialog(false);
-    void reloadSessions(projectId).then(items=>{
-      if(cancelled)return;
-      const latest=items.reduce<PiSessionSummary|undefined>((result,item)=>!result||item.modifiedAt>result.modifiedAt?item:result,undefined);
-      if(latest)void openSessionById(projectId,latest.id);
-    });
-    return()=>{cancelled=true;};
-  },[open]);
+    void window.revu.agent.latestSession(projectId).then(unwrap).then(latest=>{
+      if(request!==chatNavigation.current)return;
+      if(latest)void openSessionById(projectId,latest);else prepareDraft(projectId);
+    }).catch(error=>{if(request===chatNavigation.current){notify('warning',errorMessage(error));prepareDraft(projectId);}});
+    return()=>{chatNavigation.current++;};
+  },[open,projects.length>0]);
   useEffect(()=>{if(!navigationRequest)return;handledNavigationToken.current=navigationRequest.token;
     setArchivedSource(null);
     const target=navigationRequest.messageId&&selectedSessionId===navigationRequest.sessionId?pinMessageRefs.current.get(navigationRequest.messageId):undefined;
@@ -994,7 +1018,7 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
       if(payload.type==='agent_settled'){
         const settling=chatsRef.current[event.sessionId];if(settling){const key=lastRunKey(settling.messages);const next={...chatsRef.current,
           [event.sessionId]:{...settling,settledRuns:{...settling.settledRuns,[key]:Date.now()}}};chatsRef.current=next;setChats(next);}
-        void Promise.all([window.revu.agent.openSession(event.projectId,event.sessionId).then(unwrap),window.revu.agent.getEntries(event.projectId,event.sessionId).then(unwrap)])
+        if(viewRef.current.openSessionIds[event.projectId]?.includes(event.sessionId))void Promise.all([window.revu.agent.getSessionSnapshot(event.projectId,event.sessionId).then(unwrap),window.revu.agent.getEntries(event.projectId,event.sessionId).then(unwrap)])
           .then(([snapshot,entries])=>setChats(state=>{const chat=state[event.sessionId];if(!chat)return state;
             const next={...state,[event.sessionId]:withEntries(withSnapshot(snapshot,chat),entries)};chatsRef.current=next;return next;})).catch(()=>{});
       }
@@ -1072,8 +1096,9 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
     archivedSourceRef.current?.scrollIntoView({block:'start'});archivedSourceRef.current?.focus({preventScroll:true});
   },[archivedSource,selectedSessionId]);
   useEffect(()=>{if(skipAutoScroll.current){skipAutoScroll.current=false;return;}bodyRef.current?.scrollTo({top:bodyRef.current.scrollHeight});},[current?.messages,current?.streamText,current?.streamThinking,current?.tools,current?.summaryOperations]);
-  const startNewChat=()=>{if(!selectedProjectId)return;setSelectedSessionId(null);setNewChatModel(undefined);setDraft('');setSessionDialog(false);
-    composerExpansionSource.current=null;composerManuallyCollapsed.current=false;setComposerExpanded(false);void loadNewChatDefaults(selectedProjectId);};
+  const startNewChat=()=>{if(!selectedProjectId)return;chatNavigation.current++;setLoading(false);prepareDraft(selectedProjectId);
+    setSelectedSessionId(null);setDraft('');setSessionDialog(false);
+    composerExpansionSource.current=null;composerManuallyCollapsed.current=false;setComposerExpanded(false);};
   const closeSessionTab=(sessionId:string)=>{
     const tabs=openSessionIds[selectedProjectId]??[];const index=tabs.indexOf(sessionId);const remaining=tabs.filter(id=>id!==sessionId);
     setOpenSessionIds(current=>({...current,[selectedProjectId]:remaining}));
@@ -1165,12 +1190,14 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
     catch(error){notify('error',errorMessage(error));}
   };
   const ensureChatSession=async()=>{
-    if(current)return current;if(!selectedProjectId)throw new Error('Open a project before starting Pi.');let snapshot=await window.revu.agent.newSession(selectedProjectId).then(unwrap);
+    if(current)return current;if(!selectedProjectId)throw new Error('Open a project before starting Pi.');
+    const navigation=chatNavigation.current;let snapshot=await window.revu.agent.newSession(selectedProjectId).then(unwrap);
     if(newChatModel&&(!snapshot.model||snapshot.model.provider!==newChatModel.provider||snapshot.model.id!==newChatModel.id))
       snapshot=await window.revu.agent.setModel(selectedProjectId,snapshot.sessionId,newChatModel.provider,newChatModel.id).then(unwrap);
     if(snapshot.thinkingLevel!==newChatThinking)snapshot=await window.revu.agent.setThinkingLevel(selectedProjectId,snapshot.sessionId,newChatThinking).then(unwrap);
     const session=withSnapshot(snapshot);setChats(state=>({...state,[snapshot.sessionId]:session}));
-    setOpenSessionIds(value=>({...value,[selectedProjectId]:[...(value[selectedProjectId]??[]),snapshot.sessionId]}));setSelectedSessionId(snapshot.sessionId);return session;
+    setOpenSessionIds(value=>({...value,[selectedProjectId]:[...(value[selectedProjectId]??[]).filter(id=>id!==snapshot.sessionId),snapshot.sessionId]}));
+    if(navigation===chatNavigation.current)setSelectedSessionId(snapshot.sessionId);return session;
   };
   const executeDirectBash=async(spec:{command:string;excludeFromContext:boolean})=>{
     if(!selectedProjectId)return;
@@ -1184,7 +1211,7 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
     setBashHint(false);const text=draft;historyIndex.current=null;setMention(null);draftRef.current='';setDraft('');focusComposer(0);
     try{
       const session=await ensureChatSession();rememberInput(text);await window.revu.agent.bash(selectedProjectId,session.sessionId,spec.command,spec.excludeFromContext).then(unwrap);
-      const [snapshot,entries]=await Promise.all([window.revu.agent.openSession(selectedProjectId,session.sessionId).then(unwrap),window.revu.agent.getEntries(selectedProjectId,session.sessionId).then(unwrap)]);
+      const [snapshot,entries]=await Promise.all([window.revu.agent.getSessionSnapshot(selectedProjectId,session.sessionId).then(unwrap),window.revu.agent.getEntries(selectedProjectId,session.sessionId).then(unwrap)]);
       setChats(state=>{const next={...state,[session.sessionId]:withEntries(withSnapshot(snapshot,state[session.sessionId]),entries)};chatsRef.current=next;return next;});
     }catch(error){if(!draftRef.current)updateDraftAt(text,text.length);notify('error',errorMessage(error));}
   };
@@ -1196,11 +1223,11 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
       if(draftRef.current===text){cleared=true;draftRef.current='';setDraft('');setCommandMatch(null);}
       if(agentRunning)await window.revu.agent.steer(selectedProjectId,session.sessionId,text).then(unwrap);else await window.revu.agent.prompt(selectedProjectId,session.sessionId,text).then(unwrap);rememberInput(text);
     }catch(error){if(cleared&&!draftRef.current&&viewRef.current.selectedSessionId===sessionId){draftRef.current=text;setDraft(text);}notify('warning',errorMessage(error));}};
-  const send=async()=>{if(!selectedProjectId||!draft.trim()||dirty||(!current&&!newChatModel&&!draftExtension))return;const text=draft;historyIndex.current=null;setMention(null);setDraft('');
+  const send=async()=>{if(sending.current||!selectedProjectId||!draft.trim()||dirty||(!current&&!newChatModel&&!draftExtension))return;sending.current=true;const text=draft;historyIndex.current=null;setMention(null);setDraft('');
     try{
       const session=await ensureChatSession();await window.revu.agent.prompt(selectedProjectId,session.sessionId,text).then(unwrap);rememberInput(text);
     }
-    catch(error){setDraft(text);notify('error',error instanceof Error?error.message:String(error));}
+    catch(error){setDraft(text);notify('error',error instanceof Error?error.message:String(error));}finally{sending.current=false;}
   };
   const setRetained=async(kind:'steering'|'followUp',index:number,value?:string)=>{
     if(!selectedProjectId||!current)return false;const warning=value===undefined?undefined:piQueueWarning(value,commands);if(warning){setInputWarning(warning);return false;}const next=updatePiQueueItem(retainedQueue,kind,index,value);
@@ -1385,7 +1412,7 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
             {!!sessionTabs.length&&<button className="agent-session-tab-close" title="Close Chat" aria-label="Close New Chat" onClick={closeNewChatTab}><Icon name="close" size={10}/></button>}</div>}
         </div>
         <button ref={sessionMoreRef} className="agent-icon-button agent-session-more" title="Open Chats" aria-label="Open chats" aria-haspopup="listbox" aria-expanded={sessionMenuOpen}
-          disabled={!sessionTabs.length} onClick={()=>setSessionMenuOpen(value=>!value)}><Icon name="more" size={15}/></button>
+          disabled={!projectsWithChats.length} onClick={()=>setSessionMenuOpen(value=>!value)}><Icon name="more" size={15}/></button>
         <button className="agent-icon-button agent-new-chat" title="New Chat" disabled={!selectedProjectId||loading} onClick={startNewChat}><Icon name="add" size={15}/></button></header>
       <div className="agent-chat-content" ref={chatContentRef}>
         <nav className="agent-run-rail" aria-label="Runs"><div><div className="agent-run-markers">{runs.map((run,index)=><button key={run.key}
@@ -1618,10 +1645,23 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
         </section>
       </div>}
     </aside>
-    {sessionMenuOpen&&createPortal(<div ref={sessionMoreMenuRef} style={sessionMenuStyle} className="agent-session-more-menu" role="listbox" aria-label="Open chats">
-      {[...sessionTabs].reverse().map(sessionId=>{const summary=(sessions[selectedProjectId]??[]).find(item=>item.id===sessionId);const chat=chats[sessionId];const active=selectedSessionId===sessionId;
-        const tone=sessionTone(chat?.status??summary?.status??'idle',doneSessionIds.has(sessionId),questions[sessionId]!==undefined?questions[sessionId].length>0:summary?.question);return <button type="button" role="option" aria-selected={active} className={active?'selected':''} key={sessionId}
-          onClick={()=>{setSessionMenuOpen(false);void openSessionById(selectedProjectId,sessionId);}}><i className={`session-menu-status ${tone}`}/><span>{titleFor(summary,chat)}</span></button>;})}
+    {sessionMenuOpen&&projectsWithChats.length>0&&createPortal(<div ref={sessionMoreMenuRef} style={sessionMenuStyle} className="agent-session-more-menu" role="listbox" aria-label="Open chats">
+      {projectsWithChats.map(project=>{
+        const grouped=projectsWithChats.length>1;
+        return <div key={project.id} role={grouped?'group':undefined} aria-label={grouped?project.name:undefined}>
+          {grouped&&<div className="session-menu-project">{project.name}</div>}
+          {[...openSessionIds[project.id]].reverse().map(sessionId=>{
+            const summary=sessions[project.id]?.find(item=>item.id===sessionId);
+            const chat=chats[sessionId];
+            const active=selectedProjectId===project.id&&selectedSessionId===sessionId;
+            const tone=sessionTone(chat?.status??summary?.status??'idle',doneSessionIds.has(sessionId),questions[sessionId]!==undefined?questions[sessionId].length>0:summary?.question);
+            return <button type="button" role="option" aria-selected={active} className={active?'selected':''} key={sessionId}
+              onClick={()=>{setSessionMenuOpen(false);void openSessionById(project.id,sessionId);}}>
+              <i className={`session-menu-status ${tone}`}/><span>{titleFor(summary,chat)}</span>
+            </button>;
+          })}
+        </div>;
+      })}
     </div>,document.body)}
     {statsRun&&createPortal(<aside ref={statsMenuRef} style={statsMenuStyle} className="agent-run-stats-popover" role="dialog" aria-label="Run details"><RunStatsDetails run={statsRun}/></aside>,document.body)}
     {modelMenu&&createPortal(<div ref={modelMenuRef} style={modelMenuStyle} className="agent-model-menu combined" role="dialog" aria-label="Model and thinking">
@@ -1634,7 +1674,7 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
     </div>,document.body)}
     {sessionDialog&&selectedProjectId&&<SessionDialog projects={projects} projectId={selectedProjectId} selectedSessionId={selectedSessionId}
       sessions={sessions[selectedProjectId]??[]} doneSessionIds={doneSessionIds} notify={notify}
-      onProject={id=>{setSelectedProjectId(id);setSelectedSessionId(null);setNewChatModel(undefined);setDraft('');void reloadSessions(id);}} onOpen={session=>void openCatalogSession(session)} onNew={startNewChat}
+      onProject={id=>{chatNavigation.current++;setLoading(false);setSelectedProjectId(id);setSelectedSessionId(null);setNewChatModel(undefined);setDraft('');prepareDraft(id);}} onOpen={session=>void openCatalogSession(session)} onNew={startNewChat}
       onRename={(session,name)=>void window.revu.agent.renameSession(session.projectId,session.id,name,session.scope).then(unwrap).then(()=>{setChats(current=>{
         const chat=current[session.id];return chat?{...current,[session.id]:{...chat,name}}:current;});return reloadSessions(session.projectId);}).catch(error=>notify('error',errorMessage(error)))}
       onDelete={session=>{if(window.confirm(`Delete “${session.name}”? The session will be moved to the Recycle Bin.`))void window.revu.agent.deleteSession(session.projectId,session.id,session.scope).then(unwrap).then(()=>{

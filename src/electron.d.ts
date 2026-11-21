@@ -16,8 +16,13 @@ interface RevuAgentApi {
   listSessions(projectId:string,scope?:PiSessionScope):Promise<RevuResponse<PiSessionCatalog>>;
   searchSessions(projectId:string,query:string,sort:PiSessionSort,scope?:PiSessionScope):Promise<RevuResponse<PiSessionSearchResult[]>>;
   openSession(projectId:string,sessionId:string):Promise<RevuResponse<PiSessionSnapshot>>;
+  getSessionSnapshot(projectId:string,sessionId:string):Promise<RevuResponse<PiSessionSnapshot>>;
+  leaveSession(sessionId:string):Promise<RevuResponse<void>>;
   openDiscoveredSession(projectId:string,sessionId:string):Promise<RevuResponse<PiDiscoveredSessionResponse>>;
   newSession(projectId:string):Promise<RevuResponse<PiSessionSnapshot>>;
+  latestSession(projectId:string):Promise<RevuResponse<string|null>>;
+  prepareNew(projectId:string):Promise<RevuResponse<void>>;
+  abandonNew(projectId:string):Promise<RevuResponse<void>>;
   getSessionInfo(projectId:string,sessionId:string):Promise<RevuResponse<PiSessionInfo>>;
   chooseSessionFolder(projectId:string):Promise<RevuResponse<PiSessionFolderResult|null>>;
   getEntries(projectId:string,sessionId:string,sinceEntryId?:string):Promise<RevuResponse<PiEntriesResponse>>;

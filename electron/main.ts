@@ -20,6 +20,15 @@ const openFoldersPath=()=>join(app.getPath('userData'),'open-folders.json');
 const recentFoldersPath=()=>join(app.getPath('userData'),'recent-folders.json');
 let recentFolders:string[]=[];
 let historyWrite=Promise.resolve();
+let windowShown=false;
+let standbyEnabled=false;
+function syncPiStandby(){
+  const project=workspace.projects.values().next().value;
+  const enabled=windowShown&&!shutdownStarted&&!!project;
+  if(enabled===standbyEnabled)return;
+  standbyEnabled=enabled;piManager?.enableStandby(enabled);
+  if(enabled&&project)void piManager?.latestSession(project.id,true).catch(error=>console.warn('Recent chat preparation failed',error));
+}
 async function rememberFolder(root:string){
   recentFolders=[root,...recentFolders.filter(path=>path.toLowerCase()!==root.toLowerCase())].slice(0,10);
   historyWrite=historyWrite.then(()=>writeFile(recentFoldersPath(),JSON.stringify(recentFolders),'utf8'))
@@ -27,6 +36,7 @@ async function rememberFolder(root:string){
   await historyWrite;
 }
 async function persistOpenFolders(){
+  syncPiStandby();
   try{
     const roots=[...workspace.projects.values()].map(project=>project.root);
     await writeFile(openFoldersPath(),JSON.stringify(roots),'utf8');
@@ -134,12 +144,17 @@ async function invokeAgent(body:PiAgentRequest,sourceWindow?:BrowserWindow|null)
     case 'listSessions':return piManager.listSessions(body.projectId,body.scope);
     case 'searchSessions':return piManager.searchSessions(body.projectId,body.query,body.sort,body.scope);
     case 'openSession':return piManager.openSession(body.projectId,body.sessionId);
+    case 'getSessionSnapshot':return piManager.getSessionSnapshot(body.projectId,body.sessionId);
+    case 'leaveSession':return piManager.leaveSession(body.sessionId);
     case 'openDiscoveredSession':{
       const session=await piManager.discoveredSession(body.projectId,body.sessionId);
       const project=await workspace.add(session.cwd);await rememberFolder(project.root);await persistOpenFolders();
       return {project,snapshot:await piManager.openSessionFile(project.id,session.id,session.path)};
     }
     case 'newSession':return piManager.newSession(body.projectId);
+    case 'latestSession':return piManager.latestSession(body.projectId,false);
+    case 'prepareNew':await piManager.prepareNew(body.projectId);return;
+    case 'abandonNew':return piManager.abandonNew(body.projectId);
     case 'getSessionInfo':return piManager.getSessionInfo(body.projectId,body.sessionId);
     case 'chooseSessionFolder':{
       const owner=sourceWindow??mainWindow;const options:OpenDialogOptions={title:'Select Session Folder',defaultPath:await piManager.getSessionDirectory(body.projectId),
@@ -271,10 +286,13 @@ function createWindow(){
       closeApproved=true;mainWindow.close();
     });
   });
-  mainWindow.on('closed',()=>{mainWindow=null;});
+  mainWindow.on('closed',()=>{mainWindow=null;windowShown=false;syncPiStandby();});
   const devUrl=process.env.REVU_DEV_URL;
   const loading=devUrl?mainWindow.loadURL(devUrl):mainWindow.loadFile(join(__dirname,'../dist/index.html'));
-  void loading.then(()=>mainWindow?.show());
+  void loading.then(()=>{
+    mainWindow?.show();
+    windowShown=true;syncPiStandby();
+  });
 }
 
 app.whenReady().then(async()=>{
@@ -302,6 +320,7 @@ app.on('window-all-closed',()=>app.quit());
 app.on('before-quit',event=>{
   if(shutdownStarted)return;
   event.preventDefault();shutdownStarted=true;
+  piManager?.enableStandby(false);piManager?.abandonNew();
   const stopping=piManager?.dispose()??Promise.resolve();
   void stopping.catch(error=>console.warn('Failed to stop Pi Agent',error)).finally(()=>{
     workspace.dispose();app.quit();

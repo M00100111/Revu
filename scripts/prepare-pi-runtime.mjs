@@ -30,6 +30,10 @@ async function preparePiApp(){
   await mkdir(join(piAppDir,'shared'),{recursive:true});
   for(const name of ['codePins.ts','codeSource.ts'])await cp(resolve('shared',name),join(piAppDir,'shared',name));
   const chunksDir=join(piAppDir,'bundle','chunks');const chunks=await readdir(chunksDir);
+  const syntaxModule=chunks.find(name=>/^lib-[A-Z0-9]+\.js$/.test(name));
+  const extensionLoader=chunks.find(name=>name.startsWith('jiti-static-loader-'));
+  if(!syntaxModule||!extensionLoader)throw new Error('Missing Pi standby modules.');
+  await writeFile(join(piAppDir,'revu-preload.mjs'),[syntaxModule,extensionLoader].map(name=>'import "./bundle/chunks/'+name+'";').join('\n'));
   let patched=false;
   for(const name of chunks.filter(value=>value.endsWith('.js'))){
     const path=join(chunksDir,name);let source=await readFile(path,'utf8');
@@ -79,7 +83,7 @@ async function preparePiApp(){
     source=replaceOnce(source,'this.exitError=processError,this.rejectPendingRequests(processError)}),childProcess.stdin',
       'this.exitError=processError,this.rejectPendingRequests(processError),this.eventListeners.forEach(listener=>listener({type:"revu_process_exit",message:processError.message}))}),childProcess.stdin','RPC process failure notification');
     source=replaceOnce(source,'spawn9("node",[cliPath,...args],{cwd:this.options.cwd,env:{...process.env,...this.options.env},stdio:["pipe","pipe","pipe"]})',
-      'spawn9(this.options.launchCommand??"node",[...(this.options.launchArgs??[cliPath]),...args],{cwd:this.options.cwd,env:{...process.env,...this.options.env},windowsHide:!0,stdio:["pipe","pipe","pipe"]})','RPC process launcher');
+      'this.options.standbyProcess?.exitCode===null&&this.options.standbyProcess.signalCode===null?this.options.standbyProcess:spawn9(this.options.launchCommand??"node",[...(this.options.launchArgs??[cliPath]),...args],{cwd:this.options.cwd,env:{...process.env,...this.options.env},windowsHide:!0,stdio:["pipe","pipe","pipe"]})','RPC process launcher');
     source=replaceOnce(source,'this.process=childProcess,childProcess.stderr', 'this.process=childProcess,this.options.bootstrap&&childProcess.stdin.write(this.options.bootstrap+"\\n"),childProcess.stderr','RPC bootstrap');
     source=replaceOnce(source,'this.process.kill("SIGTERM"),await new Promise','this.options.stopProcess&&await this.options.stopProcess(),this.process.kill("SIGTERM"),await new Promise','RPC process shutdown');
     source=replaceOnce(source,'getShellPath(){let shellPath=this.settings.shellPath;', 'getShellPath(){let shellPath=process.env.REVU_PI_SHELL_PATH??this.settings.shellPath;','Runtime shell override');

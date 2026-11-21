@@ -530,7 +530,9 @@ export default function App(){
       mixed={mixed} onModeChange={setMixed} hideSingleProjectTabs={hideSingleProjectTabs}
       onHideSingleProjectTabsChange={setHideSingleProjectTabs} fontSize={fontSize}
       previewMode={previewMode} onPreviewModeChange={setPreviewMode}
-      onFontSizeChange={setFontSize} onResetEditor={()=>{setFontSize(14);setPreviewMode(false);}}
+      onFontSizeChange={setFontSize} onResetEditor={()=>{
+        setMixed(false);setHideSingleProjectTabs(false);setFileTabOverflow('scroll');setPreviewMode(false);setFontSize(14);
+      }}
       fileTabOverflow={fileTabOverflow} onFileTabOverflowChange={setFileTabOverflow}
       reviewFileLabels={reviewFileLabels} onReviewFileLabelsChange={setReviewFileLabels}
       dark={dark} onThemeChange={setDark} showThemeSwitcher={showThemeSwitcher}

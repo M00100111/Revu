@@ -1,4 +1,6 @@
 import { app, safeStorage, shell } from 'electron';
+import { IdleRuntimeTimers } from './idleRuntimeTimers';
+import {PiStandby,spawnStandby} from './piStandby';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
@@ -74,6 +76,7 @@ interface RuntimeHandle {
   sessionPath?:string;
   error?:string;
   isCompacting?:boolean;
+  closedTab?:boolean;
   queue:PiQueueState;
   bash?:PiDirectBashState;
   unsubscribe:()=>void;
@@ -89,6 +92,7 @@ interface PiManagerOptions {
 }
 
 function errorMessage(error:unknown){return error instanceof Error?error.message:String(error);}
+class PreparationNeedsInput extends Error {}
 const valueRecord=(value:unknown):Record<string,unknown>=>value&&typeof value==='object'?value as Record<string,unknown>:{};
 const numberValue=(value:unknown)=>typeof value==='number'&&Number.isFinite(value)?value:0;
 function usageCostBreakdown(entries:unknown[]){
@@ -149,10 +153,27 @@ export class PiManager {
   private readonly clients=new Set<RpcClient>();
   private readonly resourceLoads=new Set<Promise<unknown>>();
   private readonly sessionStarts=new Map<string,Promise<RuntimeHandle>>();
+  private readonly latestLookups=new Map<string,Promise<Awaited<ReturnType<PiManager['listedSessions']>>[number]|undefined>>();
+  private draft?:{projectId:string;id:string;ready:Promise<RuntimeHandle>};
+  private readonly hiddenDrafts=new Set<string>();
+  private hasProjects=false;
+  private runtimeGeneration=0;
+  private readonly standby=new PiStandby(async()=>{
+    const paths=this.runtimePaths();
+    const neutral=await runtimeLaunch(this.runtimeConfig,paths,paths.root,paths.root);
+    return spawnStandby(neutral.command,neutral.prefix,paths.root);
+  });
+  enableStandby(hasProjects:boolean){
+    if(this.hasProjects&&!hasProjects)this.runtimeGeneration++;
+    this.hasProjects=hasProjects;
+    this.standby.enable(hasProjects&&!this.changingRuntime);
+  }
   private runtimeConfig:PiRuntimeConfig={kind:'native'};
   private readonly cwdRequests=new Map<string,{projectId:string;resolve:(accept:boolean)=>void}>();
   private trustModulePromise?:Promise<PiTrustModule>;
   private selectedSessionId:string|null=null;
+  private selectionRevision=0;
+  private readonly idleTimers=new IdleRuntimeTimers();
   private modulePromise:Promise<PiModule>|null=null;
   private readonly agentDir:string;
   private readonly nativeSessionsDir=nativePiSessionsDir();
@@ -204,6 +225,7 @@ export class PiManager {
     }).catch(()=>{});
   }
   private emit(handle:Pick<RuntimeHandle,'sessionId'|'projectId'>,type:RevuPiEvent['type'],payload?:unknown){
+    if(type==='status'||type==='extension-ui'||type==='bash'||type==='error')this.updateIdleTimer(handle.sessionId);
     this.options.emit({sessionId:handle.sessionId,projectId:handle.projectId,type,payload});
   }
 
@@ -263,8 +285,9 @@ export class PiManager {
     await handle.ui.reply(requestId,reply);
   }
   async respondSessionCwd(requestId:string,accept:boolean){if(typeof accept!=='boolean')throw new Error('Invalid directory recovery choice.');this.cwdRequests.get(requestId)?.resolve(accept);}
-  private async checkSessionCwd(projectId:string,path:string,config:PiRuntimeConfig,current:string){
+  private async checkSessionCwd(projectId:string,path:string,config:PiRuntimeConfig,current:string,background=false){
     const saved=await sessionCwd(path);if(!saved||await directoryExists(config,saved))return;
+    if(background)throw new PreparationNeedsInput();
     if(!await directoryExists(config,current))throw new Error('The current project directory is unavailable in the selected runtime.');
     const id=crypto.randomUUID();const accepted=new Promise<boolean>(resolve=>this.cwdRequests.set(id,{projectId,resolve}));
     this.options.emit({projectId,sessionId:'',type:'cwd-request',payload:{id,saved,current}});
@@ -273,7 +296,8 @@ export class PiManager {
   async setRuntime(config:PiRuntimeConfig):Promise<PiRuntimeChange>{
     if(!config||!['native','wsl'].includes(config.kind)||config.nativeShellPath!==undefined&&typeof config.nativeShellPath!=='string'||config.distribution!==undefined&&typeof config.distribution!=='string')throw new Error('Invalid runtime settings.');
     if(this.changingRuntime||this.changingTrust||this.cwdRequests.size)throw new Error('Wait for the current resource operation to finish.');
-    this.changingRuntime=true;const previous=this.runtimeConfig;const handles:RuntimeHandle[]=[];const changes:{path:string;saved:string;current:string}[]=[];
+    this.changingRuntime=true;this.runtimeGeneration++;this.standby.enable(false);this.abandonNew();this.updateIdleTimers();
+    const previous=this.runtimeConfig;const handles:RuntimeHandle[]=[];const changes:{path:string;saved:string;current:string}[]=[];
     const restarted:PiRuntimeChange['restarted']=[];const states=new Map<RuntimeHandle,Awaited<ReturnType<RpcClient['getState']>>>();let stopped=false;
     try{
       await Promise.allSettled([...this.resourceLoads]);
@@ -301,7 +325,7 @@ export class PiManager {
         const restored:PiRuntimeChange['restarted']=[];for(const handle of handles){try{const next=await this.startRuntime(handle.projectId,handle.sessionId,handle.sessionPath&&existsSync(handle.sessionPath)?handle.sessionPath:undefined,true);const state=states.get(handle)!;if(state.model&&state.model.provider!=='unknown')await next.client.setModel(state.model.provider,state.model.id);await next.client.setThinkingLevel(state.thinkingLevel);await next.client.setAutoCompaction(state.autoCompactionEnabled);restored.push({previousId:handle.sessionId,snapshot:await this.snapshot(next)});}catch(restoreError){this.emit(handle,'error',errorMessage(restoreError));}}
         this.options.emit({projectId:'',sessionId:'',type:'runtime-changed',payload:{info:await this.getRuntimeInfo(),restarted:restored}});
       }throw error;
-    }finally{this.changingRuntime=false;}
+    }finally{this.changingRuntime=false;this.enableStandby(this.hasProjects);this.updateIdleTimers();}
   }
 
   private async sessionLocation(cwd:string){
@@ -311,20 +335,28 @@ export class PiManager {
     return {dir:nativePiSessionDir(cwd),custom:false};
   }
 
-  private async createClient(cwd:string,sessionPath?:string,ephemeral=false,projectId='',trustRestart=false,expectedId?:string){
+  private async createClient(cwd:string,sessionPath?:string,ephemeral=false,projectId='',trustRestart=false,expectedId?:string,background=false){
+    const generation=this.runtimeGeneration;
     if((this.changingTrust||this.changingRuntime)&&!trustRestart)throw new Error('Wait for the current resource operation to finish.');
-    const {RpcClient}=await this.module();const trusted=await this.ensureProjectTrust(cwd,projectId);if(projectId)this.project(projectId);
+    const {RpcClient}=await this.module();const trusted=await this.ensureProjectTrust(cwd,projectId,background);if(projectId)this.project(projectId);
     const config=this.runtimeConfig;const {dir}=await this.sessionLocation(cwd);const paths=this.runtimePaths();
     const {SettingsManager}=await this.module();const nativeShell=config.kind==='native'?SettingsManager.create(cwd,this.agentDir,{projectTrusted:trusted}).getShellPath():undefined;
     const launch=await runtimeLaunch(config,{...paths,nativeShell},cwd,dir);
-    if(sessionPath){const change=await this.checkSessionCwd(projectId,sessionPath,config,launch.cwd);if(change)await replaceSessionCwd(change.path,change.saved,change.current);}
+    if(sessionPath){const change=await this.checkSessionCwd(projectId,sessionPath,config,launch.cwd,background);if(change)await replaceSessionCwd(change.path,change.saved,change.current);}
     if(projectId)this.project(projectId);if((this.changingTrust||this.changingRuntime)&&!trustRestart)throw new Error('Runtime changed. Try again.');
-    const targetPath=(path:string)=>config.kind==='wsl'?wslPath(config.distribution!,path):Promise.resolve(path);
+    const targetPath=launch.targetPath;
     const extensions=await Promise.all(['ask-user.ts','pin-code.ts'].map(name=>targetPath(join(paths.root,'app','revu-extensions',name))));
     const args=[trusted?'--approve':'--no-approve',...extensions.flatMap(path=>['--extension',path]),'--session-dir',await targetPath(dir),'--append-system-prompt',`Runtime: ${config.kind==='wsl'?'WSL/'+config.distribution:process.platform==='darwin'?'macOS':'Windows'}; cwd: ${launch.cwd}. Historical paths may differ.`];
     if(sessionPath)args.push('--session',await targetPath(sessionPath));else if(ephemeral)args.push('--no-session');
     const env:Record<string,string>={...launch.env,PI_SKIP_VERSION_CHECK:'1',REVU_PI_SESSION_ID:!sessionPath?expectedId??'':''};const secrets=await this.readSecrets();for(const provider of PROVIDERS)env[provider.env]=secrets[provider.id]??'';
-    const client=new RpcClient({cwd,cliPath:this.cliPath(),args,launchCommand:launch.command,launchArgs:[...launch.prefix,await targetPath(this.cliPath())],bootstrap:JSON.stringify({cwd:launch.cwd,env,pidFile:launch.pidFile}),stopProcess:launch.stop} as unknown as ConstructorParameters<PiModule['RpcClient']>[0]) as unknown as RpcClient;
+    const cli=await targetPath(this.cliPath());
+    const standbyProcess=ephemeral?undefined:await this.standby.take();
+    try{
+      if(generation!==this.runtimeGeneration)throw new Error('Runtime changed. Try again.');
+      if(projectId)this.project(projectId);
+    }catch(error){standbyProcess?.stdin.end();throw error;}
+    const client=new RpcClient({cwd,cliPath:this.cliPath(),args,launchCommand:launch.command,launchArgs:[...launch.prefix,cli],standbyProcess,
+      bootstrap:JSON.stringify({cwd:launch.cwd,env,pidFile:launch.pidFile,cli,args:['--mode','rpc',...args]}),stopProcess:launch.stop} as unknown as ConstructorParameters<PiModule['RpcClient']>[0]) as unknown as RpcClient;
     if(config.kind==='wsl'){const getState=client.getState.bind(client);client.getState=async()=>{const state=await getState();return {...state,sessionFile:state.sessionFile?launch.hostPath(state.sessionFile):state.sessionFile};};}
     this.clients.add(client);const stop=client.stop.bind(client);client.stop=async()=>{try{await stop();}finally{this.clients.delete(client);}};
     this.clientTrust.set(client,trusted);this.clientCwd.set(client,launch.cwd);return client;
@@ -373,11 +405,11 @@ export class PiManager {
 
   async listSessions(projectId:string,scope:PiSessionScope='current'):Promise<PiSessionCatalog>{
     const project=this.project(projectId);const {SessionManager}=await this.module();
-    const listed=await this.listedSessions(projectId,scope);
+    const listed=(await this.listedSessions(projectId,scope)).filter(session=>!this.hiddenDrafts.has(session.id));
     const result=this.summaries(projectId,scope,listed).map((summary,index)=>({...summary,
       runCount:this.countRuns(SessionManager,listed[index].path,listed[index].modified.getTime())}));
     if(scope==='current')for(const runtime of this.runtimes.values()){
-      if(runtime.projectId!==projectId||result.some(item=>item.id===runtime.sessionId))continue;
+      if(runtime.projectId!==projectId||this.hiddenDrafts.has(runtime.sessionId)||result.some(item=>item.id===runtime.sessionId))continue;
       result.unshift({id:runtime.sessionId,projectId,cwd:project.root,name:'New Chat',hasName:false,scope,firstMessage:'',createdAt:Date.now(),
         modifiedAt:Date.now(),runCount:0,status:runtime.status,hasSessionFile:!!runtime.sessionPath&&existsSync(runtime.sessionPath),isCompacting:runtime.isCompacting,question:!!runtime.ui.size});
     }
@@ -405,33 +437,80 @@ export class PiManager {
     this.runCountCache.set(path,{modifiedAt,count});return count;
   }
 
-  private async startRuntime(projectId:string,sessionId?:string,sessionPath?:string,trustRestart=false){
+  private async startRuntime(projectId:string,sessionId?:string,sessionPath?:string,trustRestart=false,background=false){
     const provisional=sessionId??crypto.randomUUID();
-    const project=this.project(projectId);const client=await this.createClient(project.root,sessionPath,false,projectId,trustRestart,provisional);
+    const project=this.project(projectId);const client=await this.createClient(project.root,sessionPath,false,projectId,trustRestart,provisional,background);
     const ui=new PiExtensionUI((id,reply)=>client.respondExtensionUI({id,...reply}),()=>this.emit(handle,'extension-ui',ui.requests));
     const handle:RuntimeHandle={sessionId:provisional,projectId,cwd:project.root,runtimeCwd:this.clientCwd.get(client)??project.root,ui,client,status:'starting',sessionPath,queue:emptyPiQueue(),unsubscribe:()=>{}};
     handle.unsubscribe=client.onEvent(event=>this.onEvent(handle,event));
     this.runtimes.set(provisional,handle);
     try{
-      await client.start();
+      const starting=client.start();
+      if(this.hiddenDrafts.has(provisional)&&this.draft?.id!==provisional)void this.disposeRuntime(provisional);
+      await starting;
       this.project(projectId);
       const state=await client.getState();
+      if(this.runtimes.get(provisional)!==handle)throw new Error('Session was closed during startup.');
       handle.sessionId=state.sessionId;handle.sessionPath=state.sessionFile;handle.status=state.isStreaming?'running':'idle';
       if(sessionId&&sessionId!==state.sessionId)throw new Error('Pi opened a different session than requested.');
+      if(provisional!==handle.sessionId)this.runtimes.delete(provisional);
       this.runtimes.set(handle.sessionId,handle);
       this.emit(handle,'status',handle.status);
       return handle;
     }catch(error){
-      this.runtimes.delete(provisional);handle.ui.clear();handle.unsubscribe();await client.stop().catch(()=>{});throw error;
+      if(this.runtimes.get(provisional)===handle)this.runtimes.delete(provisional);
+      handle.ui.clear();handle.unsubscribe();await client.stop().catch(()=>{});throw error;
     }
   }
 
-  private async ensureRuntime(projectId:string,sessionId:string){
+  private async ensureRuntime(projectId:string,sessionId:string,path?:string,background=false):Promise<RuntimeHandle>{
     if(this.changingTrust||this.changingRuntime||this.resourceOperations.has(sessionId))throw new Error('Wait for the current resource operation to finish.');
+    const key=this.queueKey(projectId,sessionId);
+    const pending=this.sessionStarts.get(key);
+    if(pending){
+      try{return await pending;}catch(error){if(background||!(error instanceof PreparationNeedsInput))throw error;}
+      return this.ensureRuntime(projectId,sessionId,path);
+    }
     const existing=this.runtimes.get(sessionId);
     if(existing){if(existing.projectId!==projectId)throw new Error('Session does not belong to this project.');return existing;}
-    const session=await this.findSession(projectId,sessionId);
-    return this.startRuntime(projectId,sessionId,session.path);
+    const task=(async()=>this.startRuntime(projectId,sessionId,path??(await this.findSession(projectId,sessionId)).path,false,background))();
+    this.sessionStarts.set(key,task);
+    try{return await task;}finally{this.sessionStarts.delete(key);}
+  }
+
+  async latestSession(projectId:string,prepare:boolean){
+    let lookup=this.latestLookups.get(projectId);
+    if(!lookup){
+      lookup=this.listedSessions(projectId,'current').then(items=>items.reduce<typeof items[number]|undefined>(
+        (latest,item)=>!latest||item.modified>latest.modified?item:latest,undefined));
+      this.latestLookups.set(projectId,lookup);
+    }
+    const generation=this.runtimeGeneration;
+    try{
+      const latest=await lookup;if(!latest)return null;
+      if(prepare&&this.hasProjects&&generation===this.runtimeGeneration){
+        try{await this.ensureRuntime(projectId,latest.id,latest.path,true);}
+        catch(error){if(!(error instanceof PreparationNeedsInput))throw error;}
+      }
+      return latest.id;
+    }finally{if(this.latestLookups.get(projectId)===lookup)this.latestLookups.delete(projectId);}
+  }
+
+  prepareNew(projectId:string){
+    if(this.draft?.projectId!==projectId){
+      this.abandonNew();
+      const id=crypto.randomUUID();this.hiddenDrafts.add(id);
+      const ready=this.startRuntime(projectId,id);
+      this.draft={projectId,id,ready};
+      void ready.catch(()=>{if(this.draft?.id===id)this.draft=undefined;this.hiddenDrafts.delete(id);});
+    }
+    return this.draft!.ready;
+  }
+  abandonNew(projectId?:string){
+    const draft=this.draft;if(!draft||projectId&&draft.projectId!==projectId)return;
+    this.draft=undefined;
+    if(this.runtimes.get(draft.id)?.status==='starting')void this.disposeRuntime(draft.id);
+    void draft.ready.then(()=>this.disposeRuntime(draft.id)).catch(()=>{}).finally(()=>this.hiddenDrafts.delete(draft.id));
   }
 
   private async stableRuntime(projectId:string,sessionId:string){
@@ -451,22 +530,29 @@ export class PiManager {
   private async replaceRuntimeSession(handle:RuntimeHandle,previousId:string){
     const state=await handle.client.getState();
     if(!state.sessionId||!state.sessionFile)throw new Error('Pi did not create the new session.');
-    this.runtimes.delete(previousId);
+    this.idleTimers.cancel(previousId);this.runtimes.delete(previousId);
     const previousQueueKey=this.queueKey(handle.projectId,previousId);const retained=this.retainedQueue(handle.projectId,previousId);this.retainedQueues.delete(previousQueueKey);this.retainedQueueRevisions.delete(previousQueueKey);
     handle.sessionId=state.sessionId;handle.sessionPath=state.sessionFile;handle.status='idle';handle.error=undefined;handle.queue=emptyPiQueue();
     if(retained.steering.length||retained.followUp.length){const queueKey=this.queueKey(handle.projectId,handle.sessionId);this.retainedQueues.set(queueKey,retained);this.retainedQueueRevisions.set(queueKey,1);}
-    this.runtimes.set(handle.sessionId,handle);this.selectedSessionId=handle.sessionId;
+    this.runtimes.set(handle.sessionId,handle);this.selectRuntime(handle.sessionId);
     return handle;
   }
 
   async openSession(projectId:string,sessionId:string){
-    this.selectedSessionId=sessionId;
-    const handle=await this.ensureRuntime(projectId,sessionId);
-    await this.disposeUnselectedIdleRuntimes();
-    return this.snapshot(handle);
+    this.selectRuntime(sessionId);
+    return this.getSessionSnapshot(projectId,sessionId);
+  }
+
+  async getSessionSnapshot(projectId:string,sessionId:string){
+    return this.snapshot(await this.ensureRuntime(projectId,sessionId));
+  }
+
+  leaveSession(sessionId:string){
+    if(this.selectedSessionId===sessionId)this.selectRuntime(null);
   }
 
   async discoveredSession(projectId:string,sessionId:string){
+    this.selectRuntime(sessionId);
     const session=await this.findSession(projectId,sessionId,'all');
     const cwd=piSessionHostPath(session.cwd);
     if(!piSessionProjectAvailable(cwd))throw new Error('The session project folder no longer exists.');
@@ -474,10 +560,9 @@ export class PiManager {
   }
 
   async openSessionFile(projectId:string,sessionId:string,path:string){
-    this.selectedSessionId=sessionId;const existing=this.runtimes.get(sessionId);
-    const handle=existing??await this.startRuntime(projectId,sessionId,path);
+    const handle=await this.ensureRuntime(projectId,sessionId,path);
     if(handle.projectId!==projectId)throw new Error('Session is already open in another project.');
-    await this.disposeUnselectedIdleRuntimes();return this.snapshot(handle);
+    return this.snapshot(handle);
   }
 
   async getSessionInfo(projectId:string,sessionId:string):Promise<PiSessionInfo>{
@@ -500,9 +585,13 @@ export class PiManager {
   }
 
   async newSession(projectId:string){
-    const handle=await this.startRuntime(projectId);
-    this.selectedSessionId=handle.sessionId;
-    await this.disposeUnselectedIdleRuntimes();
+    const revision=this.selectionRevision;
+    const pending=this.prepareNew(projectId);
+    const draft=this.draft!;
+    const handle=await pending;
+    if(this.draft!==draft)throw new Error('New chat was closed.');
+    this.draft=undefined;this.hiddenDrafts.delete(draft.id);
+    if(revision===this.selectionRevision)this.selectRuntime(handle.sessionId);else this.updateIdleTimer(handle.sessionId);
     this.emit(handle,'sessions-changed');
     return this.snapshot(handle);
   }
@@ -533,6 +622,7 @@ export class PiManager {
   async navigateSessionTree(projectId:string,sessionId:string,entryId:string,summarize:boolean,customInstructions?:string):Promise<PiTreeNavigationResponse>{
     if(this.treeOperations.has(sessionId))throw new Error('Session tree navigation is already in progress.');
     const operation:TreeOperation={cancelled:false};this.treeOperations.set(sessionId,operation);
+    this.updateIdleTimer(sessionId);
     try{
       const handle=await this.ensureRuntime(projectId,sessionId);await this.stopForTreeOperation(handle);
       if(operation.cancelled){const tree=await handle.client.getTree() as PiSessionTreeResponse;
@@ -552,7 +642,7 @@ export class PiManager {
       const tree=await handle.client.getTree() as PiSessionTreeResponse;
       this.emit(handle,'sessions-changed');return {...tree,snapshot:await this.snapshot(handle),editorText:result.editorText,
         cancelled:result.cancelled,aborted:result.aborted};
-    }finally{this.treeOperations.delete(sessionId);}
+    }finally{this.treeOperations.delete(sessionId);this.updateIdleTimer(sessionId);}
   }
 
   async abortSessionTreeNavigation(projectId:string,sessionId:string){
@@ -572,7 +662,7 @@ export class PiManager {
     if(result.cancelled)throw new Error('Fork was cancelled.');
     await this.replaceRuntimeSession(handle,sessionId);
     await handle.client.setSessionName(derivedPiSessionName(source.name,'Fork',sessions.map(item=>item.name)));
-    this.emit(handle,'sessions-changed');await this.disposeUnselectedIdleRuntimes();
+    this.emit(handle,'sessions-changed');
     return {snapshot:await this.snapshot(handle),selectedText:result.text};
   }
 
@@ -583,23 +673,25 @@ export class PiManager {
     if(result.cancelled)throw new Error('Clone was cancelled.');
     await this.replaceRuntimeSession(handle,sessionId);
     await handle.client.setSessionName(derivedPiSessionName(source.name,'Clone',sessions.map(item=>item.name)));
-    this.emit(handle,'sessions-changed');await this.disposeUnselectedIdleRuntimes();
+    this.emit(handle,'sessions-changed');
     return this.snapshot(handle);
   }
 
   async exportHtml(projectId:string,sessionId:string,outputPath:string){
     const handle=await this.stableRuntime(projectId,sessionId);
     const result=await handle.client.exportHtml(outputPath);
-    if(this.selectedSessionId!==sessionId)await this.disposeRuntime(sessionId);
     return result.path;
   }
 
   async releaseSession(projectId:string,sessionId:string){
     this.project(projectId);const handle=this.runtimes.get(sessionId);
     if(handle&&handle.projectId!==projectId)throw new Error('Session does not belong to this project.');
-    if(handle)await handle.ui.cancel();
     if(this.selectedSessionId===sessionId)this.selectedSessionId=null;
-    if(handle&&!handle.isCompacting&&!this.treeOperations.has(sessionId)&&(handle.status==='idle'||handle.status==='error'))await this.disposeRuntime(sessionId);
+    if(!handle)return;
+    this.idleTimers.cancel(sessionId);
+    handle.closedTab=true;
+    await handle.ui.cancel();
+    if(this.runtimes.get(sessionId)===handle&&handle.closedTab)await this.updateIdleTimer(sessionId);
   }
 
   async sessionName(projectId:string,sessionId:string){
@@ -710,7 +802,6 @@ export class PiManager {
       throw error;
     }
     const snapshot=await this.snapshot(handle);
-    if(this.selectedSessionId!==sessionId)await this.disposeRuntime(sessionId);
     return {snapshot,result:{tokensBefore:result.tokensBefore,estimatedTokensAfter:result.estimatedTokensAfter,
       cost:result.usage?.cost.total}};
   }
@@ -746,13 +837,12 @@ export class PiManager {
     if(event.type==='turn_end')void this.refreshUsage(handle);
     if(event.type==='compaction_start')handle.isCompacting=true;
     if(event.type==='compaction_end')handle.isCompacting=false;
+    if(event.type==='compaction_start'||event.type==='compaction_end')this.updateIdleTimer(handle.sessionId);
     if(event.type==='agent_settled'){
       this.captureLiveQueue(handle);
       handle.status='idle';this.emit(handle,'status','idle');
       this.emit(handle,'sessions-changed');
-      void this.refreshUsage(handle).finally(()=>{
-        if(this.selectedSessionId!==handle.sessionId&&!handle.ui.size)return this.disposeRuntime(handle.sessionId);
-      });
+      void this.refreshUsage(handle);
     }
   }
 
@@ -820,6 +910,7 @@ export class PiManager {
   }
 
   async closeProject(projectId:string){
+    this.abandonNew(projectId);
     for(const request of this.trustRequests.values())if(request.projectId===projectId)request.resolve(null);
     for(const request of this.cwdRequests.values())if(request.projectId===projectId)request.resolve(false);
     await Promise.all([...this.runtimes.values()].filter(item=>item.projectId===projectId).map(item=>this.disposeRuntime(item.sessionId)));
@@ -829,7 +920,7 @@ export class PiManager {
   }
 
   async listModels(projectId:string,sessionId?:string):Promise<PiModelSummary[]>{
-    const client=sessionId?this.runtimes.get(sessionId)?.client:undefined;
+    const client=sessionId?this.runtimes.get(sessionId)?.client:this.draft?.projectId===projectId?(await this.draft.ready).client:undefined;
     const models=client?await client.getAvailableModels():await this.withResourceClient(projectId,client=>client.getAvailableModels());
     return models.map(model=>({...model}));
   }
@@ -900,11 +991,12 @@ export class PiManager {
       current:handle?this.clientTrust.get(handle.client)??null:null,
       needsDecision:saved===null&&!this.trustDecisions.has(this.trustKey(cwd))&&native.hasTrustRequiringProjectResources(cwd)};
   }
-  private async ensureProjectTrust(cwd:string,projectId:string):Promise<boolean>{
+  private async ensureProjectTrust(cwd:string,projectId:string,background=false):Promise<boolean>{
     const key=this.trustKey(cwd);const native=await this.trustModule();const store=new native.ProjectTrustStore(this.agentDir);
     const decision=store.getEntry(cwd);if(decision)return decision.decision;
     const previous=this.trustDecisions.get(key);if(previous!==undefined)return previous;
     if(!native.hasTrustRequiringProjectResources(cwd))return true;
+    if(background)throw new PreparationNeedsInput();
     const pending=this.trustPrompts.get(key);if(pending)return pending;
     const requestId=crypto.randomUUID();
     const waiting=new Promise<PiTrustChoice|null>(resolve=>this.trustRequests.set(requestId,{cwd,projectId,resolve}));
@@ -933,7 +1025,7 @@ export class PiManager {
     const cwd=this.project(projectId).root;const scope=this.trustKey(choice==='parent'?dirname(cwd):cwd);
     if(sessionId){const current=this.runtimes.get(sessionId);if(current&&current.projectId!==projectId)throw new Error('Session does not belong to this project.');}
     const affected=[...this.runtimes.values()].filter(handle=>{const key=this.trustKey(handle.cwd);return key===scope||key.startsWith(scope.endsWith('\\')?scope:scope+'\\');});
-    const restarted:PiTrustSaveResponse['restarted']=[];this.changingTrust=true;
+    const restarted:PiTrustSaveResponse['restarted']=[];this.changingTrust=true;this.updateIdleTimers();
     try{
     for(const handle of affected){
       if(handle.ui.size||!['idle','error'].includes(handle.status)||handle.isCompacting||handle.bash?.status==='running'||this.treeOperations.has(handle.sessionId)||this.resourceOperations.has(handle.sessionId))
@@ -962,7 +1054,7 @@ export class PiManager {
     }
     const replacement=restarted.find(item=>item.previousId===sessionId);
     return {trust:await this.getProjectTrust(projectId,replacement?.snapshot.sessionId??sessionId),restarted};
-    }finally{this.changingTrust=false;for(const item of restarted)this.emit(item.snapshot,'resources-changed');}
+    }finally{this.changingTrust=false;this.updateIdleTimers();for(const item of restarted)this.emit(item.snapshot,'resources-changed');}
   }
   private async withResourceClient<T>(projectId:string,read:(client:RpcClient)=>Promise<T>):Promise<T>{
     const operation=(async()=>{
@@ -975,6 +1067,7 @@ export class PiManager {
   }
   async getCommands(projectId:string,sessionId?:string):Promise<PiSlashCommand[]>{
     if(sessionId){const handle=await this.ensureRuntime(projectId,sessionId);return handle.client.getCommands();}
+    if(this.draft?.projectId===projectId)return (await this.draft.ready).client.getCommands();
     return this.withResourceClient(projectId,client=>client.getCommands());
   }
   private async validateQueue(handle:RuntimeHandle,texts:string[]){
@@ -987,17 +1080,33 @@ export class PiManager {
     if(!['idle','error'].includes(handle.status)||handle.isCompacting||handle.bash?.status==='running'||this.treeOperations.has(sessionId))
       throw new Error('Wait for the session to finish before reloading.');
     this.resourceOperations.add(sessionId);
+    this.updateIdleTimer(sessionId);
     try{await handle.client.reloadResources();return await this.snapshot(handle);}
-    finally{this.resourceOperations.delete(sessionId);this.emit(handle,'resources-changed');}
+    finally{this.resourceOperations.delete(sessionId);this.updateIdleTimer(sessionId);this.emit(handle,'resources-changed');}
   }
   private async disposeRuntime(sessionId:string){
     const handle=this.runtimes.get(sessionId);if(!handle)return;
-    handle.ui.clear();
-    this.runtimes.delete(sessionId);handle.unsubscribe();await handle.client.stop().catch(()=>{});
+    this.idleTimers.cancel(sessionId);this.runtimes.delete(sessionId);
+    handle.ui.clear();handle.unsubscribe();await handle.client.stop().catch(()=>{});
   }
-  private async disposeUnselectedIdleRuntimes(){
-    await Promise.all([...this.runtimes.values()].filter(item=>item.sessionId!==this.selectedSessionId&&item.status==='idle'&&!item.ui.size&&!item.isCompacting&&!this.treeOperations.has(item.sessionId))
-      .map(item=>this.disposeRuntime(item.sessionId)));
+  private selectRuntime(id:string|null){
+    this.selectionRevision++;
+    this.selectedSessionId=id;
+    const handle=id?this.runtimes.get(id):undefined;
+    if(handle)handle.closedTab=false;
+    this.updateIdleTimers();
+  }
+  private updateIdleTimers(){
+    for(const id of this.runtimes.keys())this.updateIdleTimer(id);
+  }
+  private updateIdleTimer(id:string){
+    const handle=this.runtimes.get(id);
+    if(!handle)return;
+    const eligible=()=>this.runtimes.get(id)===handle&&id!==this.selectedSessionId
+      &&!this.hiddenDrafts.has(id)&&(handle.status==='idle'||(handle.status==='error'&&!!handle.closedTab))&&!handle.ui.size&&!handle.isCompacting&&handle.bash?.status!=='running'
+      &&!this.treeOperations.has(id)&&!this.resourceOperations.has(id)&&!this.changingTrust&&!this.changingRuntime;
+    if(handle.closedTab&&eligible()&&(handle.status==='error'||!handle.sessionPath||!existsSync(handle.sessionPath)))return this.disposeRuntime(id);
+    this.idleTimers.update(id,eligible,()=>void this.disposeRuntime(id));
   }
   private async disposeIdleRuntimes(){
     await Promise.all([...this.runtimes.values()].filter(item=>(item.status==='idle'||item.status==='error')&&!item.ui.size&&!item.isCompacting&&!this.treeOperations.has(item.sessionId))

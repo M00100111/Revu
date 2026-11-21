@@ -1,7 +1,7 @@
 import {execFile} from 'node:child_process';
 import {existsSync} from 'node:fs';
 import {mkdir,readFile,rename,writeFile,rm} from 'node:fs/promises';
-import {join,win32} from 'node:path';
+import {join,posix,win32} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import type {PiRuntimeConfig,PiRuntimeInfo} from '../shared/piTypes';
 
@@ -43,7 +43,7 @@ export async function nativeBash(custom?:string){
 }
 
 export interface RuntimePaths {root:string;agentDir:string;processDir:string;nativeShell?:string}
-export interface RuntimeLaunch {command:string;prefix:string[];cwd:string;env:Record<string,string>;pidFile?:string;hostPath:(path:string)=>string;stop?:()=>Promise<void>}
+export interface RuntimeLaunch {command:string;prefix:string[];cwd:string;env:Record<string,string>;pidFile?:string;hostPath:(path:string)=>string;targetPath:(path:string)=>Promise<string>;stop?:()=>Promise<void>}
 export async function runtimeInfo(config:PiRuntimeConfig,paths:RuntimePaths):Promise<PiRuntimeInfo>{
   const distributions=await wslDistributions();const info:PiRuntimeInfo={config,distributions:distributions.names,defaultDistribution:distributions.defaultName,platform:process.platform,bashPaths:await nativeBashPaths(),user:'',ready:false};
   try{if(config.kind==='wsl'){const distro=config.distribution??distributions.defaultName;if(!distro||!distributions.names.includes(distro))throw new Error('Choose an installed WSL distribution.');
@@ -54,11 +54,18 @@ export async function runtimeInfo(config:PiRuntimeConfig,paths:RuntimePaths):Pro
 }
 export async function runtimeLaunch(config:PiRuntimeConfig,paths:RuntimePaths,cwd:string,sessionDir:string):Promise<RuntimeLaunch>{
   const launcher=join(paths.root,'app','revu-launcher.mjs');
-  if(config.kind==='native')return {command:join(paths.root,'node','node.exe'),prefix:[launcher],cwd,env:{PI_CODING_AGENT_DIR:paths.agentDir,REVU_PI_SHELL_PATH:await nativeBash(config.nativeShellPath??paths.nativeShell),PATH:join(paths.root,'node')+';'+(process.env.PATH??'')},hostPath:path=>path};
+  if(config.kind==='native')return {command:join(paths.root,'node','node.exe'),prefix:[launcher],cwd,env:{PI_CODING_AGENT_DIR:paths.agentDir,REVU_PI_SHELL_PATH:await nativeBash(config.nativeShellPath??paths.nativeShell),PATH:join(paths.root,'node')+';'+(process.env.PATH??'')},hostPath:path=>path,targetPath:async path=>path};
   const distro=config.distribution;if(!distro)throw new Error('Choose a WSL distribution.');await mkdir(paths.processDir,{recursive:true});const pidHost=join(paths.processDir,randomUUID()+'.json');
   const hostPaths=[cwd,sessionDir,paths.agentDir,launcher,join(paths.root,'node-linux-x64','node'),pidHost];const mapped=await Promise.all(hostPaths.map(path=>wslPath(distro,path)));const [linuxCwd,linuxSessions,agent,entry,node,pidFile]=mapped;
   const hostPath=(path:string)=>{for(const [index,prefix] of [linuxSessions,agent,linuxCwd].entries()){const host=[sessionDir,paths.agentDir,cwd][index];if(path===prefix)return host;if(path.startsWith(prefix+'/'))return join(host,path.slice(prefix.length+1));}return '\\\\wsl.localhost\\'+distro+path.replace(/\//g,'\\');};
-  return {command:wslExe(),prefix:['--distribution',distro,'--exec','/bin/bash','-lc','exec "$@"','revu',node,entry],cwd:linuxCwd,pidFile,
+  const targetPath=async(path:string)=>{
+    for(const [host,linux] of [[paths.root,posix.dirname(posix.dirname(entry))],[sessionDir,linuxSessions],[cwd,linuxCwd],[paths.agentDir,agent]]){
+      const relative=win32.relative(host,path);
+      if(!win32.isAbsolute(relative)&&relative!=='..'&&!relative.startsWith('..\\'))return posix.join(linux,...relative.split('\\'));
+    }
+    return wslPath(distro,path);
+  };
+  return {command:wslExe(),prefix:['--distribution',distro,'--exec','/bin/bash','-lc','exec "$@"','revu',node,entry],cwd:linuxCwd,pidFile,targetPath,
     env:{PI_CODING_AGENT_DIR:agent,REVU_PI_SHELL_PATH:'/bin/bash'},hostPath,
     stop:async()=>{await wslRun(distro,[node,'-e',`const fs=require('fs');let data;try{data=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));}catch{process.exit(0);}let stat;try{stat=fs.readFileSync('/proc/'+data.pid+'/stat','utf8');}catch{process.exit(0);}if(stat.slice(stat.lastIndexOf(')')+2).split(' ')[19]!==data.start)process.exit(0);const visit=pid=>{let children=[];try{children=fs.readFileSync('/proc/'+pid+'/task/'+pid+'/children','utf8').trim().split(' ').filter(Boolean).map(Number);}catch{}for(const child of children)visit(child);try{process.kill(pid,'SIGKILL');}catch{}};visit(data.pid);try{fs.unlinkSync(process.argv[1]);}catch{}`,pidFile]);}};
 }

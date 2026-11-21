@@ -83,7 +83,7 @@ export default function FileSidebar({width,projects,projectsLoaded,tabs,activeId
     {showProject&&<small>{tab.projectName}</small>}{tab.dirty&&<i className="dirty-dot"/>}
   </button>;
   const openEditorsContent=()=>{
-    if(!tabs.length)return <p className="tree-note">No open editors</p>;
+    if(!tabs.length)return <div className="open-editor-empty">No open editors</div>;
     if(mixed||tabs.every(tab=>tab.groupId===tabs[0].groupId))
       return <div className="open-editor-list">{tabs.map(tab=>editorRow(tab,mixed))}</div>;
     return <div className="open-editor-groups">{[...orderedProjects,{id:null,name:'Other'}].map(group=>{
