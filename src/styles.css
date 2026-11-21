@@ -415,6 +415,13 @@ kbd { font: inherit; border: 1px solid var(--border); border-radius: 3px; paddin
 .agent-message-actions button:hover:enabled { background: var(--hover); color: var(--text); }
 .agent-message-actions button:disabled { cursor: default; opacity: .58; }
 .agent-tool { margin: 8px 0; overflow: hidden; border: 1px solid var(--border); border-radius: 5px; background: var(--bg); font-size: 11px; }
+.agent-questions { display: grid; gap: 12px; max-height: 320px; overflow: auto; padding: 10px 42px 10px 10px; overflow-wrap: anywhere; }
+.agent-questions header { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 4px; color: var(--text); }
+.agent-questions header small { flex: none; color: var(--muted); }
+.agent-choice, .agent-written-answer { padding: 2px 0 2px 10px; white-space: pre-wrap; }
+.agent-choice { color: var(--muted); }
+.agent-choice.selected { color: var(--text); font-weight: 600; }
+.agent-written-answer { color: var(--text); }
 .agent-tool summary { display: flex; height: 31px; align-items: center; gap: 8px; padding: 0 9px; cursor: pointer; list-style: none; }
 .agent-tool summary::-webkit-details-marker { display: none; }.agent-tool-head { display: flex; min-width: 0; flex: 1; align-items: baseline; gap: 8px; }.agent-tool-head > span:first-child { flex: 0 0 auto; font-weight: 600; }.agent-tool-command { min-width: 0; flex: 1; overflow: hidden; color: var(--muted); font: 10px/1.4 var(--editor-font-family); text-overflow: ellipsis; white-space: nowrap; }.agent-tool-meta { display: flex; min-width: 0; flex: 0 0 auto; margin-left: auto; align-items: baseline; gap: 6px; }.agent-tool-meta time,.agent-tool-meta small,.agent-tool-usage { display: block; font-size: 10px; line-height: 1; white-space: nowrap; }.agent-tool-usage,.agent-tool-meta time { color: var(--muted); font-variant-numeric: tabular-nums; }.agent-tool summary small { color: var(--muted); }
 .agent-run-stats-button { min-width: 0; height: 23px; overflow: hidden; padding: 0 5px; border-radius: 4px; color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }.agent-run-stats-button:hover,.agent-run-stats-button[aria-expanded="true"] { background: var(--hover); color: var(--text); }

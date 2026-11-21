@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { AskUserQuestions, askUserPresentation } from './AskUserCard';
 import { createPortal } from 'react-dom';
 import type { Project } from './editor';
 import Icon from './Icon';
@@ -144,10 +145,29 @@ const bashRecorded=(snapshot:PiSessionSnapshot,item:PiDirectBashState)=>snapshot
   return value.role==='bashExecution'&&value.command===item.command&&timestamp!==undefined&&timestamp>=item.startedAt;});
 const snapshotBash=(snapshot:PiSessionSnapshot,previous?:ChatState)=>{const bash=previous?.bash;if(snapshot.bash)return snapshot.bash;if(!bash)return undefined;
   return bashRecorded(snapshot,bash)?undefined:bash;};
+// Pi timestamps the persisted Bash message at completion. Keep the observed start
+// across snapshot refreshes so a user message during execution still closes it.
+function messagesWithBashStarts(snapshot:PiSessionSnapshot,previous?:ChatState){
+  if(!previous)return snapshot.messages;
+  const observed=new Map<string,number>();
+  for(const message of previous.messages){
+    const item=record(message);
+    if(item.role==='bashExecution'&&typeof item.startedAt==='number')observed.set(messageKey(message),item.startedAt);
+  }
+  const pending=[...(previous.bashHistory??[]),...(previous.bash?[previous.bash]:[])];
+  return snapshot.messages.map(message=>{
+    const item=record(message);
+    if(item.role!=='bashExecution'||typeof item.startedAt==='number')return message;
+    const timestamp=messageTimestamp(message)??0;
+    const index=pending.findIndex(bash=>bash.command===item.command&&bash.startedAt<=timestamp);
+    const startedAt=observed.get(messageKey(message))??(index>=0?pending.splice(index,1)[0].startedAt:undefined);
+    return startedAt===undefined?message:{...item,startedAt};
+  });
+}
 export const withSnapshot=(snapshot:PiSessionSnapshot,previous?:ChatState):ChatState=>({
-  ...snapshot,tools:(()=>{const previousTools=previous?.tools??[];const history=toolsFromMessages(snapshot.messages).map(tool=>{
+  ...snapshot,messages:messagesWithBashStarts(snapshot,previous),tools:(()=>{const previousTools=previous?.tools??[];const history=toolsFromMessages(snapshot.messages).map(tool=>{
       const existing=previousTools.find(item=>item.id===tool.id);
-      return existing?{...tool,startedAt:tool.startedAt??existing.startedAt,durationMs:tool.durationMs??existing.durationMs,usage:tool.usage??existing.usage}:tool;});
+      return existing?{...tool,result:tool.result??existing.result,startedAt:tool.startedAt??existing.startedAt,durationMs:tool.durationMs??existing.durationMs,usage:tool.usage??existing.usage}:tool;});
     const known=new Set(history.map(tool=>tool.id));
     return [...history,...previousTools.filter(tool=>tool.status==='running'&&!known.has(tool.id))];})(),streamText:'',streamThinking:'',
   entries:previous?.entries??[],leafId:previous?.leafId??null,queue:snapshot.queue??previous?.queue??EMPTY_QUEUE,
@@ -182,6 +202,12 @@ export const buildRuns=(state:ChatState):ChatRun[]=>{
   const availablePins=new Map<string,CodeReference>();
   const pendingPinCalls=new Set<string>();
   const ensureRun=()=>current??(current={key:runKey(runs.length),user:'',items:[],stats:emptyRunStats()},runs.push(current),current);
+  const bashRun=(startedAt:number)=>{
+    for(let index=runs.length-1;index>=0;index--){
+      if((runs[index].userTimestamp??0)<=startedAt)return runs[index];
+    }
+    return runs[0]??ensureRun();
+  };
   for(const message of state.messages){const item=record(message);const role=item.role;
     if(role==='user'){availablePins.clear();pendingPinCalls.clear();const text=messageText(message);const found=userEntries.findIndex((entry,index)=>index>=userIndex&&messageText(entry.message)===text);const entry=found>=0?userEntries[found]:undefined;if(found>=0)userIndex=found+1;
       current={key:runKey(runs.length),user:text,userTimestamp:messageTimestamp(message),userEntryId:entry?.id,items:[],stats:emptyRunStats()};runs.push(current);continue;}
@@ -207,9 +233,11 @@ export const buildRuns=(state:ChatState):ChatRun[]=>{
       if(pendingPinCalls.delete(id)&&!item.isError&&item.toolName===CODE_PIN_TOOL)for(const reference of codeReferences(item.details))availablePins.set(reference.href,reference);
       if(durationMs!==undefined)run.stats.toolTimeMs+=durationMs;run.stats.calls.push({key:`tool-${id||run.stats.calls.length}`,type:'tool',name:String(item.toolName??'Tool'),durationMs,usage});
       const timestamp=messageTimestamp(message);if(timestamp!==undefined)run.lastEventAt=Math.max(run.lastEventAt??0,timestamp);if(!id||placed.has(id))continue;const tool=tools.get(id);if(tool){run.items.push({type:'tool',key:id,tool});placed.add(id);}}
-    if(role==='bashExecution'){const run=ensureRun();run.items.push({type:'bash',key:`bash-${run.items.length}-${String(item.timestamp??'')}`,bash:{
+    if(role==='bashExecution'){const startedAt=numberValue(item.startedAt)??messageTimestamp(message)??0;
+      const run=typeof item.startedAt==='number'?bashRun(startedAt):ensureRun();
+      run.items.push({type:'bash',key:`direct-bash-${startedAt}-${item.command}`,bash:{
       command:String(item.command??''),output:String(item.output??''),status:item.cancelled||item.exitCode===0?'done':'error',excludeFromContext:!!item.excludeFromContext,
-      startedAt:messageTimestamp(message)??0,exitCode:typeof item.exitCode==='number'?item.exitCode:null,cancelled:!!item.cancelled,truncated:!!item.truncated,
+      startedAt,exitCode:typeof item.exitCode==='number'?item.exitCode:null,cancelled:!!item.cancelled,truncated:!!item.truncated,
       fullOutputPath:typeof item.fullOutputPath==='string'?item.fullOutputPath:undefined,
     }});}
     if(role==='custom'&&item.display!==false){const run=ensureRun();run.items.push({type:'custom',key:`custom-${run.items.length}-${String(item.timestamp??'')}`,
@@ -226,8 +254,11 @@ export const buildRuns=(state:ChatState):ChatRun[]=>{
   for(const operation of state.summaryOperations){if(placedSummaries.has(operation.id))continue;
     const run=runs.find(run=>run.key===operation.runKey)??live;run.items.push({type:'summaryOperation',key:operation.id,summary:operation});}
   if(state.streamText)live.items.push({type:'answer',key:'stream-answer',text:state.streamText,streaming:true});
-  if(state.bashHistory?.length)for(const item of state.bashHistory)live.items.push({type:'bash',key:`direct-bash-${item.startedAt}-${item.command}`,bash:item});
-  if(state.bash)live.items.push({type:'bash',key:'direct-bash-active',bash:state.bash});
+  const directCommands=[...(state.bashHistory??[]),...(state.bash?[state.bash]:[])];
+  for(const bash of directCommands){
+    const run=bashRun(bash.startedAt);
+    run.items.push({type:'bash',key:`direct-bash-${bash.startedAt}-${bash.command}`,bash});
+  }
   for(const run of runs){const settledAt=state.settledRuns[run.key]??run.lastEventAt;if(run.userTimestamp!==undefined&&settledAt!==undefined&&settledAt>=run.userTimestamp)run.stats.elapsedMs=settledAt-run.userTimestamp;}
   return runs.filter(run=>run.user||run.items.length);
 };
@@ -363,23 +394,27 @@ function TimelineSummaryCard({item,onToggle}:{item:RunItem;onToggle:()=>void}){
     <div className="agent-special-content"><MarkdownContent text={item.text??''}/>{item.type==='custom'&&record(item.raw).details!==undefined&&<pre>{messageJson(record(item.raw).details)}</pre>}</div>
   </details>;
 }
-function BashCard({bash,onAbort,onToggle}:{bash:PiDirectBashState;onAbort?:()=>void;onToggle:()=>void}){
+function BashCard({bash,laterUserMessage,onAbort,onToggle}:{bash:PiDirectBashState;laterUserMessage:boolean;onAbort?:()=>void;onToggle:()=>void}){
   const status=bash.status==='running'?'running':bash.cancelled?'cancelled':bash.exitCode!==undefined&&bash.exitCode!==null?`exit ${bash.exitCode}`:bash.status==='error'?'error':'done';
   const output=bash.output||(bash.status==='running'?'Waiting for output…':'(no output)');
-  return <details className={`agent-bash-message ${bash.excludeFromContext?'excluded':'direct'} ${bash.status}`} open onToggle={onToggle}><summary><span className="agent-bash-head"><strong>{bash.excludeFromContext?'!!bash':'!bash'}</strong>
+  return <details className={`agent-bash-message ${bash.excludeFromContext?'excluded':'direct'} ${bash.status}`} open={!laterUserMessage||bash.status==='running'} onToggle={onToggle}><summary><span className="agent-bash-head"><strong>{bash.excludeFromContext?'!!bash':'!bash'}</strong>
     <code title={bash.command}>{bash.command}</code></span><span>{status}</span>
     {bash.status==='running'&&onAbort&&<button type="button" className="agent-bash-stop" title="Stop Bash" aria-label="Stop Bash" onClick={event=>{event.preventDefault();event.stopPropagation();onAbort();}}>Stop</button>}</summary>
     <pre>{output}{bash.error?`\n${bash.error}`:''}{bash.truncated&&bash.fullOutputPath?`\n\nOutput truncated. Full output: ${bash.fullOutputPath}`:''}</pre></details>;
 }
 function ToolCard({tool,now,onOpenDetail,onToggle}:{tool:ToolState;now:number;onOpenDetail:()=>void;onToggle:()=>void}){
-  const view=toolPresentation(tool);const body=view.body??messageJson({input:tool.args,output:tool.result});
+  const ask=tool.name==='ask_user'?askUserPresentation(tool):undefined;
+  const view=ask?{label:tool.name,detail:ask.detail,body:toolOutputText(tool)}:toolPresentation(tool);
+  const body=view.body??messageJson({input:tool.args,output:tool.result});
+  const status=ask?.status??tool.status;
   const duration=toolDuration(tool,now);const isDiff=tool.name.toLowerCase()==='edit'&&!!view.body?.trim();
   const rows=isDiff?editDiffRows(body.endsWith('\n')?body.slice(0,-1):body):[];
-  return <details className={`agent-tool ${tool.status}`} onToggle={onToggle}><summary><span className="agent-tool-head"><span>{view.label}</span>
+  return <details className={`agent-tool ${status.replace(' ','-')}`} onToggle={onToggle}><summary><span className="agent-tool-head"><span>{view.label}</span>
     {view.detail&&<span className="agent-tool-command" title={view.detail}>{view.detail}</span>}</span>
-    <span className="agent-tool-meta">{tool.usage&&<span className="agent-tool-usage">{usageMeta(tool.usage)}</span>}{duration!==undefined&&<time>{formatToolDuration(duration)}</time>}<small>{tool.status}</small></span></summary>
+    <span className="agent-tool-meta">{tool.usage&&<span className="agent-tool-usage">{usageMeta(tool.usage)}</span>}{ask&&ask.questions.length>1&&<span className="agent-tool-usage">{ask.questions.length-1} more</span>}{duration!==undefined&&<time>{formatToolDuration(duration)}</time>}<small>{status}</small></span></summary>
     <div className="agent-tool-detail"><button type="button" className="agent-tool-expand" title="Open in Editor" aria-label={`Open ${tool.name} details in editor`} onClick={onOpenDetail}><Icon name="expand" size={13}/></button>
-      {isDiff?<div className="agent-tool-diff"><div className="agent-tool-diff-lines">{rows.map((row,index)=><span className={`agent-tool-diff-line${row.marker==='+'?' add':row.marker==='-'?' del':''}`} key={index}><span className="agent-tool-diff-prefix">{row.prefix}</span>{row.segments.map((segment,part)=>segment.changed?<mark key={part}>{segment.text}</mark>:<span key={part}>{segment.text}</span>)}</span>)}</div></div>
+      {!!ask?.questions.length&&<AskUserQuestions questions={ask.questions}/>}
+      {ask?.questions.length&&status!=='error'?null:isDiff?<div className="agent-tool-diff"><div className="agent-tool-diff-lines">{rows.map((row,index)=><span className={`agent-tool-diff-line${row.marker==='+'?' add':row.marker==='-'?' del':''}`} key={index}><span className="agent-tool-diff-prefix">{row.prefix}</span>{row.segments.map((segment,part)=>segment.changed?<mark key={part}>{segment.text}</mark>:<span key={part}>{segment.text}</span>)}</span>)}</div></div>
         :<pre className={view.body!==undefined?'agent-tool-output':undefined}>{body||(tool.status==='running'?'Waiting for output…':'(no output)')}</pre>}</div></details>;
 }
 function QueueMessage({message,retained,onAppend,onReplace,onDelete,onSend,replaceDisabled=false}:{message:string;retained?:boolean;onAppend?:()=>void;onReplace?:()=>void;onDelete?:()=>void;onSend?:()=>void;replaceDisabled?:boolean}){
@@ -1462,7 +1497,11 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
             if(part.type==='thinking')return <details className="agent-thinking" key={part.key} open={part.streaming||undefined} onToggle={()=>requestAnimationFrame(updateRunRail)}><summary title="Toggle thought process"><Icon name="thought" size={16}/><span>Thought process</span></summary><div>{part.text}</div></details>;
             if(part.type==='fallback')return <details className="agent-unknown-message" key={part.key} onToggle={()=>requestAnimationFrame(updateRunRail)}><summary><span>Unsupported message</span><code>{part.label}</code>
               <small>{part.text||'Raw message data is available.'}</small></summary><pre>{messageJson(part.raw)}</pre></details>;
-            if(part.type==='bash'&&part.bash)return <BashCard bash={part.bash} key={part.key} onAbort={part.bash.status==='running'?()=>void abortBash():undefined} onToggle={()=>requestAnimationFrame(updateRunRail)}/>;
+            if(part.type==='bash'&&part.bash){
+              const latest=runs.at(-1);
+              const laterUserMessage=run!==latest||(part.bash.startedAt>0&&(latest?.userTimestamp??0)>part.bash.startedAt);
+              return <BashCard bash={part.bash} key={part.key} laterUserMessage={laterUserMessage} onAbort={part.bash.status==='running'?()=>void abortBash():undefined} onToggle={()=>requestAnimationFrame(updateRunRail)}/>;
+            }
             if(part.type==='custom'||part.type==='branchSummary'||part.type==='compactionSummary')return <TimelineSummaryCard item={part} key={part.key} onToggle={()=>requestAnimationFrame(updateRunRail)}/>;
             if(part.tool)return <ToolCard key={part.key} tool={part.tool} now={toolClock} onOpenDetail={()=>onOpenToolDetail(toolDetail(current,part.tool!,toolClock))} onToggle={()=>requestAnimationFrame(updateRunRail)}/>;
             return null;

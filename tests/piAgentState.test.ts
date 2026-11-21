@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { appendInputHistory, buildRuns, directBashCommand, editDiffRows, formatAgentTokens, formatContextPercent, formatToolDuration, normalizeInputHistory, retryCancelOperation, shouldShowAssistantActions, toggleDirectBashInput, toolPresentation, updateAutoRetryState, updateEvent, withSnapshot } from '../src/AgentChat';
 import type { ToolState } from '../src/AgentChat';
+import { askUserPresentation } from '../src/AskUserCard';
 import type { PiSessionSnapshot } from '../shared/piTypes';
 import { calculatePiCacheHitPercent, countPiSessionRuns } from '../shared/piSession';
 import { acceptPiQueueHead, emptyPiQueue, mergePiQueues, updatePiQueueItem } from '../shared/piQueue';
@@ -259,4 +260,34 @@ test('snapshot refresh keeps a running tool start time',()=>{
   assert.equal(refreshed.tools.length,1);
   assert.equal(refreshed.tools[0].startedAt,1000);
   assert.equal(refreshed.tools[0].durationMs,undefined);
+});
+
+test('ask_user cards retain submitted answers and distinguish interruption from a negative answer',()=>{
+  const questions=[
+    {id:'tool',prompt:'Package manager?',options:[{label:'PNPM',value:'pnpm'}]},
+    {id:'review',type:'confirm',prompt:'Review?'},
+    {id:'notes',type:'editor',prompt:'Notes'},
+  ];
+  const answers=[{id:'tool',value:'pnpm',label:'PNPM'},{id:'review',value:false,label:'No'}];
+  const tool:ToolState={id:'qa',runKey:'run',name:'ask_user',status:'done',args:{questions}};
+  for(const [reason,status] of [['timeout','timed out'],['cancelled','cancelled']]){
+    const view=askUserPresentation({...tool,result:{details:{answers,reason,cancelled:true,interruptedQuestionId:'notes'}}});
+    assert.equal(view.detail,'select: Package manager? user: PNPM');
+    assert.equal(view.status,status);
+    assert.deepEqual(view.questions[1].choices.map(choice=>choice.selected),[false,true]);
+    assert.equal(view.questions[2].interruption,status);
+  }
+  const input=askUserPresentation({...tool,args:{questions:[questions[2]]},result:{details:{answers:[{id:'notes',value:'First\n  second'}]}}});
+  assert.equal(input.detail,'editor: Notes user: First…');
+  assert.deepEqual(input.questions[0].written,['First\n  second']);
+});
+
+test('a recorded bash keeps its start time across refreshes when a user message arrives during execution',()=>{
+  const command='git status';
+  const previous={...withSnapshot(snapshot),bashHistory:[{command,output:'',startedAt:10,status:'done' as const,excludeFromContext:false}]};
+  const history={...snapshot,messages:[{role:'user',content:'Next',timestamp:15},{role:'bashExecution',command,exitCode:0,timestamp:20}]};
+  const refreshed=withSnapshot(history,previous);
+  const run=buildRuns(withSnapshot(history,refreshed))[0];
+  assert.equal(run.userTimestamp,15);
+  assert.equal(run.items[0].bash?.startedAt,10);
 });

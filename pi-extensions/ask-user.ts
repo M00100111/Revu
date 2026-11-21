@@ -67,7 +67,7 @@ export default function askUser(pi:ExtensionAPI){
       const controller=new AbortController();const abort=()=>controller.abort();
       if(signal?.aborted)abort();else signal?.addEventListener('abort',abort,{once:true});
       const deadline=params.timeout===undefined?undefined:Date.now()+params.timeout;
-      let cancelled=false;let reason:string|undefined;
+      let cancelled=false;let reason:string|undefined;let interruptedQuestionId:string|undefined;
       try{
         // Queue the whole group at once, keeping Question and draft state continuous between answers.
         const pending=questions.map((question,index)=>ui.revuAskUser({
@@ -79,7 +79,10 @@ export default function askUser(pi:ExtensionAPI){
         for(let index=0;index<questions.length;index++){
           const outcome=await settled[index];if('error' in outcome)throw outcome.error;
           const reply=outcome.reply;const question=questions[index];
-          if('cancelled' in reply){cancelled=true;reason=signal?.aborted?'aborted':deadline!==undefined&&Date.now()>=deadline?'timeout':'cancelled';break;}
+          if('cancelled' in reply){
+            cancelled=true;interruptedQuestionId=question.id;
+            reason=signal?.aborted?'aborted':deadline!==undefined&&Date.now()>=deadline?'timeout':'cancelled';break;
+          }
           let answer:Answer;
           if(question.type==='confirm'){
             if(!('confirmed' in reply))throw new Error('Invalid confirmation response.');
@@ -94,7 +97,7 @@ export default function askUser(pi:ExtensionAPI){
         }
       }finally{controller.abort();signal?.removeEventListener('abort',abort);}
       const text=answers.map(answer=>`${answer.id}: ${JSON.stringify(answer.value)}`).join('\n');
-      return {content:[{type:'text' as const,text:[cancelled?`Questionnaire ${reason}. Unanswered questions have no answer; cancellation is not approval.`:'User answers:',text].filter(Boolean).join('\n')}],details:{questions,answers,cancelled,...(reason?{reason}:{})}};
+      return {content:[{type:'text' as const,text:[cancelled?`Questionnaire ${reason}. Unanswered questions have no answer; cancellation is not approval.`:'User answers:',text].filter(Boolean).join('\n')}],details:{questions,answers,cancelled,...(reason?{reason,interruptedQuestionId}:{})}};
     },
   });
 }
