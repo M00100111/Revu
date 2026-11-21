@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld('revu',{
     openSession:(projectId:string,sessionId:string)=>agentInvoke<PiSessionSnapshot>({action:'openSession',projectId,sessionId}),
     getSessionSnapshot:(projectId:string,sessionId:string)=>agentInvoke<PiSessionSnapshot>({action:'getSessionSnapshot',projectId,sessionId}),
     leaveSession:(sessionId:string)=>agentInvoke<void>({action:'leaveSession',sessionId}),
+    retainSessionTabs:(sessionIds:string[])=>agentInvoke<void>({action:'retainSessionTabs',sessionIds}),
     openDiscoveredSession:(projectId:string,sessionId:string)=>agentInvoke<PiDiscoveredSessionResponse>({action:'openDiscoveredSession',projectId,sessionId}),
     newSession:(projectId:string)=>agentInvoke<PiSessionSnapshot>({action:'newSession',projectId}),
     latestSession:(projectId:string)=>agentInvoke<string|null>({action:'latestSession',projectId}),

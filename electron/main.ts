@@ -146,6 +146,7 @@ async function invokeAgent(body:PiAgentRequest,sourceWindow?:BrowserWindow|null)
     case 'openSession':return piManager.openSession(body.projectId,body.sessionId);
     case 'getSessionSnapshot':return piManager.getSessionSnapshot(body.projectId,body.sessionId);
     case 'leaveSession':return piManager.leaveSession(body.sessionId);
+    case 'retainSessionTabs':return piManager.retainSessionTabs(body.sessionIds);
     case 'openDiscoveredSession':{
       const session=await piManager.discoveredSession(body.projectId,body.sessionId);
       const project=await workspace.add(session.cwd);await rememberFolder(project.root);await persistOpenFolders();

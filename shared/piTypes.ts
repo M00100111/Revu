@@ -251,6 +251,7 @@ export type PiAgentRequest=
   |{action:'openSession';projectId:string;sessionId:string}
   |{action:'getSessionSnapshot';projectId:string;sessionId:string}
   |{action:'leaveSession';sessionId:string}
+  |{action:'retainSessionTabs';sessionIds:string[]}
   |{action:'openDiscoveredSession';projectId:string;sessionId:string}
   |{action:'newSession';projectId:string}
   |{action:'latestSession'|'prepareNew'|'abandonNew';projectId:string}

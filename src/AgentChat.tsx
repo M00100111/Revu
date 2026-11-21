@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { SessionTabRetention } from './sessionTabRetention';
 import { AskUserQuestions, askUserPresentation } from './AskUserCard';
 import { createPortal } from 'react-dom';
 import type { Project } from './editor';
@@ -728,6 +729,12 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
   const [bashHint,setBashHint]=useState(false);
   const [previewRunKey,setPreviewRunKey]=useState('');const [previewTop,setPreviewTop]=useState(8);
   const [openSessionIds,setOpenSessionIds]=useState<Record<string,string[]>>({});
+  const [tabRetention]=useState(()=>new SessionTabRetention());
+  useEffect(()=>{
+    const tabs=new Map(projects.map(project=>[project.id,openSessionIds[project.id]??[]]));
+    const kept=tabRetention.update(tabs,selectedProjectId,selectedSessionId);
+    void window.revu.agent.retainSessionTabs(kept).then(unwrap).catch(error=>notify('warning',errorMessage(error)));
+  },[openSessionIds,projects,selectedProjectId,selectedSessionId,tabRetention,notify]);
   const [sessionTabCapacity,setSessionTabCapacity]=useState(1);const [sessionMenuOpen,setSessionMenuOpen]=useState(false);const [sessionMenuStyle,setSessionMenuStyle]=useState<React.CSSProperties>({});
   const [statsRunKey,setStatsRunKey]=useState('');const [statsMenuStyle,setStatsMenuStyle]=useState<React.CSSProperties>({});
   const [doneSessionIds,setDoneSessionIds]=useState<Set<string>>(()=>new Set());

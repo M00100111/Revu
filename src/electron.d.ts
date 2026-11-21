@@ -18,6 +18,7 @@ interface RevuAgentApi {
   openSession(projectId:string,sessionId:string):Promise<RevuResponse<PiSessionSnapshot>>;
   getSessionSnapshot(projectId:string,sessionId:string):Promise<RevuResponse<PiSessionSnapshot>>;
   leaveSession(sessionId:string):Promise<RevuResponse<void>>;
+  retainSessionTabs(sessionIds:string[]):Promise<RevuResponse<void>>;
   openDiscoveredSession(projectId:string,sessionId:string):Promise<RevuResponse<PiDiscoveredSessionResponse>>;
   newSession(projectId:string):Promise<RevuResponse<PiSessionSnapshot>>;
   latestSession(projectId:string):Promise<RevuResponse<string|null>>;

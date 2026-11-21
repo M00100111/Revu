@@ -174,6 +174,7 @@ export class PiManager {
   private selectedSessionId:string|null=null;
   private selectionRevision=0;
   private readonly idleTimers=new IdleRuntimeTimers();
+  private retainedTabs=new Set<string>();
   private modulePromise:Promise<PiModule>|null=null;
   private readonly agentDir:string;
   private readonly nativeSessionsDir=nativePiSessionsDir();
@@ -549,6 +550,13 @@ export class PiManager {
 
   leaveSession(sessionId:string){
     if(this.selectedSessionId===sessionId)this.selectRuntime(null);
+  }
+
+  retainSessionTabs(sessionIds:string[]){
+    const next=new Set(sessionIds.slice(0,6));
+    if(next.size===this.retainedTabs.size&&[...next].every(id=>this.retainedTabs.has(id)))return;
+    this.retainedTabs=next;
+    this.updateIdleTimers();
   }
 
   async discoveredSession(projectId:string,sessionId:string){
@@ -1093,7 +1101,10 @@ export class PiManager {
     this.selectionRevision++;
     this.selectedSessionId=id;
     const handle=id?this.runtimes.get(id):undefined;
-    if(handle)handle.closedTab=false;
+    if(handle){
+      this.idleTimers.cancel(handle.sessionId);
+      handle.closedTab=false;
+    }
     this.updateIdleTimers();
   }
   private updateIdleTimers(){
@@ -1102,10 +1113,10 @@ export class PiManager {
   private updateIdleTimer(id:string){
     const handle=this.runtimes.get(id);
     if(!handle)return;
-    const eligible=()=>this.runtimes.get(id)===handle&&id!==this.selectedSessionId
+    const eligible=()=>this.runtimes.get(id)===handle&&(handle.closedTab||!this.retainedTabs.has(id))
       &&!this.hiddenDrafts.has(id)&&(handle.status==='idle'||(handle.status==='error'&&!!handle.closedTab))&&!handle.ui.size&&!handle.isCompacting&&handle.bash?.status!=='running'
       &&!this.treeOperations.has(id)&&!this.resourceOperations.has(id)&&!this.changingTrust&&!this.changingRuntime;
-    if(handle.closedTab&&eligible()&&(handle.status==='error'||!handle.sessionPath||!existsSync(handle.sessionPath)))return this.disposeRuntime(id);
+    if(handle.closedTab&&eligible()&&(!handle.sessionPath||!existsSync(handle.sessionPath)))return this.disposeRuntime(id);
     this.idleTimers.update(id,eligible,()=>void this.disposeRuntime(id));
   }
   private async disposeIdleRuntimes(){
