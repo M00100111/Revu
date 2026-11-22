@@ -77,12 +77,23 @@ app.whenReady().then(async()=>{
     const chatBundle=buildSync({entryPoints:['tests/fixtures/citationChatUi.tsx'],bundle:true,write:false,jsx:'automatic',define:{'process.env.NODE_ENV':'"production"','import.meta.url':JSON.stringify(pathToFileURL(resolve('src/Icon.tsx')).href)}});
     await window.loadURL(pathToFileURL(resolve('tests/fixtures/citationUi.html')).href);await web.insertCSS(readFileSync('src/styles.css','utf8'));
     await web.executeJavaScript(`window.calls=[];window.revu={
-      invoke:async()=>({ok:true,value:[{path:'some dir/a.ts',kind:'file'},{path:'a.ts',kind:'file'}]}),
+      invoke:async(method)=>({ok:true,value:method==='list'?[]:[{path:'some dir/a.ts',kind:'file'},{path:'a.ts',kind:'file'}]}),
       chooseChatFiles:async(...args)=>{calls.push(['choose',...args]);return window.picked??[];},
       agent:new Proxy({onEvent:()=>()=>{}},{get:(target,method)=>target[method]??(async(projectId,sessionId)=>{
         calls.push([method,projectId,sessionId]);const value=method==='latestSession'?'first':method==='openSession'?{projectId,sessionId,name:sessionId,messages:[],status:'idle',availableThinkingLevels:[],thinkingLevel:'medium'}:method==='getEntries'?{entries:[],leafId:null}:method==='listSessions'?{sessions:[]}:[];return {ok:true,value};})})};void 0;`);
     await web.executeJavaScript(chatBundle.outputFiles[0].text);
-    assert.equal(await evaluate(`document.querySelector('#cite-Test2').click();await wait();return document.querySelector('.citation-composer [data-raw]').dataset.raw;`),'@"D:/work/Test2/some dir/a.ts"');
+    const clickSidebarItem=async(selector,button)=>{
+      const point=await evaluate(`const rect=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
+        return {x:Math.floor(rect.left+rect.width/2),y:Math.floor(rect.top+rect.height/2)};`);
+      web.sendInputEvent({type:'mouseDown',button,clickCount:1,...point});
+      web.sendInputEvent({type:'mouseUp',button,clickCount:1,...point});
+    };
+    await clickSidebarItem('.open-editor-row[title="Other/Tool output"]','right');
+    assert.equal(await evaluate("return !!document.querySelector('[role=menu]');"),false);
+    await clickSidebarItem('.open-editor-row[title="Test2/some dir/a.ts"]','right');
+    assert.equal(await evaluate("return document.querySelector('[role=menuitem]')?.textContent;"),'Cite');
+    await clickSidebarItem('[role=menuitem]','left');
+    assert.equal(await evaluate(`return document.querySelector('.citation-composer [data-raw]').dataset.raw;`),'@"D:/work/Test2/some dir/a.ts"');
     assert.deepEqual(await evaluate(`document.querySelector('.citation-composer [aria-label="Edit reference"]').click();await wait();return [calls.filter(row=>row[0]==='openSession').length,calls.find(row=>row[0]==='choose'),document.querySelector('.agent-project-trigger').textContent];`),[1,['choose','Test1',{path:'D:/work/Test2/some dir/a.ts',directory:false}],'Test1']);
     await evaluate(`document.querySelector('#cite-Test1').click();document.addEventListener('click',event=>{if(event.target.closest('[aria-label="Edit reference"]'))window.trustedEditorClick=event.isTrusted;},true);`);
     const center=selector=>evaluate(`const node=document.querySelectorAll(${JSON.stringify(selector)})[1];node.scrollIntoView({block:'nearest'});const rect=node.getBoundingClientRect();return {x:Math.floor(rect.left+rect.width/2),y:Math.floor(rect.top+rect.height/2)};`);

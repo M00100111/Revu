@@ -298,7 +298,10 @@ kbd { font: inherit; border: 1px solid var(--border); border-radius: 3px; paddin
 .agent-session-tab { display: flex; min-width: 0; max-width: 145px; height: 29px; flex: 1 1 92px; align-items: center; overflow: hidden; border: 1px solid transparent; border-radius: 5px; color: var(--muted); }
 .agent-session-tab:hover { background: var(--hover); color: var(--text); }.agent-session-tab.active { border-color: var(--border); background: var(--active); color: var(--text); }
 .agent-session-tab > button:first-child { min-width: 0; height: 100%; flex: 1; overflow: hidden; padding: 0 5px 0 7px; font-size: 11px; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
-.agent-session-tab-close { display: grid; width: 21px; height: 100%; flex: 0 0 21px; place-items: center; color: var(--muted); opacity: 0; }.agent-session-tab:hover .agent-session-tab-close,.agent-session-tab.active .agent-session-tab-close,.agent-session-tab-close:focus-visible { opacity: 1; }.agent-session-tab-close:hover { color: var(--text); }
+.agent-session-tab-close { position: relative; display: grid; width: 21px; height: 100%; flex: 0 0 21px; place-items: center; color: var(--muted); opacity: 0; }
+.agent-session-tab:hover .agent-session-tab-close,.agent-session-tab.active .agent-session-tab-close,.agent-session-tab-close:focus-visible { opacity: 1; }
+.agent-session-tab-close:is(:hover,:focus-visible) { color: var(--text); }
+.agent-session-tab-close:is(:hover,:focus-visible)::before { content: ""; position: absolute; inset: 0; width: 18px; height: 18px; margin: auto; border-radius: 4px; background: color-mix(in srgb,currentColor 10%,transparent); pointer-events: none; }
 .agent-session-tab.new { min-width: 74px; }
 .agent-session-tab.status-running { color: var(--status-running); }
 .agent-session-tab.status-done { color: var(--status-done); }

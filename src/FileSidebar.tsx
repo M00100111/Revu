@@ -9,6 +9,8 @@ import { showContextMenu } from './ContextMenu';
 import type {CiteRequest} from '../shared/citations';
 import { moveFileSidebarItem, OPEN_EDITORS_KEY, reconcileFileSidebarOrder } from './fileSidebarOrder';
 
+type SidebarEditorTab = EditorTabItem & {file?: Pick<OpenFile,'project'|'path'>};
+
 const savedOrder=()=>{
   try{
     const value=JSON.parse(localStorage.getItem('revu-file-sidebar-order')??'[]');
@@ -20,7 +22,7 @@ export default function FileSidebar({width,projects,projectsLoaded,tabs,activeId
   expandedDirectories,onResize,onAddFolder,onSelectTab,onKeep,onOpenFile,onCloseProject,onExpandAllSubfolders,onCollapseAllSubfolders,
   onProjectToggle,onDirectoryToggle,onError,onCite,target}:{
   onCite:(request:CiteRequest)=>void;target?:{projectId:string;path:string;token:number};
-  width:number;projects:Project[];projectsLoaded:boolean;tabs:EditorTabItem[];activeId:string|null;activeFile?:OpenFile;mixed:boolean;picking:boolean;
+  width:number;projects:Project[];projectsLoaded:boolean;tabs:SidebarEditorTab[];activeId:string|null;activeFile?:OpenFile;mixed:boolean;picking:boolean;
   collapsedProjects:ReadonlySet<string>;expandedDirectories:ReadonlySet<string>;
   onResize:(width:number)=>void;onAddFolder:(root?:string)=>void;onSelectTab:(tab:EditorTabItem)=>void;onKeep:(id:string)=>void;
   onOpenFile:(project:Project,path:string,keep:boolean)=>void;onCloseProject:(project:Project)=>void;
@@ -79,9 +81,15 @@ export default function FileSidebar({width,projects,projectsLoaded,tabs,activeId
   };
   const dragClass=(key:string)=>'sidebar-top-entry '+(dragged===key?'dragging ':'')+
     (drop?.key===key?(drop.after?'drop-after':'drop-before'):'');
-  const editorRow=(tab:EditorTabItem,showProject:boolean)=><button key={tab.id}
+  const editorRow=(tab:SidebarEditorTab,showProject:boolean)=><button key={tab.id}
     className={'open-editor-row '+(activeId===tab.id?'active':'')} title={tab.title}
-    onClick={()=>onSelectTab(tab)} onDoubleClick={()=>onKeep(tab.id)}>
+    onClick={()=>onSelectTab(tab)} onDoubleClick={()=>onKeep(tab.id)}
+    onContextMenu={async event=>{
+      const {file}=tab;
+      if(!file)return;
+      const action=await showContextMenu(event,[{id:'cite',label:'Cite'}]);
+      if(action==='cite')onCite({projectId:file.project.id,path:file.path});
+    }}>
     <Icon name="file" size={13}/><span className={tab.preview?'preview-name':undefined}>{tab.name}</span>
     {showProject&&<small>{tab.projectName}</small>}{tab.dirty&&<i className="dirty-dot"/>}
   </button>;
