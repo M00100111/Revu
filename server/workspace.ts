@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFile, readdir, realpath, stat, open, unlink, mkdir } from 'node:fs/promises';
 import { watch, type FSWatcher } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import type { Project, Snapshot, ProjectStatus, ChangeFile, ProjectPathEntry } from '../shared/types';
+import type { Project, Snapshot, ProjectStatus, ChangeFile, ProjectPathEntry, ChatPathDirectory } from '../shared/types';
 import {decodeCodeText,isKnownBinaryCodePath,type CodeEncoding} from '../shared/codeSource';
 import { git } from './git';
 
@@ -101,10 +101,34 @@ export class Workspace {
     this.projects.delete(id);this.locks.delete(id);
   }
   async list(p: Registered, path: string) {
-    const entries = await readdir(await this.path(p, path), { withFileTypes: true });
+    return this.directoryEntries(await this.path(p,path));
+  }
+  private async directoryEntries(directory:string) {
+    const entries = await readdir(directory, { withFileTypes: true });
     return entries.filter(e => e.name !== '.git' && (e.isFile() || e.isDirectory()))
       .map(e => ({ name: e.name, kind: e.isDirectory() ? 'directory' as const : 'file' as const }))
       .sort((a, b) => a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === 'directory' ? -1 : 1);
+  }
+  async chatDirectory(project:Registered,prefix:string,searchProject:boolean):Promise<ChatPathDirectory> {
+    const directory=resolve(project.root,prefix);
+    const breadcrumbs:ChatPathDirectory['breadcrumbs']=[];
+    for(let current=directory;;current=dirname(current)){
+      const rel=relative(project.root,current).split(sep).join('/');
+      breadcrumbs.unshift({name:basename(current)||current.split(sep).join('/'),query:rel?rel.replace(/\/$/,'')+'/':''});
+      if(current===dirname(current)||(current!==directory&&current!==project.root&&this.inside(current,project.root)))break;
+    }
+    const result:ChatPathDirectory={directory:directory.split(sep).join('/'),breadcrumbs,entries:[]};
+    try{
+      if(directory.split(sep).some(part=>part.toLowerCase()==='.git'))throw new HttpError(403,'Path access denied');
+      const entries=this.inside(project.root,directory)
+        ?await this.list(project,relative(project.root,directory)):await this.directoryEntries(directory);
+      result.entries=entries.map(({name,kind})=>({path:name+(kind==='directory'?'/':''),kind}));
+      if(searchProject&&directory===project.root){
+        const indexed=await this.paths(project);
+        result.entries=result.entries.concat(indexed.filter(entry=>entry.path.replace(/\/$/,'').includes('/')));
+      }
+    }catch(error){result.error=error instanceof Error?error.message:String(error);}
+    return result;
   }
   async paths(p:Registered):Promise<ProjectPathEntry[]> {
     const found=new Map<string,ProjectPathEntry['kind']>();

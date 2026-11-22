@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, readFile, rm, rename, unlink, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join, sep } from 'node:path';
 import { Workspace, decode } from '../server/workspace';
 import { git } from '../server/git';
 
@@ -18,6 +18,27 @@ async function fixture(run:(root:string,w:Workspace)=>Promise<void>){
     await run(root,w);
   }finally{w.dispose();await rm(root,{recursive:true,force:true});}
 }
+test('chat browses one directory at a time including parents and siblings, and retains project-wide filename search',()=>fixture(async(root,w)=>{
+  await mkdir(join(root,'first','empty'),{recursive:true});
+  await mkdir(join(root,'second','child'),{recursive:true});
+  await writeFile(join(root,'first','empty','nested.txt'),'');
+  const project=w.get((await w.add(join(root,'first'))).id);
+  const local=await w.chatDirectory(project,'',false);
+  assert.deepEqual(local.breadcrumbs,[{name:basename(root),query:'../'},{name:'first',query:''}]);
+  assert.deepEqual(local.entries,[{path:'empty/',kind:'directory'}]);
+  assert.ok((await w.chatDirectory(project,'',true)).entries.some(entry=>entry.path==='empty/nested.txt'));
+  const parent=await w.chatDirectory(project,'../',false);
+  assert.ok(parent.entries.some(entry=>entry.path==='second/'));
+  assert.ok(parent.entries.every(entry=>!entry.path.includes('child')&&entry.path!=='.git/'));
+  const sibling=await w.chatDirectory(project,'../second/',true);
+  assert.equal(sibling.directory,join(root,'second').split(sep).join('/'));
+  assert.deepEqual(sibling.breadcrumbs,[{name:basename(root),query:'../'},{name:'second',query:'../second/'}]);
+  assert.deepEqual(sibling.entries,[{path:'child/',kind:'directory'}]);
+  const missing=await w.chatDirectory(project,'../missing/',false);
+  assert.ok(missing.error);
+  assert.equal(missing.breadcrumbs[0].query,'../');
+  await assert.rejects(w.path(project,'../second'),/outside the project/);
+}));
 test('staged and unstaged modifications share fixed HEAD and saving leaves index intact',()=>fixture(async(root,w)=>{
   const project=await w.add(root),p=w.get(project.id);
   await writeFile(join(root,'file.txt'),'STAGED\ntwo\nthree\n');await git(root,['add','file.txt']);

@@ -9,6 +9,13 @@ export interface Project {
 }
 export interface Entry { name: string; kind: 'file' | 'directory' }
 export interface ProjectPathEntry { path:string; kind:'file'|'directory' }
+export interface ChatPathDirectory {
+  directory:string;
+  breadcrumbs:{name:string;query:string}[];
+  entries:ProjectPathEntry[];
+  error?:string;
+}
+export type ChatFilePickerOptions = {startDirectory:string} | {path:string;directory:boolean};
 export interface Snapshot {
   text: string;
   hash: string;

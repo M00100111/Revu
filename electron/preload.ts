@@ -7,7 +7,7 @@ const agentInvoke=<T>(body:PiAgentRequest)=>ipcRenderer.invoke('revu:agent',body
 contextBridge.exposeInMainWorld('revu',{
   invoke:(body:Record<string,unknown>)=>ipcRenderer.invoke('revu:invoke',body),
   copyText:(text:string)=>ipcRenderer.invoke('revu:copy-text',text) as Promise<boolean>,
-  chooseChatFiles:(projectId:string,replacing?:{path:string;directory:boolean})=>ipcRenderer.invoke('revu:choose-chat-files',projectId,replacing) as Promise<string[]>,
+  chooseChatFiles:(projectId:string,options?:import('../shared/types').ChatFilePickerOptions)=>ipcRenderer.invoke('revu:choose-chat-files',projectId,options) as Promise<string[]>,
   filePath:(file:File)=>webUtils.getPathForFile(file),
   saveChatImage:(mimeType:string,bytes:Uint8Array)=>ipcRenderer.invoke('revu:save-chat-image',mimeType,bytes) as Promise<string>,
   openExternal:(url:string)=>ipcRenderer.invoke('revu:open-external',url) as Promise<boolean>,

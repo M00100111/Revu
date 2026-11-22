@@ -255,6 +255,7 @@ kbd { font: inherit; border: 1px solid var(--border); border-radius: 3px; paddin
 .settings-main { overflow: auto; }
 .settings-content { width: min(720px,100%); padding: 42px 48px; }
 .settings-content h1 { margin: 0 0 30px; font-size: 24px; font-weight: 500; }
+.chat-toolbar-settings h2 { margin: 28px 0 0; font-size: 16px; font-weight: 500; }
 .settings-title-row { display: flex; align-items: baseline; justify-content: space-between; }
 .settings-title-row button { padding: 5px 10px; border: 1px solid var(--border); border-radius: 4px; font-size: 11px; }
 .settings-title-row button:hover { background: var(--hover); }
@@ -473,9 +474,25 @@ kbd { font: inherit; border: 1px solid var(--border); border-radius: 3px; paddin
 .agent-input-queue-toggle { position: absolute; z-index: 2; right: 10px; bottom: 39px; display: grid; width: 27px; height: 27px; place-items: center; border-radius: 4px; color: var(--muted); }.agent-input-queue-toggle:hover { background: var(--hover); color: var(--text); }
 .agent-chat.file-drag-active,.agent-chat.file-drag-active * { cursor: copy !important; }
 .agent-path-menu { position: absolute; z-index: 75; right: 0; bottom: calc(100% + 7px); left: 0; max-height: 264px; overflow: auto; padding: 4px; border: 1px solid var(--border); border-radius: 7px; background: var(--panel); box-shadow: 0 12px 34px #0003; }
-.agent-path-menu button { display: flex; width: 100%; height: 31px; min-width: 0; align-items: center; gap: 8px; padding: 0 8px; border-radius: 4px; color: var(--muted); text-align: left; }
-.agent-path-menu button:hover,.agent-path-menu button.selected { background: var(--hover); color: var(--text); }
-.agent-path-menu button span { min-width: 0; overflow: hidden; color: var(--text); font: 11px/1.3 var(--editor-font-family); text-overflow: ellipsis; white-space: nowrap; }
+.agent-command-menu button,.chat-path-row [role=option] { display: flex; width: 100%; height: 31px; min-width: 0; align-items: center; gap: 8px; padding: 0 8px; border-radius: 4px; color: var(--muted); text-align: left; }
+.agent-command-menu button:hover,.agent-command-menu button.selected,.chat-path-row:is(:hover,:focus-within,.selected) { background: var(--hover); color: var(--text); }
+.agent-command-menu button span,.chat-path-row [role=option] > span:last-child { min-width: 0; overflow: hidden; color: var(--text); font: 11px/1.3 var(--editor-font-family); text-overflow: ellipsis; white-space: nowrap; }
+.chat-path-browser { display: flex; flex-direction: column; overflow: hidden; }
+.chat-path-header { display: flex; flex: none; align-items: center; gap: 6px; padding: 0 2px 3px; margin-bottom: 3px; border-bottom: 1px solid var(--border); }
+.chat-path-header nav { display: flex; flex: 1; align-items: center; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: thin; color: var(--muted); font-size: 11px; }
+.chat-path-header nav button { flex: none; max-width: 18ch; overflow: hidden; padding: 4px; border-radius: 3px; color: inherit; text-overflow: ellipsis; white-space: nowrap; }
+.chat-path-header [aria-current=location] { color: var(--text); }
+.chat-path-header button:hover { color: var(--text); background: var(--active); }
+.chat-path-browse:hover { color: var(--text); background: color-mix(in srgb,var(--text) 22%,var(--panel)); }
+.chat-path-choose { display: grid; flex: none; width: 26px; height: 26px; place-items: center; padding: 0; border-radius: 4px; color: var(--muted); }
+.chat-path-up { display: inline-flex; flex: none; align-items: center; gap: 4px; padding: 4px; border-radius: 4px; color: var(--muted); font: 11px var(--ui-font-family); }
+.chat-path-options { overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.chat-path-row { display: flex; align-items: center; border-radius: 4px; }
+.chat-path-row [role=option] { flex: 1; }
+.chat-path-browse { display: flex; flex: none; align-items: center; justify-content: center; gap: 6px; min-width: 26px; height: 25px; padding: 0 6px; margin-right: 2px; border-radius: 3px; color: var(--muted); }
+.chat-path-hint { display: none; align-items: center; gap: 4px; font: 11px var(--ui-font-family); }
+.chat-path-row:is(:hover,:focus-within,.selected) .chat-path-hint { display: inline-flex; }
+.chat-path-hint kbd,.chat-path-up kbd { padding: 1px 4px; border-radius: 3px; background: #686868; color: #fff; font: inherit; }
 .agent-path-empty { padding: 8px 9px; color: var(--muted); font-size: 11px; }.agent-path-empty.error { color: #b6454d; }
 .agent-composer textarea { display: block; width: 100%; height: 80px; resize: none; overflow-y: hidden; padding: 11px 64px 6px 12px; border: 0; outline: 0; background: transparent; color: var(--text); font-family: var(--ui-font-family); font-size: 13px; font-weight: 400; line-height: 1.55; letter-spacing: normal; scrollbar-color: color-mix(in srgb,var(--muted) 24%,transparent) transparent; scrollbar-width: thin; }
 .agent-composer textarea::-webkit-scrollbar { width: 5px; }.agent-composer textarea::-webkit-scrollbar-track { background: transparent; }.agent-composer textarea::-webkit-scrollbar-thumb { border-radius: 5px; background: color-mix(in srgb,var(--muted) 24%,transparent); }.agent-composer textarea:hover::-webkit-scrollbar-thumb,.agent-composer textarea:focus::-webkit-scrollbar-thumb { background: color-mix(in srgb,var(--muted) 42%,transparent); }

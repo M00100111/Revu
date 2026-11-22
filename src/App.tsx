@@ -14,6 +14,7 @@ import ReviewDashboard from './ReviewDashboard';
 import ReadonlyEditor from './ReadonlyEditor';
 import SettingsPage, { SettingsSidebar, type ReviewFileLabels, type SettingsCategory } from './SettingsPage';
 import WindowControls from './WindowControls';
+import {useChatToolbarSettings} from './ChatToolbarSettings';
 import NotificationCenter, { type AppNotification, type NotificationAction, type NotificationLevel } from './NotificationCenter';
 import { defaultTabExpansion, type FileTabExpansion, type FileTabOverflow } from './tabLayout';
 import AgentChat, { type AgentNavigationRequest, type AgentNotice, type ToolDetailRequest } from './AgentChat';
@@ -52,6 +53,7 @@ export default function App(){
   const [lightThemeColor,setLightThemeColor]=useState(()=>savedColor('revu-light-theme-color','#FFFFFF'));
   const [darkThemeColor,setDarkThemeColor]=useState(()=>savedColor('revu-dark-theme-color','#191919'));
   const [showThemeSwitcher,setShowThemeSwitcher]=useState(()=>localStorage.getItem('revu-show-theme-switcher')!=='false');
+  const chatToolbar=useChatToolbarSettings();
   const [panel,setPanel]=useState<Panel>('files');
   const [syncWidths,setSyncWidths]=useState(()=>localStorage.getItem('revu-sync-sidebar-widths')!=='false');
   const [widths,setWidths]=useState(()=>({
@@ -544,7 +546,7 @@ export default function App(){
       chunkWidth={reviewChunkWidth} onChunkResize={setReviewChunkWidth} fileLabels={reviewFileLabels}/>}
     {panel==='settings'&&<SettingsSidebar width={sidebarWidth} onResize={resizeSidebar}
       category={settingsCategory} onCategoryChange={setSettingsCategory}/>}
-    {panel==='settings'?<SettingsPage category={settingsCategory} syncWidths={syncWidths} onChange={changeWidthSync}
+    {panel==='settings'?<SettingsPage chatToolbar={chatToolbar} category={settingsCategory} syncWidths={syncWidths} onChange={changeWidthSync}
       mixed={mixed} onModeChange={setMixed} hideSingleProjectTabs={hideSingleProjectTabs}
       onHideSingleProjectTabsChange={setHideSingleProjectTabs} fontSize={fontSize}
       previewMode={previewMode} onPreviewModeChange={setPreviewMode}
@@ -608,7 +610,7 @@ export default function App(){
       </div>}
     </main>
     </>}
-    <AgentChat citeRequest={citeRequest} onGoto={gotoReference} tokenizeSnapshot={tokenizeSnapshot} onOpenSettings={()=>{setSettingsCategory('chat');setPanel('settings');}} open={agentOpen} projects={projects} activeProjectId={projectId}
+    <AgentChat hiddenToolbarButtons={chatToolbar.hidden} citeRequest={citeRequest} onGoto={gotoReference} tokenizeSnapshot={tokenizeSnapshot} onOpenSettings={()=>{setSettingsCategory('chat');setPanel('settings');}} open={agentOpen} projects={projects} activeProjectId={projectId}
       dirtyProjectIds={new Set(documents.filter(file=>file.dirty).map(file=>file.project.id))}
       width={agentWidth} onResize={setAgentWidth}
       onResizeEnd={value=>localStorage.setItem('revu-agent-width',String(value))} notify={notify}

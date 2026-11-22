@@ -75,13 +75,29 @@ app.whenReady().then(async()=>{
     assert.equal(await evaluate(`document.querySelector('.citation-composer [aria-label="Delete reference"]').click();await wait();return document.querySelector('output').textContent;`),'Review  and  later');
     assert.equal(await evaluate(`const edit=document.querySelector('.citation-composer'),data=new DataTransfer();edit.focus();data.setData('text/plain','@“some dir/a.py”#L3-L4');edit.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));await wait();return edit.querySelector('[data-raw]').dataset.raw;`),'@“some dir/a.py”#L3-L4');
     const chatBundle=buildSync({entryPoints:['tests/fixtures/citationChatUi.tsx'],bundle:true,write:false,jsx:'automatic',define:{'process.env.NODE_ENV':'"production"','import.meta.url':JSON.stringify(pathToFileURL(resolve('src/Icon.tsx')).href)}});
-    await window.loadURL(pathToFileURL(resolve('tests/fixtures/citationUi.html')).href);await web.insertCSS(readFileSync('src/styles.css','utf8'));
-    await web.executeJavaScript(`window.calls=[];window.revu={
-      invoke:async(method)=>({ok:true,value:method==='list'?[]:[{path:'some dir/a.ts',kind:'file'},{path:'a.ts',kind:'file'}]}),
+    const loadChat=async(resetToolbar=false)=>{
+      await window.loadURL(pathToFileURL(resolve('tests/fixtures/citationUi.html')).href);await web.insertCSS(readFileSync('src/styles.css','utf8'));
+      await web.insertCSS('main > .agent-chat { height: calc(100vh - 32px); }');
+      if(resetToolbar)await web.executeJavaScript("for(const id of ['commands','mention','choose-file','direct-bash'])localStorage.removeItem('revu-show-chat-'+id);");
+      await web.executeJavaScript(`window.calls=[];window.revu={
+      invoke:async({action,projectId,prefix,searchProject})=>{
+        if(action!=='chatDirectory')return {ok:true,value:[]};
+        const root='D:/work/'+projectId,other=projectId==='Test1'?'Test2':'Test1';
+        const directory=prefix==='../../'?'D:/':prefix==='../'?'D:/work':prefix==='../'+other+'/'?'D:/work/'+other:prefix==='some dir/'?root+'/some dir':root;
+        const breadcrumbs=directory==='D:/'||directory==='D:/work'?[{name:'D:/',query:'../../'}]:[];
+        if(directory!=='D:/')breadcrumbs.push({name:'work',query:'../'});
+        const entries=directory==='D:/'?['work/']:directory==='D:/work'?['Test1/','Test2/']:directory.endsWith('/some dir')?['a.ts','z.ts']:['some dir/','z-dir/','a.ts',...Array.from({length:12},(_,i)=>'file'+i+'.ts'),'z.ts'];
+        if(directory!=='D:/work'&&directory!=='D:/')breadcrumbs.push(directory==='D:/work/'+other?{name:other,query:prefix}:{name:projectId,query:''});
+        if(directory.endsWith('/some dir'))breadcrumbs.push({name:'some dir',query:prefix});
+        if(searchProject)entries.push('some dir/a.ts');
+        return {ok:true,value:{directory,breadcrumbs,entries:entries.map(path=>({path,kind:path.endsWith('/')?'directory':'file'}))}};
+      },
       chooseChatFiles:async(...args)=>{calls.push(['choose',...args]);return window.picked??[];},
       agent:new Proxy({onEvent:()=>()=>{}},{get:(target,method)=>target[method]??(async(projectId,sessionId)=>{
-        calls.push([method,projectId,sessionId]);const value=method==='latestSession'?'first':method==='openSession'?{projectId,sessionId,name:sessionId,messages:[],status:'idle',availableThinkingLevels:[],thinkingLevel:'medium'}:method==='getEntries'?{entries:[],leafId:null}:method==='listSessions'?{sessions:[]}:[];return {ok:true,value};})})};void 0;`);
-    await web.executeJavaScript(chatBundle.outputFiles[0].text);
+        calls.push([method,projectId,sessionId]);const value=method==='latestSession'?'first':['openSession','getSessionSnapshot'].includes(method)?{projectId,sessionId,name:sessionId,messages:[],status:'idle',availableThinkingLevels:[],thinkingLevel:'medium'}:method==='getEntries'?{entries:[],leafId:null}:method==='listSessions'?{sessions:[]}:[];return {ok:true,value};})})};void 0;`);
+      await web.executeJavaScript(chatBundle.outputFiles[0].text);
+    };
+    await loadChat(true);
     const clickSidebarItem=async(selector,button)=>{
       const point=await evaluate(`const rect=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
         return {x:Math.floor(rect.left+rect.width/2),y:Math.floor(rect.top+rect.height/2)};`);
@@ -105,8 +121,8 @@ app.whenReady().then(async()=>{
     };
     await clickEditor();
     assert.deepEqual(await evaluate(`const edit=document.querySelector('.citation-composer'),option=document.querySelector('.agent-path-menu [role=option]'),rect=option?.getBoundingClientRect(),sel=getSelection(),end=document.createRange();end.selectNodeContents(edit);end.setStart(sel.focusNode,sel.focusOffset);return [window.trustedEditorClick,document.activeElement===edit,edit.textContent.endsWith('@some dir/a.ts'),end.toString(),!!rect&&option.contains(document.elementFromPoint(rect.x+10,rect.y+rect.height/2))];`),[true,true,true,'',true]);
-    await web.insertText('nomatch');assert.equal(await evaluate(`return document.querySelector('.agent-path-menu')?.textContent;`),'No matching files or folders');
-    const key=keyCode=>{web.sendInputEvent({type:'keyDown',keyCode});web.sendInputEvent({type:'keyUp',keyCode});};
+    await web.insertText('nomatch');assert.equal(await evaluate(`return document.querySelector('.agent-path-empty')?.textContent;`),'No matching files or folders');
+    const key=(keyCode,modifiers=[])=>{web.sendInputEvent({type:'keyDown',keyCode,modifiers});web.sendInputEvent({type:'keyUp',keyCode,modifiers});};
     key('Backspace');assert.equal(await evaluate(`return document.querySelector('.citation-composer').textContent.endsWith('@some dir/a.tsnomatc');`),true);
     key('Escape');assert.equal(await evaluate(`return document.querySelectorAll('.citation-composer [data-raw]')[1].dataset.raw;`),'@"some dir/a.ts"');
     await evaluate(`const edit=document.querySelector('.citation-composer'),range=document.createRange(),data=new DataTransfer();edit.focus();range.selectNodeContents(edit);range.collapse(false);getSelection().removeAllRanges();getSelection().addRange(range);data.setData('text/plain','  suffix');edit.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));`);
@@ -133,6 +149,77 @@ app.whenReady().then(async()=>{
       await web.debugger.sendCommand('Input.insertText',{text:'解释'});assert.equal(await draftText(),fresh+' 解释');
       await web.insertText('一下');assert.equal(await draftText(),fresh+' 解释一下');
     }finally{web.debugger.detach();}
-    assert.deepEqual(errors,[]);console.log('Citation UI checks passed, including bubble baselines, hover and IME continuation.');
+    const crumbs=()=>evaluate("return [...document.querySelectorAll('.chat-path-header nav button')].map(button=>button.textContent);");
+    const option=title=>'.chat-path-options [role=option][title="'+title+'"]';
+    const selectedOption=()=>evaluate("return document.querySelector('.chat-path-options [aria-selected=true]')?.title;");
+    const goUp=()=>key('Tab',['shift']);
+    await clearDraft();await web.insertText('@');assert.deepEqual(await crumbs(),['work','Test2']);
+    web.sendInputEvent({type:'mouseMove',x:0,y:0});
+    const visibleHints=()=>evaluate("return [...document.querySelectorAll('.chat-path-row')].filter(row=>row.querySelector('.chat-path-hint')?.getClientRects().length).map(row=>row.querySelector('[role=option]').title);");
+    assert.deepEqual(await visibleHints(),['some dir/']);
+    const folderPoint=await evaluate("const rect=document.querySelector('[title=\"z-dir/\"]').getBoundingClientRect();return {x:Math.round(rect.left+10),y:Math.round(rect.top+rect.height/2)};");
+    web.debugger.attach();
+    try{
+      await web.debugger.sendCommand('Input.dispatchMouseEvent',{type:'mouseMoved',...folderPoint});
+      assert.equal(await selectedOption(),'z-dir/');
+      key('Up');assert.deepEqual(await visibleHints(),['some dir/','z-dir/']);
+      await web.debugger.sendCommand('Input.dispatchMouseEvent',{type:'mouseMoved',x:0,y:0});
+    }finally{web.debugger.detach();}
+    key('Up');assert.equal(await selectedOption(),'z.ts');
+    assert.equal(await evaluate("const list=document.querySelector('.chat-path-options'),last=list.lastElementChild;return list.scrollTop>0&&last.getBoundingClientRect().bottom<=list.getBoundingClientRect().bottom+1;"),true);
+    key('Down');assert.equal(await selectedOption(),'some dir/');
+    key('Tab');assert.equal(await draftText(),'@some dir/');assert.deepEqual(await crumbs(),['work','Test2','some dir']);
+    key('Tab');assert.equal(await draftText(),'@some dir/a.ts');
+    assert.equal(await evaluate("return !!document.querySelector('.chat-path-options [aria-selected=true]')&&!document.querySelector('.citation-composer [data-raw]');"),true);
+    goUp();assert.equal(await draftText(),'@some dir/');key('Down');assert.equal(await selectedOption(),'z.ts');
+    key('Tab');assert.equal(await draftText(),'@some dir/z.ts');goUp();assert.equal(await selectedOption(),'z.ts');
+    await clickSidebarItem('.chat-path-up','left');assert.equal(await draftText(),'@');assert.equal(await selectedOption(),'some dir/');
+    goUp();assert.equal(await draftText(),'@../');assert.equal(await selectedOption(),'Test2/');
+    key('Tab');assert.deepEqual(await crumbs(),['work','Test2']);
+    goUp();assert.equal(await draftText(),'@../');assert.equal(await selectedOption(),'Test2/');
+    goUp();assert.equal(await draftText(),'@../../');assert.equal(await selectedOption(),'work/');
+    assert.equal(await evaluate("return document.querySelector('.chat-path-up').disabled;"),true);
+    goUp();assert.equal(await draftText(),'@../../');
+    await clearDraft();await web.insertText('@some');key('Tab');assert.equal(await draftText(),'@some dir/');
+    await web.insertText('partial');assert.equal(await draftText(),'@some dir/partial');
+    goUp();assert.equal(await draftText(),'@some dir/');assert.equal(await selectedOption(),'a.ts');
+    key('Enter');assert.equal(await draftText(),'@"some dir/a.ts"');
+    await clearDraft();await web.insertText('@');await clickSidebarItem(option('some dir/'),'left');assert.equal(await draftText(),'@"some dir/"');
+    await clearDraft();await web.insertText('@');key('Enter');assert.equal(await draftText(),'@"some dir/"');
+    await clearDraft();await web.insertText('See @../');assert.deepEqual(await crumbs(),['D:/','work']);
+    await clickSidebarItem('[aria-label="Browse Test1/"]','left');assert.deepEqual(await crumbs(),['work','Test1']);
+    await clickSidebarItem(option('a.ts'),'left');assert.equal(await draftText(),'See @"D:/work/Test1/a.ts"');
+    await clearDraft();await web.insertText('@');await clickSidebarItem('[aria-label="Browse some dir/"]','left');
+    await clickSidebarItem('.chat-path-header button[title="Test2"]','left');assert.equal(await draftText(),'@');
+    await clickSidebarItem('[aria-label="Browse some dir/"]','left');
+    await evaluate('window.picked=[];');await clickSidebarItem('.chat-path-choose','left');
+    assert.deepEqual(await evaluate("return calls.filter(row=>row[0]==='choose').at(-1);"),['choose','Test2',{startDirectory:'D:/work/Test2/some dir'}]);
+    assert.equal(await draftText(),'@some dir/');assert.deepEqual(await crumbs(),['work','Test2','some dir']);
+    await evaluate("window.picked=['D:/work/Test2/some dir/a.ts','C:/external.txt'];");
+    await clickSidebarItem('.chat-path-choose','left');assert.equal(await draftText(),'@"some dir/a.ts" @"C:/external.txt"');
+    await clearDraft();await web.insertText('@a');key('Tab');assert.equal(await draftText(),'@a.ts');key('Escape');
+    assert.equal(await evaluate("return !!document.querySelector('.chat-path-browser');"),false);
+    const toolbarButtons=()=>evaluate("return [...document.querySelectorAll('.agent-reference-actions button')].map(button=>button.title);");
+    const labels=['Commands','Mention File or Folder','Choose File','Direct Bash'];
+    assert.deepEqual(await toolbarButtons(),labels);
+    await evaluate("document.querySelector('details:has(.chat-toolbar-settings)').open=true;");
+    for(const [index,label] of labels.entries()){
+      await clickSidebarItem('.chat-toolbar-settings [aria-label="'+label+'"]','left');
+      assert.deepEqual(await toolbarButtons(),labels.slice(index+1));
+    }
+    await loadChat();assert.deepEqual(await toolbarButtons(),[]);
+    assert.equal(await evaluate("return document.querySelectorAll('.chat-toolbar-settings input:checked').length;"),0);
+    await clearDraft();await web.insertText('@');assert.deepEqual(await crumbs(),['work','Test1']);
+    await clickSidebarItem('.chat-path-choose','left');
+    assert.deepEqual(await evaluate("return calls.filter(row=>row[0]==='choose').at(-1);"),['choose','Test1',{startDirectory:'D:/work/Test1'}]);
+    await clearDraft();await web.insertText('/');assert.equal(await evaluate("return !!document.querySelector('.agent-command-menu');"),true);
+    await clearDraft();await web.insertText('!echo ok');key('Enter');
+    assert.equal(await evaluate("return calls.some(row=>row[0]==='bash');"),true);
+    await evaluate("document.querySelector('details:has(.chat-toolbar-settings)').open=true;");
+    for(const [index,label] of labels.entries()){
+      await clickSidebarItem('.chat-toolbar-settings [aria-label="'+label+'"]','left');
+      assert.deepEqual(await toolbarButtons(),labels.slice(0,index+1));
+    }
+    assert.deepEqual(errors,[]);console.log('Citation UI checks passed, including directory return selection, keyboard wrapping and persisted toolbar settings.');
   }finally{window.destroy();}
 }).then(()=>app.exit(0)).catch(error=>{console.error(error);app.exit(1);});

@@ -1,4 +1,5 @@
 import ChatRuntimeSettings from './ChatRuntimeSettings';
+import {ChatToolbarSettings,type useChatToolbarSettings} from './ChatToolbarSettings';
 import { useEffect, useState } from 'react';
 import ResizeHandle from './ResizeHandle';
 import type { FileTabOverflow } from './tabLayout';
@@ -57,10 +58,11 @@ export function SettingsSidebar({width,onResize,category,onCategoryChange}:{
   </aside>;
 }
 
-export default function SettingsPage({category,syncWidths,onChange,mixed,onModeChange,hideSingleProjectTabs,onHideSingleProjectTabsChange,fontSize,
+export default function SettingsPage({category,chatToolbar,syncWidths,onChange,mixed,onModeChange,hideSingleProjectTabs,onHideSingleProjectTabsChange,fontSize,
   onFontSizeChange,onResetEditor,previewMode,onPreviewModeChange,fileTabOverflow,onFileTabOverflowChange,reviewFileLabels,onReviewFileLabelsChange,dark,onThemeChange,
   showThemeSwitcher,onShowThemeSwitcherChange,lightThemeColor,darkThemeColor,onLightThemeColorChange,onDarkThemeColorChange,onResetThemeColors}:{
   category:SettingsCategory;syncWidths:boolean;onChange:(value:boolean)=>void;
+  chatToolbar:ReturnType<typeof useChatToolbarSettings>;
   mixed:boolean;onModeChange:(mixed:boolean)=>void;hideSingleProjectTabs:boolean;
   onHideSingleProjectTabsChange:(value:boolean)=>void;fontSize:number;
   onFontSizeChange:(value:number)=>void;onResetEditor:()=>void;
@@ -144,6 +146,7 @@ export default function SettingsPage({category,syncWidths,onChange,mixed,onModeC
         </div>
       </>:category==='chat'?<>
         <ChatRuntimeSettings/>
+        <ChatToolbarSettings {...chatToolbar}/>
       </>:<>
         <h1>Activity Bar</h1>
         <label className="setting-row">

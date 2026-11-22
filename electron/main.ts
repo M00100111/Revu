@@ -6,6 +6,7 @@ import { diff } from '../server/git';
 import { HttpError, Workspace } from '../server/workspace';
 import {isCodeEncoding} from '../shared/codeSource';
 import type { PiAgentRequest } from '../shared/piTypes';
+import type { ChatFilePickerOptions } from '../shared/types';
 import { PiManager } from './piManager';
 
 let mainWindow:BrowserWindow|null=null;
@@ -107,6 +108,7 @@ async function invoke(body:Record<string,any>){
     }
     case 'list':return workspace.list(project,body.path??'');
     case 'chatPaths':return workspace.paths(project);
+    case 'chatDirectory':return workspace.chatDirectory(project,body.prefix??'',body.searchProject===true);
     case 'read':return workspace.read(project,body.path);
     case 'baseline':return {...await workspace.baseline(project,body.path),base:project.base};
     case 'codeSnapshot':
@@ -245,15 +247,18 @@ ipcMain.handle('revu:copy-text',(_event,value:unknown)=>{
   if(typeof value!=='string')return false;
   try{clipboard.writeText(value);return true;}catch{return false;}
 });
-ipcMain.handle('revu:choose-chat-files',async(event,projectId:unknown,replacing?:{path:string;directory:boolean})=>{
+ipcMain.handle('revu:choose-chat-files',async(event,projectId:unknown,picker?:ChatFilePickerOptions)=>{
   if(typeof projectId!=='string')return [];
   const project=workspace.get(projectId);const owner=BrowserWindow.fromWebContents(event.sender)??mainWindow;
   const options:OpenDialogOptions={title:'Choose Files',defaultPath:project.root,properties:['openFile','multiSelections']};
-  if(replacing){
-    if(typeof replacing.path!=='string'||!isAbsolute(replacing.path))throw new Error('Invalid replacement path.');
-    options.title=replacing.directory?'Replace Folder Reference':'Replace File Reference';
-    options.defaultPath=dirname(normalize(replacing.path));
-    options.properties=[replacing.directory?'openDirectory':'openFile'];
+  if(picker&&'startDirectory' in picker){
+    if(typeof picker.startDirectory!=='string'||!isAbsolute(picker.startDirectory)||!(await stat(picker.startDirectory)).isDirectory())throw new Error('Folder is unavailable.');
+    options.defaultPath=normalize(picker.startDirectory);
+  }else if(picker){
+    if(typeof picker.path!=='string'||!isAbsolute(picker.path))throw new Error('Invalid replacement path.');
+    options.title=picker.directory?'Replace Folder Reference':'Replace File Reference';
+    options.defaultPath=dirname(normalize(picker.path));
+    options.properties=[picker.directory?'openDirectory':'openFile'];
   }
   const result=owner?await dialog.showOpenDialog(owner,options):await dialog.showOpenDialog(options);
   return result.canceled?[]:result.filePaths;

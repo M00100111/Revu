@@ -19,6 +19,8 @@ import { showContextMenu } from './ContextMenu';
 import { isReservedPiSessionName, piSessionProjectKey, threadPiSessions,type ThreadedPiSession } from '../shared/piSession';
 import { inlineDiff } from '../shared/inlineDiff';
 import type { ProjectPathEntry } from '../shared/types';
+import {ChatPathMenu,useChatPaths} from './ChatPathMenu';
+import type {ChatToolbarButton} from './ChatToolbarSettings';
 import type {
   PiSlashCommand,PiProjectTrust,PiTrustRequest,PiTrustChoice,
   PiCompactionConfiguration,PiCompactionResult,PiContextProjection,PiDirectBashState,PiEntriesResponse,PiModelDefaults,PiModelSummary,PiProviderStatus,PiQueueState,PiRuntimeStatus,
@@ -50,7 +52,7 @@ type SessionTone='idle'|'running'|'done'|'error'|'question';
 export interface AgentNavigationRequest {projectId:string;sessionId:string;runKey?:string;messageId?:string;token:number}
 export interface AgentNotice {level:'info'|'warning'|'success'|'error';message:string;projectId:string;sessionId:string;runKey?:string;question?:boolean}
 type Notify=(level:'info'|'warning'|'error',message:string)=>void;
-interface MentionMatch {start:number;end:number;query:string}
+interface MentionMatch {start:number;end:number;query:string;completedFile?:string;highlight?:string}
 
 const THINKING_LEVELS:PiThinkingLevel[]=['off','minimal','low','medium','high','xhigh','max'];
 const EMPTY_QUEUE:PiQueueState={steering:[],followUp:[]};
@@ -125,13 +127,6 @@ const mentionAt=(text:string,caret:number):MentionMatch|null=>{
 const fileReference=(path:string,chat:Project,projects:Project[])=>{
   const location=locateCitation(path,chat,projects);
   return referenceText(location.project?.id===chat.id?location.path||'./':path.replaceAll('\\','/'));
-};
-const pathName=(entry:ProjectPathEntry)=>entry.path.replace(/\/$/,'').split('/').at(-1)??entry.path;
-const fuzzyPathScore=(entry:ProjectPathEntry,rawQuery:string)=>{
-  const query=rawQuery.toLocaleLowerCase();if(!query)return entry.path.replace(/\/$/,'').includes('/')?Number.POSITIVE_INFINITY:0;
-  const path=entry.path.toLocaleLowerCase();const name=pathName(entry).toLocaleLowerCase();
-  if(name===query)return 0;if(name.startsWith(query))return 1;if(name.includes(query))return 2;if(path.startsWith(query))return 3;if(path.includes(query))return 4;
-  let at=0;for(const character of query){at=path.indexOf(character,at);if(at<0)return Number.POSITIVE_INFINITY;at++;}return 5;
 };
 const runKey=(index:number)=>`run-${Math.max(0,index)}`;
 const lastRunKey=(messages:unknown[])=>runKey(messages.reduce<number>((count,message)=>count+(record(message).role==='user'?1:0),0)-1);
@@ -691,7 +686,8 @@ function ModelDialog({projectId,sessionId,onClose,onChanged,notify}:{projectId:s
   </div>;
 }
 
-export default function AgentChat({onOpenSettings,open,projects,activeProjectId,dirtyProjectIds,width,onResize,onResizeEnd,notify,navigationRequest,onNotice,onProjectAdded,onOpenToolDetail,onUpdateToolDetail,onPinSession,onShowPins,onOpenCode,visiblePinSource,citeRequest,onGoto,tokenizeSnapshot}:{
+export default function AgentChat({hiddenToolbarButtons,onOpenSettings,open,projects,activeProjectId,dirtyProjectIds,width,onResize,onResizeEnd,notify,navigationRequest,onNotice,onProjectAdded,onOpenToolDetail,onUpdateToolDetail,onPinSession,onShowPins,onOpenCode,visiblePinSource,citeRequest,onGoto,tokenizeSnapshot}:{
+  hiddenToolbarButtons:ReadonlySet<ChatToolbarButton>;
   tokenizeSnapshot?:SnapshotTokenizer;
   citeRequest?:CiteRequest;onGoto:(projectId:string,target:CiteTarget)=>void;
   onOpenSettings:()=>void;open:boolean;projects:Project[];activeProjectId:string|null;dirtyProjectIds:ReadonlySet<string>;width:number;
@@ -718,7 +714,7 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
     if(draftOwner.current)savedDrafts.current.set(draftOwner.current,draftData.current);draftOwner.current=key;const saved=savedDrafts.current.get(key);setDraft(saved?.text??'',saved?.items??[]);
   },[selectedProjectId,selectedSessionId]);
   const consumedCite=useRef<CiteRequest|undefined>(undefined);
-  const inlineEdit=useRef<{reference:CitationReference;before:string;after:string;owner:string}|null>(null);
+  const inlineEdit=useRef<{reference?:CitationReference;before:string;after:string;owner:string}|null>(null);
   const [treeDialog,setTreeDialog]=useState(false);
   const [commandMatch,setCommandMatch]=useState<ReturnType<typeof piCommandAt>>(null);
   const [commands,setCommands]=useState<PiSlashCommand[]>([]);const [commandIndex,setCommandIndex]=useState(0);
@@ -760,14 +756,13 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
   const [archivedSource,setArchivedSource]=useState<{sessionId:string;text:string}|null>(null);
   const [newChatModel,setNewChatModel]=useState<PiModelSummary|undefined>();const [newChatThinking,setNewChatThinking]=useState<PiThinkingLevel>('medium');
   const [modelMenuStyle,setModelMenuStyle]=useState<React.CSSProperties>({});
-  const [mention,setMention]=useState<MentionMatch|null>(null);const [mentionEntries,setMentionEntries]=useState<ProjectPathEntry[]>([]);
-  const [mentionIndex,setMentionIndex]=useState(0);const [mentionLoading,setMentionLoading]=useState(false);const [mentionError,setMentionError]=useState('');
+  const [mention,setMention]=useState<MentionMatch|null>(null);
   const [fileDragActive,setFileDragActive]=useState(false);const [abortArmed,setAbortArmed]=useState(false);
   const bodyRef=useRef<HTMLDivElement|null>(null);const chatContentRef=useRef<HTMLDivElement|null>(null);const activeSessionTabRef=useRef<HTMLDivElement|null>(null);const sessionTabsRef=useRef<HTMLDivElement|null>(null);
   const sessionMoreRef=useRef<HTMLButtonElement|null>(null);const sessionMoreMenuRef=useRef<HTMLDivElement|null>(null);const statsButtonRef=useRef<HTMLButtonElement|null>(null);const statsMenuRef=useRef<HTMLDivElement|null>(null);
   const modelControlRef=useRef<HTMLDivElement|null>(null);const modelMenuRef=useRef<HTMLDivElement|null>(null);
   const usageRef=useRef<HTMLDivElement|null>(null);const contextRef=useRef<HTMLDivElement|null>(null);const draftConfigRequest=useRef(0);
-  const composerRef=useRef<HTMLDivElement|null>(null);const textareaRef=useRef<ComposerHandle|null>(null);const draftRef=useRef(draft);const mentionRequest=useRef(0);const historyIndex=useRef<number|null>(null);
+  const composerRef=useRef<HTMLDivElement|null>(null);const textareaRef=useRef<ComposerHandle|null>(null);const draftRef=useRef(draft);const historyIndex=useRef<number|null>(null);
   const composerExpansionSource=useRef<'auto'|'manual'|null>(null);const composerManuallyCollapsed=useRef(false);
   const runRefs=useRef(new Map<string,HTMLElement>());const pendingRunKey=useRef<string|undefined>(undefined);const skipAutoScroll=useRef(false);
   const pinMessageRefs=useRef(new Map<string,HTMLElement>());const pendingMessageId=useRef<string|undefined>(undefined);
@@ -862,9 +857,11 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
   const showQueueToggle=!!selectedProjectId&&!!draft.trim()&&!showQueuePanel;
   const previewRun=runs.find(run=>run.key===previewRunKey);
   const statsRun=runs.find(run=>run.key===statsRunKey);
-  const mentionOptions=mention?mentionEntries.map(entry=>({entry,score:fuzzyPathScore(entry,mention.query)}))
-    .filter(item=>Number.isFinite(item.score)).sort((a,b)=>a.score-b.score||(a.entry.kind===b.entry.kind?0:a.entry.kind==='directory'?-1:1)||a.entry.path.localeCompare(b.entry.path))
-    .slice(0,8).map(item=>item.entry):[];
+  const mentionPaths=useChatPaths(selectedProjectId,mention?.query,mention?.completedFile);
+  const mentionOptions=mentionPaths.options;
+  const highlight=mention?.highlight;
+  const mentionIndex=highlight?Math.max(0,mentionOptions.findIndex(entry=>entry.path===highlight||entry.path===highlight+'/')):0;
+  const highlightMention=(path:string)=>setMention(current=>current&&current.highlight!==path?{...current,highlight:path}:current);
   useEffect(()=>{
     if(!hasRunningTool)return;
     setToolClock(Date.now());const timer=setInterval(()=>setToolClock(Date.now()),1000);
@@ -961,14 +958,6 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
   useLayoutEffect(()=>{const container=sessionTabsRef.current;if(!container)return;const update=()=>setSessionTabCapacity(Math.max(1,Math.floor((container.clientWidth+3)/95)));
     update();const observer=new ResizeObserver(update);observer.observe(container);return()=>observer.disconnect();},[]);
   useEffect(()=>{if(open&&draftProject===selectedProjectId&&selectedProjectId&&!selectedSessionId)void loadNewChatDefaults(selectedProjectId);},[open,draftProject,selectedProjectId,selectedSessionId]);
-  useEffect(()=>{
-    if(!mention||!selectedProjectId){mentionRequest.current++;setMentionEntries([]);setMentionLoading(false);setMentionError('');return;}
-    const request=++mentionRequest.current;setMentionLoading(true);setMentionError('');
-    void window.revu.invoke<ProjectPathEntry[]>({action:'chatPaths',projectId:selectedProjectId}).then(result=>{
-      if(request!==mentionRequest.current)return;if(!result.ok)throw new Error(result.error||'Could not load project paths.');setMentionEntries(result.value??[]);
-    }).catch(error=>{if(request===mentionRequest.current)setMentionError(errorMessage(error));})
-      .finally(()=>{if(request===mentionRequest.current)setMentionLoading(false);});
-  },[!!mention,selectedProjectId]);
   useEffect(()=>{if(open&&selectedSessionId)clearDone(selectedSessionId);},[open,selectedSessionId,clearDone]);
   useEffect(()=>()=>{for(const timer of doneTimers.current.values())clearTimeout(timer);if(copiedTimer.current)clearTimeout(copiedTimer.current);if(abortTimer.current)clearTimeout(abortTimer.current);},[]);
   useEffect(()=>{if(selectedSessionId)draftConfigRequest.current++;historyIndex.current=null;setMention(null);setAbortArmed(false);if(abortTimer.current)clearTimeout(abortTimer.current);
@@ -1190,7 +1179,7 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
     const next=prefix+referenceText(path,citeRequest.selection);setDraft(next,citeRequest.selection?[...draftData.current.items,{...citeRequest.selection,path,offset:prefix.length}]:draftData.current.items,next.length,true);inlineEdit.current=null;setMention(null);
     const saved=selectedSessionId&&questionDrafts.current.get(selectedSessionId);if(saved){saved.text=next;saved.items=draftData.current.items;saved.caret=next.length;}
   },[citeRequest,open,selectedProject,selectedSessionId,projects]);
-  const updateDraftAt=(text:string,caret:number,freshCitationTail=false)=>{historyIndex.current=null;setDraft(text,undefined,caret,freshCitationTail);setMention(mentionAt(text,caret));setMentionIndex(0);setCommandMatch(piCommandAt(text,caret));setCommandIndex(0);if(!freshCitationTail)focusComposer(caret);};
+  const updateDraftAt=(text:string,caret:number,freshCitationTail=false)=>{historyIndex.current=null;setDraft(text,undefined,caret,freshCitationTail);setMention(mentionAt(text,caret));setCommandMatch(piCommandAt(text,caret));setCommandIndex(0);if(!freshCitationTail)focusComposer(caret);};
   const editMatch=(text:string,caret:number):MentionMatch|null=>{
     const edit=inlineEdit.current;if(!edit)return null;
     const start=edit.before.length,end=text.length-edit.after.length;
@@ -1217,7 +1206,7 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
     const input=textareaRef.current;input?.focus();historyIndex.current=null;
     flushSync(()=>{
       setDraft(before+'@'+query+after,undefined,caret);
-      setCommandMatch(null);setMentionIndex(0);setMention({start:ref.offset,end:caret,query});
+      setCommandMatch(null);setMention({start:ref.offset,end:caret,query});
     });
     input?.setSelectionRange(caret,caret);
   };
@@ -1227,7 +1216,21 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
     const leading=before&&!/[\s(（]$/.test(before)?' ':'';const trailing=after&&!/^\s/.test(after)?' ':'';
     updateDraftAt(`${before}${leading}${references}${trailing}${after}`,before.length+leading.length+references.length+trailing.length,!after);
   };
-  const chooseFiles=async()=>{if(!selectedProjectId)return;try{const paths=await window.revu.chooseChatFiles(selectedProjectId);insertReferences(paths,draftRef.current.length,draftRef.current.length);}catch(error){notify('error',errorMessage(error));}};
+  const chooseFiles=async(fromMenu=false)=>{
+    if(!selectedProjectId)return;
+    const owner=draftOwner.current,text=draftRef.current;
+    const match=fromMenu?mention:null,directory=fromMenu?mentionPaths.data?.directory:undefined;
+    if(fromMenu&&(!match||!directory))return;
+    try{
+      const paths=await window.revu.chooseChatFiles(selectedProjectId,directory?{startDirectory:directory}:undefined);
+      if(owner!==draftOwner.current||text!==draftRef.current)return;
+      if(paths.length){
+        inlineEdit.current=null;
+        insertReferences(paths,match?.start??text.length,match?.end??text.length);
+        setMention(null);
+      }else if(match){setMention(match);focusComposer(match.end);}
+    }catch(error){notify('error',errorMessage(error));}
+  };
   const insertCommandTrigger=()=>{
     setMention(null);setCommandIndex(0);
     if(!draft){updateDraftAt('/',1);return;}
@@ -1243,9 +1246,30 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
     const input=textareaRef.current;const start=input?.selectionStart??draft.length;const end=input?.selectionEnd??start;const before=draft.slice(0,start);const prefix=before&&!/[\s(（]$/.test(before)?' @':'@';
     const next=`${before}${prefix}${draft.slice(end)}`;updateDraftAt(next,before.length+prefix.length);
   };
-  const acceptMention=(entry:ProjectPathEntry)=>{
-    const replacing=!!inlineEdit.current;inlineEdit.current=null;
-    if(!mention||!selectedProject)return;const reference=fileReference(entry.path+(entry.kind==='directory'&&!entry.path.endsWith('/')?'/':''),selectedProject,projects);const after=draft.slice(mention.end);const trailing=after&&!/^\s/.test(after)?' ':'';
+  const entryPath=(entry:ProjectPathEntry)=>mentionPaths.data!.directory.replace(/\/$/,'')+'/'+entry.path;
+  const completeMention=(query:string,selection:Pick<MentionMatch,'completedFile'|'highlight'>={})=>{
+    if(!mention)return;
+    const before=draft.slice(0,mention.start),after=draft.slice(mention.end),caret=before.length+1+query.length;
+    // Preserve the editable range even when a completed path contains spaces.
+    editMatch(draft,mention.end);
+    inlineEdit.current??={before,after,owner:draftOwner.current};
+    historyIndex.current=null;
+    flushSync(()=>{
+      setDraft(before+'@'+query+after,undefined,caret);
+      setCommandMatch(null);
+      setMention({start:mention.start,end:caret,query,...selection});
+    });
+    const input=textareaRef.current;
+    input?.focus();
+    input?.setSelectionRange(caret,caret);
+  };
+  const completeEntry=(entry:ProjectPathEntry)=>completeMention(mentionPaths.prefix+entry.path,{completedFile:entry.kind==='file'?entryPath(entry):undefined});
+  const goUpMention=()=>{
+    if(mentionPaths.up)completeMention(mentionPaths.up.query,{highlight:mentionPaths.up.highlight});
+  };
+  const acceptMention=(path:string)=>{
+    const replacing=!!inlineEdit.current?.reference;inlineEdit.current=null;
+    if(!mention||!selectedProject)return;const reference=fileReference(path,selectedProject,projects);const after=draft.slice(mention.end);const trailing=after&&!/^\s/.test(after)?' ':'';
     updateDraftAt(`${draft.slice(0,mention.start)}${reference}${trailing}${after}`,mention.start+reference.length+trailing.length,!after&&!replacing);setMention(null);
   };
   const pathsForFiles=async(files:File[])=>{
@@ -1630,21 +1654,15 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
           {commandsError&&<div className="agent-path-empty error">{commandsError}</div>}
           {!commandOptions.length&&!commandsLoading&&!commandsError&&<div className="agent-path-empty">No commands found</div>}
         </div>}
-        {mention&&<div className="agent-path-menu" role="listbox" aria-label="Project files and folders">
-          {mentionLoading?<div className="agent-path-empty">Searching…</div>:mentionError?<div className="agent-path-empty error">{mentionError}</div>
-            :mentionOptions.length?mentionOptions.map((entry,index)=><button type="button" role="option" aria-selected={index===mentionIndex}
-              className={index===mentionIndex?'selected':''} title={entry.path} key={`${entry.kind}:${entry.path}`}
-              onMouseDown={event=>{event.preventDefault();acceptMention(entry);}}>
-              <Icon name={entry.kind==='directory'?'chatFolder':'chatFile'} size={15}/><span>{entry.path}</span></button>)
-            :<div className="agent-path-empty">No matching files or folders</div>}
-        </div>}
+        {mention&&<ChatPathMenu paths={mentionPaths} index={mentionIndex} onHighlight={highlightMention}
+          onAccept={entry=>acceptMention(entryPath(entry))} onBrowse={completeEntry} onNavigate={completeMention} onGoUp={goUpMention} onChoose={()=>void chooseFiles(true)}/>}
         {selectedProjectId&&draft.length>0&&!bashWarningVisible&&<button className="agent-composer-expand" title={composerExpanded?'Collapse Input':'Expand Input'} aria-label={composerExpanded?'Collapse Input':'Expand Input'}
           onClick={()=>{if(composerExpanded){composerExpansionSource.current=null;composerManuallyCollapsed.current=true;setComposerExpanded(false);}
             else{composerExpansionSource.current='manual';composerManuallyCollapsed.current=false;setComposerExpanded(true);}}}><Icon name={composerExpanded?'collapse':'expand'} size={15}/></button>}
         <CitationComposer ref={textareaRef} value={draft} freshCitationTail={open&&!activeQuestion&&draftState.freshCitationTail} disabled={!selectedProjectId} onPaste={pasteFiles} onGoto={target=>onGoto(selectedProjectId,target)} onEdit={editCitation} onDelete={ref=>replaceCitation(ref,'')}
           onBlur={event=>{if(!composerRef.current?.contains(event.relatedTarget as Node|null)){setMention(null);setCommandMatch(null);}}}
           onCaret={caret=>{setMention(editMatch(draft,caret)??mentionAt(draft,caret));setCommandMatch(piCommandAt(draft,caret));}}
-          onValue={(text,caret)=>{historyIndex.current=null;setDraft(text,undefined,caret);setMention(editMatch(text,caret)??mentionAt(text,caret));setMentionIndex(0);setCommandMatch(piCommandAt(text,caret));setCommandIndex(0);}}
+          onValue={(text,caret)=>{historyIndex.current=null;setDraft(text,undefined,caret);setMention(editMatch(text,caret)??mentionAt(text,caret));setCommandMatch(piCommandAt(text,caret));setCommandIndex(0);}}
           onKeyDown={event=>{
             if(commandMatch){
               if(event.key==='ArrowDown'||event.key==='ArrowUp'){event.preventDefault();setCommandIndex(index=>commandOptions.length?(index+(event.key==='ArrowDown'?1:-1)+commandOptions.length)%commandOptions.length:0);return;}
@@ -1652,11 +1670,24 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
               if((event.key==='Enter'||event.key==='Tab')&&!event.shiftKey&&!event.ctrlKey&&!event.altKey&&commandOptions[commandIndex]){event.preventDefault();acceptCommand(commandOptions[commandIndex],event.key==='Enter');return;}
             }
             if(mention){
-              if(event.key==='ArrowDown'){event.preventDefault();if(mentionOptions.length)setMentionIndex(index=>Math.min(mentionOptions.length-1,index+1));return;}
-              if(event.key==='ArrowUp'){event.preventDefault();if(mentionOptions.length)setMentionIndex(index=>Math.max(0,index-1));return;}
-              if(event.key==='Escape'){event.preventDefault();const edit=inlineEdit.current;if(edit&&editMatch(draft,mention.end)){updateDraftAt(edit.before+edit.reference.raw+edit.after,edit.before.length+edit.reference.raw.length);}inlineEdit.current=null;setMention(null);return;}
-              if(event.key==='Enter'&&!event.shiftKey&&!event.ctrlKey&&!event.altKey&&mentionOptions[mentionIndex]){event.preventDefault();acceptMention(mentionOptions[mentionIndex]);return;}
-              if(event.key==='Enter'&&inlineEdit.current){event.preventDefault();return;}
+              if(event.key==='ArrowDown'||event.key==='ArrowUp'){
+                event.preventDefault();
+                const count=mentionOptions.length,step=event.key==='ArrowDown'?1:-1;
+                if(count)highlightMention(mentionOptions[(mentionIndex+step+count)%count].path);
+                return;
+              }
+              if(event.key==='Tab'&&event.shiftKey&&!event.ctrlKey&&!event.altKey&&!event.metaKey){
+                event.preventDefault();goUpMention();return;
+              }
+              if(event.key==='Escape'){event.preventDefault();const edit=inlineEdit.current;if(edit?.reference&&editMatch(draft,mention.end)){updateDraftAt(edit.before+edit.reference.raw+edit.after,edit.before.length+edit.reference.raw.length);}inlineEdit.current=null;setMention(null);return;}
+              if((event.key==='Tab'||event.key==='Enter')&&!event.shiftKey&&!event.ctrlKey&&!event.altKey&&!event.metaKey){
+                event.preventDefault();
+                const entry=mentionOptions[mentionIndex];
+                if(event.key==='Tab'){if(entry)completeEntry(entry);}
+                else if(entry)acceptMention(entryPath(entry));
+                else if(mentionPaths.loading&&mention.completedFile)acceptMention(mention.completedFile);
+                return;
+              }
             }
             if(event.key==='Escape'&&agentRunning){event.preventDefault();confirmAbort();return;}
             if(event.key==='ArrowUp'&&browseHistory(-1)){event.preventDefault();return;}
@@ -1672,11 +1703,11 @@ export default function AgentChat({onOpenSettings,open,projects,activeProjectId,
         {showQueueToggle&&<button type="button" className="agent-input-queue-toggle" title="Show Queue" aria-label="Show queued messages" onClick={()=>setQueuePanelOpen(true)}><Icon name="queue" size={14}/></button>}
         {showQueuePanel&&queueCount>0&&<button type="button" className="agent-input-queue-clear" title="Clear Queue" aria-label="Clear queued messages" onClick={()=>void clearPendingQueue()}><Icon name="clear" size={13}/></button>}
         <footer><div className="agent-reference-actions">
-          <button type="button" title="Commands" aria-label="Commands" disabled={!selectedProjectId} onMouseDown={event=>event.preventDefault()} onClick={insertCommandTrigger}><Icon name="commands" size={14}/></button>
-          <button type="button" title="Mention File or Folder" aria-label="Mention file or folder" disabled={!selectedProjectId} onClick={insertMentionTrigger}><Icon name="mention" size={14}/></button>
-          <button type="button" title="Choose File" aria-label="Choose file" disabled={!selectedProjectId} onClick={()=>void chooseFiles()}><Icon name="chatAdd" size={18}/></button>
-          <button type="button" title={draft.startsWith('!')&&!draft.startsWith('!!')?'Exclude Bash result from context':'Direct Bash'} aria-label="Toggle Direct Bash mode" disabled={!selectedProjectId} onClick={toggleDirectBash}>
-            <Icon name={draft.startsWith('!')&&!draft.startsWith('!!')?'directBashExcluded':'directBash'} size={14}/></button>
+          {!hiddenToolbarButtons.has('commands')&&<button type="button" title="Commands" aria-label="Commands" disabled={!selectedProjectId} onMouseDown={event=>event.preventDefault()} onClick={insertCommandTrigger}><Icon name="commands" size={14}/></button>}
+          {!hiddenToolbarButtons.has('mention')&&<button type="button" title="Mention File or Folder" aria-label="Mention file or folder" disabled={!selectedProjectId} onClick={insertMentionTrigger}><Icon name="mention" size={14}/></button>}
+          {!hiddenToolbarButtons.has('choose-file')&&<button type="button" title="Choose File" aria-label="Choose file" disabled={!selectedProjectId} onClick={()=>void chooseFiles()}><Icon name="chatAdd" size={18}/></button>}
+          {!hiddenToolbarButtons.has('direct-bash')&&<button type="button" title={draft.startsWith('!')&&!draft.startsWith('!!')?'Exclude Bash result from context':'Direct Bash'} aria-label="Toggle Direct Bash mode" disabled={!selectedProjectId} onClick={toggleDirectBash}>
+            <Icon name={draft.startsWith('!')&&!draft.startsWith('!!')?'directBashExcluded':'directBash'} size={14}/></button>}
         </div><div className="agent-model-control" ref={modelControlRef}
             onBlur={event=>{const next=event.relatedTarget as Node|null;if(!event.currentTarget.contains(next)&&!modelMenuRef.current?.contains(next))setModelMenu(false);}}><button className="agent-footer-select-trigger"
               aria-haspopup="listbox" aria-expanded={modelMenu} disabled={!selectedProjectId||current?.status==='running'} onClick={()=>modelMenu?setModelMenu(false):void loadModels()}>
