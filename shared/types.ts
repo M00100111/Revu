@@ -24,7 +24,7 @@ export interface Snapshot {
   reason?: string;
   encoding?: CodeEncoding;
 }
-export interface ChangeFile { path: string; status: string; reason?: string }
+export interface ChangeFile { path: string; status: string; reason?: string; previewKey?: string }
 export interface ProjectStatus {
   files: ChangeFile[];
   head: string | null;

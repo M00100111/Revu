@@ -71,20 +71,23 @@ test('mixed working-tree endings are normalized only for a matching read-only co
   await writeFile(join(root,path),raw);
   const editable=await w.read(p,path);
   assert.equal(editable.text,'a\nb\r\nc\n');assert.ok(editable.reason);
-  assert.ok((await w.status(p)).files.find(file=>file.path===path)?.reason);
+  const previewKey=(await w.status(p)).files.find(file=>file.path===path)?.previewKey;
+  assert.ok(previewKey);
+  assert.deepEqual((await w.mixedPreview(p,path,previewKey)).map(chunk=>chunk.newText),[normalized]);
   assert.deepEqual(await w.codeSnapshot(p,path,editable.hash),{text:normalized,hash:editable.hash,exists:true,bom:true});
   const wrongHash=decode(Buffer.from('\uFEFF'+normalized)).hash;
   await assert.rejects(w.codeSnapshot(p,path,wrongHash),/Referenced version is unavailable/);
   await assert.rejects(w.save(p,path,editable.hash,normalized,true),/line endings/);
   assert.deepEqual(await readFile(join(root,path)),raw);
   await writeFile(join(root,path),'\uFEFF'+normalized);
+  await assert.rejects(w.mixedPreview(p,path,previewKey),/File changed/);
   await assert.rejects(w.codeSnapshot(p,path,editable.hash),/Referenced version is unavailable/);
   for(const bytes of [Buffer.from('a\nb\rc\r\n'),Buffer.from('a\0b'),Buffer.from([255])]){
     await writeFile(join(root,path),bytes);
     await assert.rejects(w.codeSnapshot(p,path,decode(bytes).hash),/Referenced version is unavailable/);
   }
 }));
-test('mixed committed endings are readable by exact revision or matching base hash, but remain status-only in Review',()=>fixture(async(root,w)=>{
+test('mixed baseline supports read-only review without reporting normalized line endings as edits',()=>fixture(async(root,w)=>{
   const path='file.txt',mixed='one\ntwo\r\nthree\n';
   await writeFile(join(root,path),mixed);
   await git(root,['add',path]);await git(root,['commit','-qm','mixed endings']);
@@ -93,12 +96,19 @@ test('mixed committed endings are readable by exact revision or matching base ha
   assert.ok(old.reason);assert.equal(old.text,mixed);
   const edited='one\ntwo\nthree\n';
   await writeFile(join(root,path),edited);
-  assert.ok((await w.status(p)).files.find(file=>file.path===path)?.reason);
+  const key=(await w.status(p)).files.find(file=>file.path===path)?.previewKey;
+  assert.ok(key);assert.deepEqual(await w.mixedPreview(p,path,key),[]);
   const fromRevision=await w.codeSnapshot(p,path,old.hash,p.base!);
   assert.deepEqual(fromRevision,{text:edited,hash:old.hash,exists:true,bom:false});
   assert.deepEqual(await w.codeSnapshot(p,path,old.hash),fromRevision);
   await assert.rejects(w.codeSnapshot(p,path,decode(Buffer.from(edited)).hash,p.base!),/Referenced version is unavailable/);
   assert.equal(await readFile(join(root,path),'utf8'),edited);
+  await writeFile(join(root,path),'one\nupdated\r\nthree\n');
+  const changedKey=(await w.status(p)).files.find(file=>file.path===path)?.previewKey;
+  assert.ok(changedKey);
+  assert.deepEqual((await w.mixedPreview(p,path,changedKey)).map(({line,oldText,newText})=>({line,oldText,newText})),
+    [{line:2,oldText:'two\n',newText:'updated\n'}]);
+  assert.equal(await readFile(join(root,path),'utf8'),'one\nupdated\r\nthree\n');
 }));
 test('GB18030 snapshots decode exact bytes read-only and never reclassify a .pyc as text',()=>fixture(async(root,w)=>{
   const path='legacy.py',compiled='cached.PYC';

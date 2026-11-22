@@ -122,6 +122,7 @@ async function invoke(body:Record<string,any>){
       project.base=project.repo?await workspace.head(project.repo):null;
       return workspace.public(project);
     case 'save':return workspace.save(project,body.path,body.expected,body.text,body.bom,body.exists);
+    case 'mixedPreview':return workspace.mixedPreview(project,body.path,body.key);
     case 'diff':{
       if(body.base!==project.base)throw new HttpError(409,'Review base changed');
       const base=await workspace.baseline(project,body.path);

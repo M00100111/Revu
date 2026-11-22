@@ -4,7 +4,7 @@ import { watch, type FSWatcher } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import type { Project, Snapshot, ProjectStatus, ChangeFile, ProjectPathEntry, ChatPathDirectory } from '../shared/types';
 import {decodeCodeText,isKnownBinaryCodePath,type CodeEncoding} from '../shared/codeSource';
-import { git } from './git';
+import { diff, git } from './git';
 
 export interface Registered extends Project { repo: string | null; watcher?: FSWatcher; gitWatcher?: FSWatcher }
 export class HttpError extends Error {
@@ -189,6 +189,16 @@ export class Workspace {
     if(!snapshot.exists||snapshot.hash!==expectedHash||snapshot.reason)throw new HttpError(404,'Referenced version is unavailable');
     return snapshot;
   }
+  private mixedPreviewKey(base:Snapshot,disk:Snapshot){
+    const reasons=[base.reason,disk.reason].filter(Boolean);
+    return reasons.length&&reasons.every(reason=>reason===sourceReasons['mixed-line-endings'])
+      ? `${base.hash}:${disk.hash}` : undefined;
+  }
+  async mixedPreview(p:Registered,path:string,key:string){
+    const [base,disk]=await Promise.all([this.baseline(p,path),this.read(p,path)]);
+    if(!key||this.mixedPreviewKey(base,disk)!==key)throw new HttpError(409,'File changed. Refresh the review.');
+    return diff(base.text.replace(/\r\n/g,'\n'),disk.text.replace(/\r\n/g,'\n'));
+  }
   async status(p: Registered): Promise<ProjectStatus> {
     if (!p.repo) return { files: [], head: null, base: null, changedHead: false, branch:null };
     const head = await this.head(p.repo);
@@ -221,6 +231,12 @@ export class Workspace {
       if (file.reason) continue;
       const snapshot = await this.read(p, file.path);
       const base = await this.baseline(p, file.path);
+      const previewKey=this.mixedPreviewKey(base,snapshot);
+      if(previewKey){
+        file.previewKey=previewKey;
+        file.reason='Mixed line endings. Read-only preview; LF and CRLF are compared as equal.';
+        continue;
+      }
       file.reason = !snapshot.exists ? (file.status.startsWith('D') ? undefined : 'File deleted. Status only.')
         : snapshot.reason ?? base.reason;
       if (!file.reason && snapshot.text === base.text && snapshot.bom !== base.bom) file.reason = 'BOM metadata change only';

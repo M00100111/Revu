@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ChangeFile, ProjectStatus, ReviewBulkAction } from '../shared/types';
+import type { ChangeFile, Chunk, ProjectStatus, ReviewBulkAction } from '../shared/types';
+import DiffPreview from './DiffPreview';
+import {api,errorMessage} from './files';
 import type { OpenFile, Project } from './editor';
 import { reviewItems, ReviewActions, PinActions, type ActionHandler, type PinActionHandler } from './ReviewActions';
 import type {PinPlacement} from '../shared/pinLayout';
@@ -11,6 +13,19 @@ import { PanelPortal } from './PanelPortal';
 
 interface ReviewFileRow {id:string;project:Project;status?:ChangeFile;file?:OpenFile;path:string;snapshot?:boolean}
 const MIN_DETAIL_HEIGHT=120;
+function MixedPreview({projectId,path,previewKey}:{projectId:string;path:string;previewKey:string}){
+  const [result,setResult]=useState<Chunk[]|string|null>(null);
+  useEffect(()=>{
+    let active=true;
+    api<Chunk[]>('mixedPreview',{projectId,path,key:previewKey}).then(chunks=>{if(active)setResult(chunks);},
+      error=>{if(active)setResult(errorMessage(error));});
+    return ()=>{active=false;};
+  },[projectId,path,previewKey]);
+  if(typeof result==='string')return <p className="review-warning">{result}</p>;
+  if(!result?.length)return <p className="tree-note">{result?'No text changes after normalizing line endings.':'Loading diff…'}</p>;
+  return <>{result.map(chunk=><div key={chunk.id} className="dashboard-chunk"><strong>Line {chunk.line}</strong>
+    <DiffPreview oldText={chunk.oldText} newText={chunk.newText}/></div>)}</>;
+}
 const MIN_CHANGES_HEIGHT=160;
 const REVIEW_HEADER_HEIGHT=54;
 const REVIEW_RESIZE_HEIGHT=6;
@@ -72,8 +87,11 @@ export default function ReviewDashboard({projects,documents,snapshots,statuses,f
     const status=statuses[project.id];
     const paths=new Set([...(status?.files.map(file=>file.path)??[]),...documents.filter(file=>file.project.id===project.id&&
       (file.chunks.length||file.records.length||file.dirty||pinsByFile.has(file.id))).map(file=>file.path)]);
-    const fileRows:ReviewFileRow[]=[...paths].sort().map(path=>({id:project.id+'/'+path,project,path,status:status?.files.find(file=>file.path===path),
-      file:documents.find(file=>file.project.id===project.id&&file.path===path)}));
+    const fileRows:ReviewFileRow[]=[...paths].sort().map(path=>{
+      const change=status?.files.find(file=>file.path===path);
+      return {id:project.id+'/'+path,project,path,status:change,
+        file:change?.previewKey?undefined:documents.find(file=>file.project.id===project.id&&file.path===path)};
+    });
     return [...fileRows,...snapshots.filter(file=>file.project.id===project.id&&pinsByFile.has(file.id))
       .map<ReviewFileRow>(file=>({id:file.id,project,path:file.path,file,snapshot:true}))];
   }),[scoped,statuses,documents,snapshots,pinsByFile]);
@@ -119,7 +137,7 @@ export default function ReviewDashboard({projects,documents,snapshots,statuses,f
           onClick={()=>file&&onFileBulk(file,'undo')}>Undo</button>
       </div>
       <button className="review-file-summary" onClick={open}>
-        {pinOnly?`${pinCount} pinned`:`${file?.chunks.length??0} pending · ${file?.records.length??0} reviewed${pinCount?` · ${pinCount} pinned`:''}`}
+        {row.status?.previewKey?'Read-only preview':pinOnly?`${pinCount} pinned`:`${file?.chunks.length??0} pending · ${file?.records.length??0} reviewed${pinCount?` · ${pinCount} pinned`:''}`}
       </button>
       <span className={'review-file-status status-'+status.toLowerCase()}>{status}</span>
     </div>;
@@ -127,10 +145,11 @@ export default function ReviewDashboard({projects,documents,snapshots,statuses,f
   const detail=<section className="review-detail" data-panel-scroll>
         {!current?<p className="sidebar-empty">Select a file to view chunks</p>:<>
           <div className="review-detail-heading"><strong title={current.path}>{displayPath(current.path,fileLabels)}</strong>
-            <span>{currentItems.length} chunk{currentItems.length===1?'':'s'}</span></div>
+            <span>{current.status?.previewKey?'Read-only':`${currentItems.length} chunk${currentItems.length===1?'':'s'}`}</span></div>
           {(current.status?.reason||current.file?.reason)&&
             <p className="review-warning">{current.status?.reason||current.file?.reason}</p>}
           {current.file?.computing&&<p className="tree-note">Updating diff…</p>}
+          {current.status?.previewKey&&<MixedPreview key={current.id+current.status.previewKey} projectId={current.project.id} path={current.path} previewKey={current.status.previewKey}/>}
           {current.file?.diffError&&<p className="review-warning">{current.file.diffError}</p>}
           {currentFile&&currentItems.map(item=>{
             const active=revealTarget?.fileId===selected&&revealTarget.itemId===item.id;
