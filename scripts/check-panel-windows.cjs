@@ -125,8 +125,27 @@ async function checkSearchFocus(win,selector,color){
   assert.deepEqual(style,[true,color,true,'none']);
 }
 
-const scrollbarThumb=(win,selector)=>evaluate(win,
-  'return getComputedStyle(document.querySelector('+JSON.stringify(selector)+'),"::-webkit-scrollbar-thumb").backgroundColor;');
+async function scrollbarThumb(win,selector){
+  win.webContents.sendInputEvent({type:'mouseMove',x:20,y:80});
+  return evaluate(win,`
+    return new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>{
+      resolve(getComputedStyle(document.querySelector(${JSON.stringify(selector)}),'::-webkit-scrollbar-thumb').backgroundColor);
+    })));
+  `);
+}
+
+const reviewLists=['.review-file-list','.review-detail'];
+async function checkPaneScrollbars(win,selectors,expected){
+  for(const selector of selectors){
+    assert.equal(await scrollbarThumb(win,selector),expected,selector);
+    const clearOfHandle=await evaluate(win,`
+      const list=document.querySelector(${JSON.stringify(selector)});
+      const handle=list.closest('.explorer,.review-chunk-pane').querySelector(':scope > .resize-handle');
+      return !handle||list.getBoundingClientRect().right<=handle.getBoundingClientRect().left+0.1;
+    `);
+    assert.ok(clearOfHandle,selector+' scrollbar clears the pane resize handle');
+  }
+}
 
 async function checkSessionSidebar(chat){
   const side='.chat-session-sidebar',toggle=label('Toggle sessions sidebar');
@@ -234,6 +253,9 @@ async function run(main){
   assert.equal(await has(chat,byTitle('Separate Chat window')),false);
   assert.equal(await has(main,dockAll),true);
   assert.equal(await scrollbarThumb(chat,'.agent-chat-body'),'rgb(214, 214, 214)');
+  await click(main,label('Review Dashboard'));
+  await until(()=>has(main,'.review-detail'),'docked Review lists');
+  await checkPaneScrollbars(main,reviewLists,'rgb(235, 235, 235)');
   await click(main,byTitle('Use dark theme'));
   await until(()=>evaluate(chat,"return document.documentElement.dataset.theme==='dark'&&getComputedStyle(document.documentElement).colorScheme==='dark';"),'detached theme');
   assert.equal(await scrollbarThumb(chat,'.agent-chat-body'),'rgb(48, 48, 48)');
@@ -245,7 +267,6 @@ async function run(main){
   await checkMenuBounds(chat);
   assert.equal(await scrollbarThumb(chat,'.agent-session-more-menu'),'rgb(48, 48, 48)');
   await mouseClick(chat,byTitle('Open Chats'));
-  await click(main,label('Review Dashboard'));
   await click(main,byTitle('Split review panes'));
   await click(main,byTitle('Separate Review window'));
   await until(()=>panelWindow('Review')?.isVisible(),'detached Review');
@@ -257,7 +278,7 @@ async function run(main){
   assert.equal(await has(review,'.review-chunk-pane'),true);
   assert.equal(await has(main,'.review-dashboard'),false);
   await until(()=>has(review,'.review-file-name'),'changed file');
-  assert.notEqual(await scrollbarThumb(review,'.review-file-list'),'rgb(48, 48, 48)');
+  await checkPaneScrollbars(review,reviewLists,'rgb(48, 48, 48)');
   await click(review,'.review-file-name');
   await until(()=>textOf(main,'.breadcrumb').then(text=>text?.includes('sample.txt')),'background editor preview');
   assert.equal(review.isFocused(),true);
@@ -267,7 +288,7 @@ async function run(main){
 
   await click(main,label('File'));
   await until(()=>has(main,'.open-editor-row'),'file reference source');
-  assert.equal(await scrollbarThumb(main,'.tree-scroll'),'rgb(48, 48, 48)');
+  await checkPaneScrollbars(main,['.tree-scroll'],'rgb(48, 48, 48)');
   await evaluate(main,"document.querySelector('.open-editor-row').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true}));");
   await until(()=>has(main,'[role=menuitem]'),'Cite action');
   await click(main,'[role=menuitem]');
@@ -301,6 +322,7 @@ async function run(main){
   await until(()=>BrowserWindow.getAllWindows().length===1,'merge all');
   assert.equal(await has(main,'.review-file-row.active'),true);
   assert.equal(await has(main,'.review-chunk-pane'),true);
+  await checkPaneScrollbars(main,reviewLists,'rgb(48, 48, 48)');
   assert.equal(await has(main,dockAll),false);
   assert.equal(await textOf(main,input),draft);
   assert.equal(sessionOpens,originalOpens);

@@ -6,6 +6,7 @@ import type { OpenFile, Project } from './editor';
 import { reviewItems, ReviewActions, PinActions, type ActionHandler, type PinActionHandler } from './ReviewActions';
 import type {PinPlacement} from '../shared/pinLayout';
 import ResizeHandle from './ResizeHandle';
+import ScrollbarScope from './ScrollbarScope';
 import ProjectDropdown from './ProjectDropdown';
 import Icon from './Icon';
 import type { ReviewFileLabels } from './SettingsPage';
@@ -142,7 +143,7 @@ export default function ReviewDashboard({projects,documents,snapshots,statuses,f
       <span className={'review-file-status status-'+status.toLowerCase()}>{status}</span>
     </div>;
   };
-  const detail=<section className="review-detail" data-panel-scroll>
+  const detail=<ScrollbarScope><section className="review-detail" data-panel-scroll>
         {!current?<p className="sidebar-empty">Select a file to view chunks</p>:<>
           <div className="review-detail-heading"><strong title={current.path}>{displayPath(current.path,fileLabels)}</strong>
             <span>{current.status?.previewKey?'Read-only':`${currentItems.length} chunk${currentItems.length===1?'':'s'}`}</span></div>
@@ -178,7 +179,7 @@ export default function ReviewDashboard({projects,documents,snapshots,statuses,f
             </div>;
           })}
         </>}
-      </section>;
+      </section></ScrollbarScope>;
   const heightHandle=<div className="review-height-handle" role="separator" aria-label="Resize changed files"
         aria-orientation="horizontal" tabIndex={0} aria-valuenow={changesHeight??undefined}
         onPointerDown={event=>{
@@ -215,7 +216,7 @@ export default function ReviewDashboard({projects,documents,snapshots,statuses,f
               disabled={!reviewed} onClick={()=>bulk('undo')}>Undo</button>
           </div>
         </header>
-        <div className="review-file-list" data-panel-scroll>
+        <ScrollbarScope><div className="review-file-list" data-panel-scroll>
           {grouped?scoped.map(project=>{
             const projectRows=rows.filter(row=>row.project.id===project.id);
             if(!projectRows.length)return null;
@@ -235,7 +236,7 @@ export default function ReviewDashboard({projects,documents,snapshots,statuses,f
               {projectRows.map(fileRow)}
             </div>;
           }):rows.map(fileRow)}
-        </div>
+        </div></ScrollbarScope>
       </section>;
   const splitWindow=!!detachedWindow&&split&&projects.length>0;
   return <PanelPortal targetWindow={detachedWindow}>

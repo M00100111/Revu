@@ -204,6 +204,8 @@ kbd { font: inherit; border: 1px solid var(--border); border-radius: 3px; paddin
 .review-detail-heading strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .review-detail-heading span { flex-shrink: 0; color: var(--muted); font-size: 10px; }
 .review-file-list { flex: 1; min-height: 0; overflow: auto; padding: 5px 7px 12px; }
+/* Keep the scrollbar clear of the resize handle that straddles the pane edge. */
+.tree-scroll, .review-file-list, .review-detail { margin-right: 3px; }
 .review-file-group + .review-file-group { margin-top: 4px; }
 .review-file-group-heading { position: relative; display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 7px; color: var(--muted); font-size: 10px; }
 .review-file-group-heading strong { overflow: hidden; color: var(--text); font-size: 11px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
