@@ -33,8 +33,8 @@ export default function NotificationCenter({notifications,open,onClose,onDismiss
   return <>
     {open&&<section className="notification-center" role="dialog" aria-label="Notifications">
       <header><strong>Notifications</strong><div>
-        <button className="notification-header-action" disabled={!notifications.some(item=>!item.read)} onClick={onReadAll}>Read all</button>
-        <button className="notification-header-action" disabled={!notifications.length} onClick={onClear}>Clear</button>
+        <button className="icon-button" title="Read all" aria-label="Read all" disabled={!notifications.some(item=>!item.read)} onClick={onReadAll}><Icon name="readAll" size={15}/></button>
+        <button className="icon-button" title="Clear notifications" aria-label="Clear notifications" disabled={!notifications.length} onClick={onClear}><Icon name="clear" size={15}/></button>
         <button className="icon-button" title="Close" aria-label="Close notifications" onClick={onClose}>
           <Icon name="close" size={14}/>
         </button>

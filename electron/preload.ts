@@ -7,7 +7,7 @@ const agentInvoke=<T>(body:PiAgentRequest)=>ipcRenderer.invoke('revu:agent',body
 contextBridge.exposeInMainWorld('revu',{
   invoke:(body:Record<string,unknown>)=>ipcRenderer.invoke('revu:invoke',body),
   copyText:(text:string)=>ipcRenderer.invoke('revu:copy-text',text) as Promise<boolean>,
-  chooseChatFiles:(projectId:string)=>ipcRenderer.invoke('revu:choose-chat-files',projectId) as Promise<string[]>,
+  chooseChatFiles:(projectId:string,replacing?:{path:string;directory:boolean})=>ipcRenderer.invoke('revu:choose-chat-files',projectId,replacing) as Promise<string[]>,
   filePath:(file:File)=>webUtils.getPathForFile(file),
   saveChatImage:(mimeType:string,bytes:Uint8Array)=>ipcRenderer.invoke('revu:save-chat-image',mimeType,bytes) as Promise<string>,
   openExternal:(url:string)=>ipcRenderer.invoke('revu:open-external',url) as Promise<boolean>,
@@ -66,6 +66,7 @@ contextBridge.exposeInMainWorld('revu',{
     steer:(projectId:string,sessionId:string,text:string)=>agentInvoke<void>({action:'steer',projectId,sessionId,text}),
     followUp:(projectId:string,sessionId:string,text:string)=>agentInvoke<void>({action:'followUp',projectId,sessionId,text}),
     clearQueue:(projectId:string,sessionId:string)=>agentInvoke<PiQueueState>({action:'clearQueue',projectId,sessionId}),
+    withdrawInput:(projectId:string,sessionId:string,kind:keyof PiQueueState,index:number,wire:string)=>agentInvoke<void>({action:'withdrawInput',projectId,sessionId,kind,index,wire}),
     setRetainedQueue:(projectId:string,sessionId:string,queue:PiQueueState)=>agentInvoke<PiQueueState>({action:'setRetainedQueue',projectId,sessionId,queue}),
     stop:(projectId:string,sessionId:string)=>agentInvoke<void>({action:'stop',projectId,sessionId}),
     bash:(projectId:string,sessionId:string,command:string,excludeFromContext:boolean)=>

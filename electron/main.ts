@@ -1,7 +1,7 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell, type OpenDialogOptions, type SaveDialogOptions } from 'electron';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join, normalize } from 'node:path';
 import { diff } from '../server/git';
 import { HttpError, Workspace } from '../server/workspace';
 import {isCodeEncoding} from '../shared/codeSource';
@@ -92,6 +92,19 @@ async function invoke(body:Record<string,any>){
   }
   const project=workspace.get(body.projectId);
   switch(body.action){
+    case 'checkCitation':
+    case 'revealExternalCitation':{
+      const external=body.action==='revealExternalCitation';
+      if(typeof body.path!=='string'||(external&&!isAbsolute(body.path)))throw new HttpError(400,'Invalid citation path.');
+      const path=external?normalize(body.path):await workspace.path(project,body.path);
+      const info=await stat(path);
+      if(body.directory?!info.isDirectory():!info.isFile())throw new HttpError(404,'The cited file or folder no longer exists.');
+      if(external){
+        if(info.isDirectory()){const error=await shell.openPath(path);if(error)throw new Error(error);}
+        else shell.showItemInFolder(path);
+      }
+      return null;
+    }
     case 'list':return workspace.list(project,body.path??'');
     case 'chatPaths':return workspace.paths(project);
     case 'read':return workspace.read(project,body.path);
@@ -194,6 +207,7 @@ async function invokeAgent(body:PiAgentRequest,sourceWindow?:BrowserWindow|null)
     case 'steer':return piManager.steer(body.projectId,body.sessionId,body.text);
     case 'followUp':return piManager.followUp(body.projectId,body.sessionId,body.text);
     case 'clearQueue':return piManager.clearQueue(body.projectId,body.sessionId);
+    case 'withdrawInput':return piManager.withdrawInput(body.projectId,body.sessionId,body.kind,body.index,body.wire);
     case 'setRetainedQueue':return piManager.setRetainedQueue(body.projectId,body.sessionId,body.queue);
     case 'stop':return piManager.stop(body.projectId,body.sessionId);
     case 'bash':return piManager.bash(body.projectId,body.sessionId,body.command,body.excludeFromContext);
@@ -231,10 +245,16 @@ ipcMain.handle('revu:copy-text',(_event,value:unknown)=>{
   if(typeof value!=='string')return false;
   try{clipboard.writeText(value);return true;}catch{return false;}
 });
-ipcMain.handle('revu:choose-chat-files',async(event,projectId:unknown)=>{
+ipcMain.handle('revu:choose-chat-files',async(event,projectId:unknown,replacing?:{path:string;directory:boolean})=>{
   if(typeof projectId!=='string')return [];
   const project=workspace.get(projectId);const owner=BrowserWindow.fromWebContents(event.sender)??mainWindow;
   const options:OpenDialogOptions={title:'Choose Files',defaultPath:project.root,properties:['openFile','multiSelections']};
+  if(replacing){
+    if(typeof replacing.path!=='string'||!isAbsolute(replacing.path))throw new Error('Invalid replacement path.');
+    options.title=replacing.directory?'Replace Folder Reference':'Replace File Reference';
+    options.defaultPath=dirname(normalize(replacing.path));
+    options.properties=[replacing.directory?'openDirectory':'openFile'];
+  }
   const result=owner?await dialog.showOpenDialog(owner,options):await dialog.showOpenDialog(options);
   return result.canceled?[]:result.filePaths;
 });

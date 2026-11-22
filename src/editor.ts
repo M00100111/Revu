@@ -16,6 +16,11 @@ self.MonacoEnvironment = {
   },
 };
 loader.config({ monaco });
+
+export async function tokenizeSnapshot(text:string,language:string){
+  await monaco.editor.colorize('',language,{});
+  return monaco.editor.tokenize(text,language);
+}
 const mix=(base:string,target:number,amount:number)=>{
   const values=[1,3,5].map(index=>Number.parseInt(base.slice(index,index+2),16));
   return '#'+values.map(value=>Math.round(value*(1-amount)+target*amount).toString(16).padStart(2,'0')).join('');

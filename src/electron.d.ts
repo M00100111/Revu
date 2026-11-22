@@ -41,6 +41,7 @@ interface RevuAgentApi {
   steer(projectId:string,sessionId:string,text:string):Promise<RevuResponse<void>>;
   followUp(projectId:string,sessionId:string,text:string):Promise<RevuResponse<void>>;
   clearQueue(projectId:string,sessionId:string):Promise<RevuResponse<PiQueueState>>;
+  withdrawInput(projectId:string,sessionId:string,kind:keyof PiQueueState,index:number,wire:string):Promise<RevuResponse<void>>;
   setRetainedQueue(projectId:string,sessionId:string,queue:PiQueueState):Promise<RevuResponse<PiQueueState>>;
   stop(projectId:string,sessionId:string):Promise<RevuResponse<void>>;
   bash(projectId:string,sessionId:string,command:string,excludeFromContext:boolean):Promise<RevuResponse<PiDirectBashState>>;
@@ -66,7 +67,7 @@ declare global {
     revu:{
       invoke<T>(body:Record<string,unknown>):Promise<RevuResponse<T>>;
       copyText(text:string):Promise<boolean>;
-      chooseChatFiles(projectId:string):Promise<string[]>;
+      chooseChatFiles(projectId:string,replacing?:{path:string;directory:boolean}):Promise<string[]>;
       filePath(file:File):string;
       saveChatImage(mimeType:string,bytes:Uint8Array):Promise<string>;
       openExternal(url:string):Promise<boolean>;

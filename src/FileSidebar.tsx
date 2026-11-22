@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import type { EditorTabItem } from './TabBar';
 import { api, errorMessage } from './files';
 import type { OpenFile, Project } from './editor';
@@ -6,6 +6,7 @@ import FileTree from './FileTree';
 import Icon from './Icon';
 import ResizeHandle from './ResizeHandle';
 import { showContextMenu } from './ContextMenu';
+import type {CiteRequest} from '../shared/citations';
 import { moveFileSidebarItem, OPEN_EDITORS_KEY, reconcileFileSidebarOrder } from './fileSidebarOrder';
 
 const savedOrder=()=>{
@@ -17,7 +18,8 @@ const savedOrder=()=>{
 
 export default function FileSidebar({width,projects,projectsLoaded,tabs,activeId,activeFile,mixed,picking,collapsedProjects,
   expandedDirectories,onResize,onAddFolder,onSelectTab,onKeep,onOpenFile,onCloseProject,onExpandAllSubfolders,onCollapseAllSubfolders,
-  onProjectToggle,onDirectoryToggle,onError}:{
+  onProjectToggle,onDirectoryToggle,onError,onCite,target}:{
+  onCite:(request:CiteRequest)=>void;target?:{projectId:string;path:string;token:number};
   width:number;projects:Project[];projectsLoaded:boolean;tabs:EditorTabItem[];activeId:string|null;activeFile?:OpenFile;mixed:boolean;picking:boolean;
   collapsedProjects:ReadonlySet<string>;expandedDirectories:ReadonlySet<string>;
   onResize:(width:number)=>void;onAddFolder:(root?:string)=>void;onSelectTab:(tab:EditorTabItem)=>void;onKeep:(id:string)=>void;
@@ -26,6 +28,7 @@ export default function FileSidebar({width,projects,projectsLoaded,tabs,activeId
   onProjectToggle:(root:string,open:boolean)=>void;onDirectoryToggle:(key:string)=>void;onError:(message:string)=>void;
 }){
   const rootsKey=projects.map(project=>project.root).join('\0');
+  const revealRoot=useCallback((node:HTMLElement|null)=>node?.scrollIntoView({block:'nearest'}),[target?.token]);
   const [historyOpen,setHistoryOpen]=useState(false);
   const [recent,setRecent]=useState<string[]>([]);
   const historyRef=useRef<HTMLDivElement>(null);
@@ -104,16 +107,17 @@ export default function FileSidebar({width,projects,projectsLoaded,tabs,activeId
   const projectEntry=(project:Project)=><details className={dragClass(project.root)+' project-tree'} key={project.root}
     open={!collapsedProjects.has(project.root)} onToggle={event=>onProjectToggle(project.root,event.currentTarget.open)}
     >
-    <summary className="workspace-name" title={project.root} draggable
+    <summary className="workspace-name" title={project.root} draggable ref={target?.projectId===project.id&&!target.path?revealRoot:undefined}
       onDragStart={event=>beginDrag(event,project.root)} onDragEnd={()=>{setDragged(null);setDrop(null);}}
       onDragOver={event=>dragOver(event,project.root)} onDrop={event=>finishDrop(event,project.root)}
       onContextMenu={async event=>{
-        const action=await showContextMenu(event,[{id:'close',label:'Close Folder'},{id:'expandAll',label:'Expand Subfolders',separatorBefore:true},{id:'collapseAll',label:'Collapse Subfolders'}] as const);
+        const action=await showContextMenu(event,[{id:'cite',label:'Cite'},{id:'close',label:'Close Folder'},{id:'expandAll',label:'Expand Subfolders',separatorBefore:true},{id:'collapseAll',label:'Collapse Subfolders'}] as const);
+        if(action==='cite')onCite({projectId:project.id,path:'.',directory:true});
         if(action==='close')onCloseProject(project);
         if(action==='expandAll')onExpandAllSubfolders(project,'');
         if(action==='collapseAll')onCollapseAllSubfolders(project,'');
       }}><Icon name="down" size={12}/><Icon name="folder" size={15}/><span>{project.name}</span></summary>
-    <FileTree projectId={project.id} projectRoot={project.root}
+    <FileTree projectId={project.id} projectRoot={project.root} onCite={onCite} target={target?.projectId===project.id?target:undefined}
       activePath={activeFile?.project.id===project.id?activeFile.path:null}
       onOpen={(path,keep)=>onOpenFile(project,path,keep)} onError={onError}
       expandedDirectories={expandedDirectories} onDirectoryToggle={onDirectoryToggle}

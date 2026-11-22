@@ -45,7 +45,7 @@ async function run(web){
   await wait("document.querySelector('.agent-chat-body')?.textContent.includes('window history marker')",'recent chat');
   const readable=performance.now();
   await web.executeJavaScript("document.querySelector('.agent-new-chat').click()");
-  await web.executeJavaScript(`const input=document.querySelector('.agent-chat textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,'ping');input.dispatchEvent(new Event('input',{bubbles:true}));`);
+  await web.executeJavaScript(`const input=document.querySelector('.citation-composer');input.focus();input.textContent='ping';input.dispatchEvent(new Event('input',{bubbles:true}));`);
   await wait("document.querySelector('.agent-send:not(:disabled)')",'new chat composer');
   if(scenario==='ready')await withDeadline(draft);
   const click=performance.now();

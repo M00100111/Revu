@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import {locateCitation,type CiteRequest,type CiteTarget} from '../shared/citations';
 import { fileMenuTargets, updateFileTabs } from './editorTabs';
-import { defineRevuThemes, monaco, type OpenFile, type Project } from './editor';
+import { defineRevuThemes, monaco, tokenizeSnapshot, type OpenFile, type Project } from './editor';
 import { api, errorMessage } from './files';
 import type { Entry, Snapshot } from '../shared/types';
 import { useWorkspace } from './useWorkspace';
@@ -83,7 +84,10 @@ export default function App(){
   const [agentNavigation,setAgentNavigation]=useState<AgentNavigationRequest|null>(null);
   const [agentWidth,setAgentWidth]=useState(()=>savedWidth('revu-agent-width',400));
   const [picking,setPicking]=useState(false);
-  const [reveal,setReveal]=useState<{id:string;line:number;href?:string;pinId?:string}|null>(null);
+  const [reveal,setReveal]=useState<{id:string;line:number;lastLine?:number;href?:string;pinId?:string}|null>(null);
+  const [citeRequest,setCiteRequest]=useState<CiteRequest>();
+  const [treeTarget,setTreeTarget]=useState<{projectId:string;path:string;token:number}>();
+  const cite=useCallback((request:CiteRequest)=>{setCiteRequest(request);setAgentOpen(true);},[]);
   const [reviewFilter,setReviewFilter]=useState('all');
   const [reviewSelected,setReviewSelected]=useState('');
   const [reviewReveal,setReviewReveal]=useState<{fileId:string;itemId:string;token:number}|null>(null);
@@ -370,6 +374,20 @@ export default function App(){
     }
     setReveal({id:file.id,line:pin.line,pinId:pin.id});
   }
+  async function gotoReference(projectId:string,target:CiteTarget){
+    const chat=projects.find(item=>item.id===projectId);if(!chat)return;
+    const located=locateCitation(target.path,chat,projects),project=located.project;
+    try{
+      if(!project){await api('revealExternalCitation',{projectId,path:located.path,directory:!!target.directory});return;}
+      const path=located.path.replace(/\/$/,'').replace(/^\.$/,'');
+      await api('checkCitation',{projectId:project.id,path,directory:!!target.directory});
+      setPanel('files');toggleProject(project.root,true);
+      if(path)setExpandedDirectories(current=>{const next=new Set(current);const parts=path.split('/');for(let count=1;count<parts.length+(target.directory?1:0);count++)next.add(project.root+'\n'+parts.slice(0,count).join('/'));return next;});
+      setTreeTarget({projectId:project.id,path,token:performance.now()});
+      if(target.directory){selectProject(project.id);return;}
+      const file=await workspace.load(project,path);if(file.model.isDisposed())return;showFile(file,'preview');if(target.line)setReveal({id:file.id,line:target.line,lastLine:target.lastLine??target.line});
+    }catch(error){notifyError(errorMessage(error));}
+  }
   async function openCode(target:PinTarget){
     const request=++codeRequest.current;
     const {source,reference}=target;
@@ -503,7 +521,7 @@ export default function App(){
       onClose={()=>setNotificationsOpen(false)} onDismissToast={dismissToast}
       onDelete={deleteNotification} onActivate={activateNotification} onReadAll={readAllNotifications} onClear={clearNotifications}/>
     {panel==='files'&&<FileSidebar width={sidebarWidth} projects={projects} projectsLoaded={projectsLoaded}
-      tabs={editorTabs} activeFile={activeFile} activeId={activeId}
+      tabs={editorTabs} activeFile={activeFile} activeId={activeId} onCite={cite} target={treeTarget}
       mixed={mixed} picking={picking} collapsedProjects={collapsedProjects} expandedDirectories={expandedDirectories}
       onResize={resizeSidebar} onAddFolder={addFolder} onSelectTab={selectEditorTab} onKeep={keepTab}
       onOpenFile={(project,path,keep)=>{
@@ -561,7 +579,7 @@ export default function App(){
       {activeFile?<>
         <div className="breadcrumb"><span>{activeFile.project.name}</span><span>/</span><span>{activeFile.path}</span></div>
         {(activeFile.reason||activeFile.diffError)&&<div className="review-warning">{activeFile.reason||activeFile.diffError}</div>}
-        <div className="editor-container"><EditorArea file={activeFile} dark={dark} editorRef={editorRef}
+        <div className="editor-container"><EditorArea file={activeFile} dark={dark} editorRef={editorRef} onCite={cite}
           tick={tick} onAction={workspace.act} onReviewReveal={itemId=>{
             setPanel('review');
             focusReviewChunk(activeFile,itemId);
@@ -590,7 +608,7 @@ export default function App(){
       </div>}
     </main>
     </>}
-    <AgentChat onOpenSettings={()=>{setSettingsCategory('chat');setPanel('settings');}} open={agentOpen} projects={projects} activeProjectId={projectId}
+    <AgentChat citeRequest={citeRequest} onGoto={gotoReference} tokenizeSnapshot={tokenizeSnapshot} onOpenSettings={()=>{setSettingsCategory('chat');setPanel('settings');}} open={agentOpen} projects={projects} activeProjectId={projectId}
       dirtyProjectIds={new Set(documents.filter(file=>file.dirty).map(file=>file.project.id))}
       width={agentWidth} onResize={setAgentWidth}
       onResizeEnd={value=>localStorage.setItem('revu-agent-width',String(value))} notify={notify}

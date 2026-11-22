@@ -273,6 +273,7 @@ export type PiAgentRequest=
   |{action:'steer';projectId:string;sessionId:string;text:string}
   |{action:'followUp';projectId:string;sessionId:string;text:string}
   |{action:'clearQueue';projectId:string;sessionId:string}
+  |{action:'withdrawInput';projectId:string;sessionId:string;kind:keyof PiQueueState;index:number;wire:string}
   |{action:'setRetainedQueue';projectId:string;sessionId:string;queue:PiQueueState}
   |{action:'stop';projectId:string;sessionId:string}
   |{action:'bash';projectId:string;sessionId:string;command:string;excludeFromContext:boolean}

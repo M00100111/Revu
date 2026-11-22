@@ -7,19 +7,28 @@ import { monaco, type OpenFile } from './editor';
 import { reviewItems, ReviewActions, PinActions, type ActionHandler,type PinActionHandler } from './ReviewActions';
 import DiffPreview from './DiffPreview';
 import type {PinPlacement} from '../shared/pinLayout';
+import type {CiteRequest} from '../shared/citations';
 
 const EDITOR_FONT="'Cascadia Code', Consolas, 'Courier New', monospace";
 const noPins:PinPlacement[]=[];
 type Portal={toolbarNode:HTMLElement;previewNode?:HTMLElement;item:Chunk|ReviewRecord|PinPlacement};
 
-export default function EditorArea({file,dark,editorRef,tick,onAction,onReviewReveal,expandedRecords,onToggleReviewPreview,reveal,fontSize,pins=noPins,keptIds,onPinAction,onPinSource,readOnly=false}:{
+export default function EditorArea({file,dark,editorRef,tick,onAction,onReviewReveal,expandedRecords,onToggleReviewPreview,reveal,fontSize,pins=noPins,keptIds,onPinAction,onPinSource,readOnly=false,onCite}:{
   file:OpenFile;dark:boolean;editorRef:MutableRefObject<monaco.editor.IStandaloneCodeEditor|null>;
   tick:number;onAction:ActionHandler;onReviewReveal:(itemId:string)=>void;
   expandedRecords:ReadonlySet<string>;onToggleReviewPreview:(itemId:string)=>void;
-  reveal?:{line:number;href?:string;pinId?:string};fontSize:number;pins?:PinPlacement[];keptIds:ReadonlySet<string>;readOnly?:boolean;
+  reveal?:{line:number;lastLine?:number;href?:string;pinId?:string};fontSize:number;pins?:PinPlacement[];keptIds:ReadonlySet<string>;readOnly?:boolean;onCite?:(request:CiteRequest)=>void;
   onPinAction:PinActionHandler;onPinSource:(pin:PinPlacement)=>void;
 }){
   const [editor,setEditor]=useState<monaco.editor.IStandaloneCodeEditor|null>(null);
+  useEffect(()=>{
+    if(!editor||!onCite)return;
+    const action=editor.addAction({id:'revu.cite',label:'Cite',precondition:'editorHasSelection',contextMenuGroupId:'navigation',contextMenuOrder:1,run:instance=>{
+      const range=instance.getSelection();if(!range||range.isEmpty()||instance.getModel()!==file.model)return;
+      const wholeLines=range.startColumn===1&&(range.endColumn===1||range.endColumn===file.model.getLineMaxColumn(range.endLineNumber));
+      onCite({projectId:file.project.id,path:file.path,selection:{path:file.path,startLine:range.startLineNumber,startColumn:range.startColumn,endLine:range.endLineNumber,endColumn:range.endColumn,text:file.model.getValueInRange(range),language:file.model.getLanguageId(),wholeLines}});
+    }});return ()=>action.dispose();
+  },[editor,file.model,file.project.id,file.path,onCite]);
   const [portals,setPortals]=useState<Portal[]>([]);
   const lastReveal=useRef<typeof reveal>(undefined);
   const actionRef=useRef(onAction); actionRef.current=onAction;
@@ -145,6 +154,7 @@ export default function EditorArea({file,dark,editorRef,tick,onAction,onReviewRe
       if((reveal.href||reveal.pinId)&&!pin)return;
       const line=Math.max(1,Math.min(pin?.line??reveal.line,file.model.getLineCount()));
       editor.revealLineInCenter(line);editor.setPosition({lineNumber:line,column:1});
+      if(reveal.lastLine!==undefined){const last=Math.max(line,Math.min(reveal.lastLine,file.model.getLineCount()));editor.setSelection(new monaco.Range(line,1,last,file.model.getLineMaxColumn(last)));editor.focus();}
       if(pin){
         const id=pin.chunkId??pin.id;
         const portal=portals.find(item=>item.item.id===id);

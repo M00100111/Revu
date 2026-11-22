@@ -21,8 +21,11 @@ import type {PiExtensionReply,PiExtensionPending} from '../shared/piTypes';
 import { copyPiSessions, nativePiSessionDir, nativePiSessionsDir, piSessionHostPath, piSessionProjectAvailable } from './piSessionStorage';
 
 type PiModule=typeof import('@earendil-works/pi-coding-agent');
+import {inputText,unpackInput,type CiteInput} from '../shared/citations';
 type NativeRpcClient=InstanceType<PiModule['RpcClient']>;
 type RpcClient=Omit<NativeRpcClient,'bash'>&{
+  revuInput:(type:'prompt'|'steer'|'follow_up',input:CiteInput,wire:string)=>Promise<string>;
+  withdrawInput:(kind:keyof PiQueueState,index:number,wire:string)=>Promise<boolean>;
   bash:(command:string,excludeFromContext?:boolean)=>Promise<{output:string;exitCode:number|null;cancelled:boolean;truncated:boolean;fullOutputPath?:string}>;
   navigateTree:(entryId:string,options:{summarize:boolean;customInstructions?:string})=>Promise<{editorText?:string;cancelled:boolean;aborted?:boolean;summaryEntry?:unknown}>;
   setEntryLabel:(entryId:string,label?:string)=>Promise<void>;
@@ -726,36 +729,42 @@ export class PiManager {
 
   async prompt(projectId:string,sessionId:string,text:string){
     const message=text.trimEnd();if(!message.trim())throw new Error('Message is required.');
-    const command=parsePiCommand(message);
+    const command=parsePiCommand(inputText(message));
     if(command&&PI_BUILTIN_COMMANDS.some(item=>item.name===command.name))throw new Error('Built-in commands must be handled by Revu.');
     const handle=await this.ensureRuntime(projectId,sessionId);
     if(handle.status==='running'||handle.status==='stopping')throw new Error('This session is already running.');
     handle.status='running';handle.error=undefined;this.emit(handle,'status','running');
     try{
-      const disposition=await handle.client.prompt(message);
+      const disposition=await this.deliverInput(handle,'prompt',message);
       if(disposition!=='handled')await this.flushRetainedQueue(handle);
       if(disposition==='handled'){const state=await handle.client.getState();handle.status=state.isStreaming?'running':'idle';this.emit(handle,'status',handle.status);}
     }catch(error){this.fail(handle,error);throw error;}
   }
 
+  private deliverInput(handle:RuntimeHandle,kind:'prompt'|'steer'|'followUp',wire:string){
+    const input=unpackInput(wire);return input?.selections.length?handle.client.revuInput(kind==='followUp'?'follow_up':kind,input,wire):handle.client[kind](input?.text??wire);
+  }
   private async flushRetainedQueue(handle:RuntimeHandle){
     const pending=this.retainedQueue(handle.projectId,handle.sessionId);let next={steering:[...pending.steering],followUp:[...pending.followUp]};
     try{
-      while(next.steering.length){await this.validateQueue(handle,[next.steering[0]]);await handle.client.steer(next.steering[0]);next=acceptPiQueueHead(next,'steering');this.updateRetainedQueue(handle,next);}
-      while(next.followUp.length){await this.validateQueue(handle,[next.followUp[0]]);await handle.client.followUp(next.followUp[0]);next=acceptPiQueueHead(next,'followUp');this.updateRetainedQueue(handle,next);}
+      while(next.steering.length){await this.validateQueue(handle,[next.steering[0]]);await this.deliverInput(handle,'steer',next.steering[0]);next=acceptPiQueueHead(next,'steering');this.updateRetainedQueue(handle,next);}
+      while(next.followUp.length){await this.validateQueue(handle,[next.followUp[0]]);await this.deliverInput(handle,'followUp',next.followUp[0]);next=acceptPiQueueHead(next,'followUp');this.updateRetainedQueue(handle,next);}
     }catch(error){this.emit(handle,'event',{type:'retained_queue_error',message:errorMessage(error)});}
   }
 
   async steer(projectId:string,sessionId:string,text:string){
     const message=text.trim();if(!message)throw new Error('Message is required.');const handle=await this.ensureRuntime(projectId,sessionId);
-    if(handle.status!=='running')throw new Error('Steering is only available while the session is running.');await this.validateQueue(handle,[message]);await handle.client.steer(message);
+    if(handle.status!=='running')throw new Error('Steering is only available while the session is running.');await this.validateQueue(handle,[message]);await this.deliverInput(handle,'steer',message);
   }
 
   async followUp(projectId:string,sessionId:string,text:string){
     const message=text.trim();if(!message)throw new Error('Message is required.');const handle=await this.ensureRuntime(projectId,sessionId);
-    if(handle.status!=='running')throw new Error('Follow-up is only available while the session is running.');await this.validateQueue(handle,[message]);await handle.client.followUp(message);
+    if(handle.status!=='running')throw new Error('Follow-up is only available while the session is running.');await this.validateQueue(handle,[message]);await this.deliverInput(handle,'followUp',message);
   }
 
+  async withdrawInput(projectId:string,sessionId:string,kind:keyof PiQueueState,index:number,wire:string){
+    const handle=this.runtimes.get(sessionId);if(!handle||handle.projectId!==projectId||!await handle.client.withdrawInput(kind,index,wire))throw new Error('This input is no longer queued.');
+  }
   async clearQueue(projectId:string,sessionId:string):Promise<PiQueueState>{
     const handle=this.runtimes.get(sessionId);
     if(!handle){this.project(projectId);return this.updateRetainedQueue({projectId,sessionId},emptyPiQueue());}
@@ -1080,7 +1089,7 @@ export class PiManager {
   }
   private async validateQueue(handle:RuntimeHandle,texts:string[]){
     if(!texts.length)return;const commands=await handle.client.getCommands();
-    for(const text of texts){const warning=piQueueWarning(text,commands);if(warning)throw new Error(warning);}
+    for(const text of texts){const warning=piQueueWarning(inputText(text),commands);if(warning)throw new Error(warning);}
   }
   async reloadResources(projectId:string,sessionId:string){
     const handle=await this.ensureRuntime(projectId,sessionId);

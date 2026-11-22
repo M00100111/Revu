@@ -1,6 +1,9 @@
 import type { CSSProperties } from 'react';
 
 const assets={
+  goTo:new URL('../assets/icons/chat/goTo.svg',import.meta.url).href,
+  editReference:new URL('../assets/icons/chat/editor.svg',import.meta.url).href,
+  readAll:new URL('../assets/icons/notification/readAll.svg',import.meta.url).href,
   review:new URL('../assets/icons/activity-bar/review.svg',import.meta.url).href,
   files:new URL('../assets/icons/activity-bar/files.svg',import.meta.url).href,
   sun:new URL('../assets/icons/activity-bar/sun.svg',import.meta.url).href,
@@ -41,6 +44,7 @@ const assets={
   appendToInput:new URL('../assets/icons/chat/appendToInput.svg',import.meta.url).href,
   replaceFromInput:new URL('../assets/icons/chat/replaceFromInput.svg',import.meta.url).href,
   delete:new URL('../assets/icons/chat/delete.svg',import.meta.url).href,
+  view:new URL('../assets/icons/chat/view.svg',import.meta.url).href,
   steering:new URL('../assets/icons/chat/steering.svg',import.meta.url).href,
   steeringButton:new URL('../assets/icons/chat/steeringButton.svg',import.meta.url).href,
   followUp:new URL('../assets/icons/chat/followUp.svg',import.meta.url).href,

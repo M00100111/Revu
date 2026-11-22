@@ -4,6 +4,7 @@ import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/pr
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { patchPiCite } from './patch-pi-cite.mjs';
 
 const nodeVersion='22.19.0';
 const runtimeRoot=resolve('.pi-runtime');
@@ -24,6 +25,7 @@ async function preparePiApp(){
   await cp(join(piSourceRoot,'package.json'),join(piAppDir,'package.json'));
   await cp(join(piSourceRoot,'dist','bundle'),join(piAppDir,'bundle'),{recursive:true});
   await cp(resolve('scripts','pi-launcher.mjs'),join(piAppDir,'revu-launcher.mjs'));
+  await cp(resolve('scripts','pi-cite-runtime.mjs'),join(piAppDir,'revu-cite.mjs'));
   await mkdir(join(piAppDir,'revu-extensions'),{recursive:true});
   await cp(resolve('pi-extensions','ask-user.ts'),join(piAppDir,'revu-extensions','ask-user.ts'));
   await cp(resolve('pi-extensions','pin-code.ts'),join(piAppDir,'revu-extensions','pin-code.ts'));
@@ -106,7 +108,7 @@ async function preparePiApp(){
     const trustImport=/import\{([^}]*\bProjectTrustStore\b[^}]*)\}from"([^"]+)"/.exec(source);
     if(!trustImport)throw new Error('Could not find Pi trust exports.');
     await writeFile(join(chunksDir,'revu-trust.js'),`export {ProjectTrustStore,getProjectTrustOptions,hasTrustRequiringProjectResources} from "${trustImport[2]}";\n`);
-    await writeFile(path,source);patched=true;break;
+    await writeFile(path,patchPiCite(source,replaceOnce));patched=true;break;
   }
   if(!patched)throw new Error('Could not find Pi 1.5.0 RPC bundle chunk to patch.');
 }
