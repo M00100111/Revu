@@ -5,6 +5,7 @@ import type { OpenFile, Project } from './editor';
 import FileTree from './FileTree';
 import Icon from './Icon';
 import ResizeHandle from './ResizeHandle';
+import ScrollbarScope from './ScrollbarScope';
 import { showContextMenu } from './ContextMenu';
 import type {CiteRequest} from '../shared/citations';
 import { moveFileSidebarItem, OPEN_EDITORS_KEY, reconcileFileSidebarOrder } from './fileSidebarOrder';
@@ -144,8 +145,8 @@ export default function FileSidebar({width,projects,projectsLoaded,tabs,activeId
       </div>
       <button className="icon-button" onClick={()=>onAddFolder()}
       disabled={picking} title="Open folder" aria-label="Open folder"><Icon name="openFolder" size={17}/></button></div></header>
-    {projects.length||tabs.length?<div className="tree-scroll">{order.map(key=>key===OPEN_EDITORS_KEY?openEditors:
-      projectByRoot.has(key)?projectEntry(projectByRoot.get(key)!):null)}</div>:<p className="sidebar-empty">No folders open</p>}
+    {projects.length||tabs.length?<ScrollbarScope className="tree-scroll">{order.map(key=>key===OPEN_EDITORS_KEY?openEditors:
+      projectByRoot.has(key)?projectEntry(projectByRoot.get(key)!):null)}</ScrollbarScope>:<p className="sidebar-empty">No folders open</p>}
     <ResizeHandle width={width} onResize={onResize}/>
   </aside>;
 }

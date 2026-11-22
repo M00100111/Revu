@@ -29,6 +29,8 @@ export interface PiSessionSummary {
   firstMessage:string;
   createdAt:number;
   modifiedAt:number;
+  /** Last user input for the history sidebar. A new unsent session has no history yet. */
+  historyAt?:number|null;
   runCount:number;
   status:PiRuntimeStatus;
   hasSessionFile?:boolean;

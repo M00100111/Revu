@@ -77,7 +77,7 @@ app.whenReady().then(async()=>{
     const chatBundle=buildSync({entryPoints:['tests/fixtures/citationChatUi.tsx'],bundle:true,write:false,jsx:'automatic',define:{'process.env.NODE_ENV':'"production"','import.meta.url':JSON.stringify(pathToFileURL(resolve('src/Icon.tsx')).href)}});
     const loadChat=async(resetToolbar=false)=>{
       await window.loadURL(pathToFileURL(resolve('tests/fixtures/citationUi.html')).href);await web.insertCSS(readFileSync('src/styles.css','utf8'));
-      await web.insertCSS('main > .agent-chat { height: calc(100vh - 32px); }');
+      await web.insertCSS('main .agent-chat { height: calc(100vh - 32px); }');
       if(resetToolbar)await web.executeJavaScript("for(const id of ['commands','mention','choose-file','direct-bash'])localStorage.removeItem('revu-show-chat-'+id);");
       await web.executeJavaScript(`window.calls=[];window.revu={
       invoke:async({action,projectId,prefix,searchProject})=>{

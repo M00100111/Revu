@@ -1,22 +1,26 @@
 import Icon from './Icon';
 export type Panel='files'|'review'|'settings'|null;
-export default function Sidebar({ panel, setPanel, dark, toggleTheme,showThemeSwitcher,agentOpen,toggleAgent,notificationCount,notificationsOpen,toggleNotifications }: {
+export default function Sidebar({ panel, setPanel, dark, toggleTheme,showThemeSwitcher,agentOpen,toggleAgent,notificationCount,notificationsOpen,toggleNotifications,
+  showDock,onDockAll,reviewDetached,chatDetached,onFocusReview,onFocusChat }: {
   panel:Panel; setPanel:(panel:Panel)=>void;
   dark:boolean;toggleTheme:()=>void;showThemeSwitcher:boolean;
   agentOpen:boolean;toggleAgent:()=>void;
   notificationCount:number;notificationsOpen:boolean;toggleNotifications:()=>void;
+  showDock?:boolean;onDockAll?:()=>void;reviewDetached?:boolean;chatDetached?:boolean;onFocusReview?:()=>void;onFocusChat?:()=>void;
 }) {
   return <nav className="activity-bar" aria-label="Activity bar">
     <div className="brand" title="Revu">r.</div>
     <button className={'activity-button '+(panel==='files'?'selected':'')} title="File"
       aria-label="File" aria-pressed={panel==='files'} onClick={()=>setPanel(panel==='files'?null:'files')}>
       <Icon name="files" size={21}/></button>
-    <button className={'activity-button '+(panel==='review'?'selected':'')} title="Review Dashboard"
-      aria-label="Review Dashboard" aria-pressed={panel==='review'} onClick={()=>setPanel(panel==='review'?null:'review')}>
+    <button className={'activity-button '+(panel==='review'?'selected':'')} title={reviewDetached?'Focus Review window':'Review Dashboard'}
+      aria-label="Review Dashboard" aria-pressed={reviewDetached?undefined:panel==='review'} onClick={reviewDetached?onFocusReview:()=>setPanel(panel==='review'?null:'review')}>
       <Icon name="review" size={21}/></button>
     <div className="activity-footer">
-      <button className={'activity-button '+(agentOpen?'selected':'')} title="Pi Agent"
-        aria-label="Pi Agent" aria-pressed={agentOpen} onClick={toggleAgent}>
+      {showDock&&<button className="activity-button" title="Merge all windows" aria-label="Merge all windows" onClick={onDockAll}>
+        <Icon name="dock" size={21}/></button>}
+      <button className={'activity-button '+(agentOpen&&!chatDetached?'selected':'')} title={chatDetached?'Focus Chat window':'Pi Agent'}
+        aria-label="Pi Agent" aria-pressed={chatDetached?undefined:agentOpen} onClick={chatDetached?onFocusChat:toggleAgent}>
         <Icon name="agent" size={21}/></button>
       <button className={'activity-button '+(notificationsOpen?'selected':'')} title="Notifications"
         aria-label={`Notifications${notificationCount?` (${notificationCount} unread)`:''}`}

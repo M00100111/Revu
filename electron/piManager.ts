@@ -11,7 +11,7 @@ import type {
   PiQueueState,PiRuntimeStatus,PiSessionCatalog,PiSessionInfo,PiSessionScope,PiSessionSearchResult,PiSessionSnapshot,PiSessionSort,
   PiSessionSummary,PiSessionTreeResponse,PiThinkingLevel,PiTreeNavigationResponse,PiUsageStats,RevuPiEvent,
 } from '../shared/piTypes';
-import { calculatePiCacheHitPercent, countPiSessionRuns, derivedPiSessionName, isReservedPiSessionName, piSessionProjectKey } from '../shared/piSession';
+import { calculatePiCacheHitPercent, piSessionActivity, derivedPiSessionName, isReservedPiSessionName, piSessionProjectKey } from '../shared/piSession';
 import { searchPiSessions } from '../shared/piSessionSearch';
 import { acceptPiQueueHead, cleanPiQueue, emptyPiQueue, mergePiQueues } from '../shared/piQueue';
 import { parsePiCommand, PI_BUILTIN_COMMANDS, piQueueWarning } from '../shared/piCommands';
@@ -77,6 +77,8 @@ interface RuntimeHandle {
   client:RpcClient;
   status:PiRuntimeStatus;
   sessionPath?:string;
+  firstLiveInput?:{text:string;time:number};
+  lastInputAt?:number;
   error?:string;
   isCompacting?:boolean;
   closedTab?:boolean;
@@ -143,7 +145,7 @@ export class PiManager {
   private readonly runtimes=new Map<string,RuntimeHandle>();
   private readonly retainedQueues=new Map<string,PiQueueState>();
   private readonly retainedQueueRevisions=new Map<string,number>();
-  private readonly runCountCache=new Map<string,{modifiedAt:number;count:number}>();
+  private readonly activityCache=new Map<string,{modifiedAt:number;runCount:number;lastInputAt:number}>();
   private readonly treeOperations=new Map<string,TreeOperation>();
   private readonly trustDecisions=new Map<string,boolean>();
   private readonly trustPrompts=new Map<string,Promise<boolean>>();
@@ -410,12 +412,20 @@ export class PiManager {
   async listSessions(projectId:string,scope:PiSessionScope='current'):Promise<PiSessionCatalog>{
     const project=this.project(projectId);const {SessionManager}=await this.module();
     const listed=(await this.listedSessions(projectId,scope)).filter(session=>!this.hiddenDrafts.has(session.id));
-    const result=this.summaries(projectId,scope,listed).map((summary,index)=>({...summary,
-      runCount:this.countRuns(SessionManager,listed[index].path,listed[index].modified.getTime())}));
+    const result:PiSessionSummary[]=this.summaries(projectId,scope,listed).map((summary,index)=>{
+      const file=listed[index];
+      const activity=this.sessionActivity(SessionManager,file.path,summary.modifiedAt);
+      const runtime=this.runtimes.get(summary.id);
+      const inputAt=Math.max(activity.lastInputAt,runtime?.lastInputAt??0);
+      const historyAt=inputAt?Math.max(summary.createdAt,inputAt):file.messageCount?summary.modifiedAt:null;
+      if(!file.messageCount&&runtime?.firstLiveInput&&!summary.hasName)summary.name=runtime.firstLiveInput.text;
+      return {...summary,runCount:activity.runCount,historyAt};
+    });
     if(scope==='current')for(const runtime of this.runtimes.values()){
       if(runtime.projectId!==projectId||this.hiddenDrafts.has(runtime.sessionId)||result.some(item=>item.id===runtime.sessionId))continue;
-      result.unshift({id:runtime.sessionId,projectId,cwd:project.root,name:'New Chat',hasName:false,scope,firstMessage:'',createdAt:Date.now(),
-        modifiedAt:Date.now(),runCount:0,status:runtime.status,hasSessionFile:!!runtime.sessionPath&&existsSync(runtime.sessionPath),isCompacting:runtime.isCompacting,question:!!runtime.ui.size});
+      const first=runtime.firstLiveInput;
+      result.unshift({id:runtime.sessionId,projectId,cwd:project.root,name:first?.text??'New Chat',hasName:false,scope,firstMessage:first?.text??'',createdAt:first?.time??Date.now(),
+        modifiedAt:runtime.lastInputAt??Date.now(),historyAt:runtime.lastInputAt??null,runCount:0,status:runtime.status,hasSessionFile:!!runtime.sessionPath&&existsSync(runtime.sessionPath),isCompacting:runtime.isCompacting,question:!!runtime.ui.size});
     }
     const groups=new Map<string,PiSessionCatalog['groups'][number]>();
     for(const {cwd} of result){
@@ -431,14 +441,20 @@ export class PiManager {
     const {SessionManager}=await this.module();const listed=await this.listedSessions(projectId,scope);
     const summaries=this.summaries(projectId,scope,listed);
     return searchPiSessions(listed.map((session,index)=>({summary:{...summaries[index],
-      runCount:this.countRuns(SessionManager,session.path,session.modified.getTime())},allMessagesText:session.allMessagesText})),query,sort);
+      runCount:this.sessionActivity(SessionManager,session.path,session.modified.getTime()).runCount},allMessagesText:session.allMessagesText})),query,sort);
   }
 
-  private countRuns(SessionManager:PiModule['SessionManager'],path:string,modifiedAt:number){
-    const cached=this.runCountCache.get(path);if(cached?.modifiedAt===modifiedAt)return cached.count;
-    let count=0;
-    try{count=countPiSessionRuns(SessionManager.open(path).getBranch());}catch{count=0;}
-    this.runCountCache.set(path,{modifiedAt,count});return count;
+  private sessionActivity(SessionManager:PiModule['SessionManager'],path:string,modifiedAt:number){
+    const cached=this.activityCache.get(path);if(cached?.modifiedAt===modifiedAt)return cached;
+    let activity={runCount:0,lastInputAt:0};
+    try{activity=piSessionActivity(SessionManager.open(path).getBranch());}catch{/* Session files can disappear during a catalog refresh. */}
+    this.activityCache.set(path,{modifiedAt,...activity});return activity;
+  }
+
+  private noteUserInput(handle:RuntimeHandle,text:string,time:number){
+    handle.firstLiveInput??={text:inputText(text).trim().slice(0,80)||'New Chat',time};
+    handle.lastInputAt=Math.max(handle.lastInputAt??0,time);
+    this.emit(handle,'sessions-changed');
   }
 
   private async startRuntime(projectId:string,sessionId?:string,sessionPath?:string,trustRestart=false,background=false){
@@ -537,6 +553,7 @@ export class PiManager {
     this.idleTimers.cancel(previousId);this.runtimes.delete(previousId);
     const previousQueueKey=this.queueKey(handle.projectId,previousId);const retained=this.retainedQueue(handle.projectId,previousId);this.retainedQueues.delete(previousQueueKey);this.retainedQueueRevisions.delete(previousQueueKey);
     handle.sessionId=state.sessionId;handle.sessionPath=state.sessionFile;handle.status='idle';handle.error=undefined;handle.queue=emptyPiQueue();
+    handle.firstLiveInput=undefined;handle.lastInputAt=undefined;
     if(retained.steering.length||retained.followUp.length){const queueKey=this.queueKey(handle.projectId,handle.sessionId);this.retainedQueues.set(queueKey,retained);this.retainedQueueRevisions.set(queueKey,1);}
     this.runtimes.set(handle.sessionId,handle);this.selectRuntime(handle.sessionId);
     return handle;
@@ -794,6 +811,7 @@ export class PiManager {
     const value=command.trim();if(!value)throw new Error('Command is required.');const handle=await this.ensureRuntime(projectId,sessionId);
     if(handle.bash?.status==='running')throw new Error('Wait for the current Bash command to finish.');
     const started:PiDirectBashState={command:value,output:'',status:'running',excludeFromContext,startedAt:Date.now()};handle.bash=started;this.emit(handle,'bash',started);
+    this.noteUserInput(handle,value,started.startedAt);
     try{
       const result=await handle.client.bash(value,excludeFromContext);const completed:PiDirectBashState={...started,...result,status:result.cancelled||result.exitCode===0?'done':'error'};
       handle.bash=completed;this.emit(handle,'bash',completed);handle.bash=undefined;this.emit(handle,'sessions-changed');return completed;
@@ -850,6 +868,11 @@ export class PiManager {
       handle.bash={...handle.bash,output:handle.bash.output+event.delta};this.emit(handle,'bash',handle.bash);
     }
     this.emit(handle,'event',event);
+    if(event.type==='message_start'&&event.message.role==='user'){
+      const {content,timestamp}=event.message;
+      const text=typeof content==='string'?content:content.filter(part=>part.type==='text').map(part=>part.text).join(' ');
+      this.noteUserInput(handle,text,timestamp);
+    }
     if(event.type==='agent_start'){handle.status='running';this.emit(handle,'status','running');}
     if(event.type==='turn_end')void this.refreshUsage(handle);
     if(event.type==='compaction_start')handle.isCompacting=true;
@@ -921,7 +944,7 @@ export class PiManager {
     const runtime=this.runtimes.get(sessionId);let path=runtime?.sessionPath;
     if(!path){try{path=(await this.findSession(projectId,sessionId,scope)).path;}catch{path=undefined;}}
     await this.disposeRuntime(sessionId);const queueKey=this.queueKey(projectId,sessionId);this.retainedQueues.delete(queueKey);this.retainedQueueRevisions.delete(queueKey);
-    if(path){this.runCountCache.delete(path);await shell.trashItem(path);}
+    if(path){this.activityCache.delete(path);await shell.trashItem(path);}
     if(this.selectedSessionId===sessionId)this.selectedSessionId=null;
     this.options.emit({sessionId,projectId,type:'sessions-changed'});
   }
@@ -933,7 +956,7 @@ export class PiManager {
     await Promise.all([...this.runtimes.values()].filter(item=>item.projectId===projectId).map(item=>this.disposeRuntime(item.sessionId)));
     for(const key of this.retainedQueues.keys())if(key.startsWith(`${projectId}\u0000`)){this.retainedQueues.delete(key);this.retainedQueueRevisions.delete(key);}
     for(const key of this.retainedQueueRevisions.keys())if(key.startsWith(`${projectId}\u0000`))this.retainedQueueRevisions.delete(key);
-    this.runCountCache.clear();
+    this.activityCache.clear();
   }
 
   async listModels(projectId:string,sessionId?:string):Promise<PiModelSummary[]>{

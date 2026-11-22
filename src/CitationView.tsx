@@ -1,3 +1,4 @@
+import {usePanelWindow} from './PanelPortal';
 import {createContext,Fragment,useContext,useEffect,useLayoutEffect,useRef,useState,type ReactNode} from 'react';
 import {createPortal} from 'react-dom';
 import {copyReference,references,type CitationReference,type CiteTarget,type DraftSelection} from '../shared/citations';
@@ -7,6 +8,7 @@ import {CitationCode,type SnapshotTokenizer} from './CitationCode';
 type Preview={anchor:HTMLElement;snapshot:DraftSelection};
 const PreviewContext=createContext<(preview:Preview)=>void>(()=>{});
 export function CitationPreviews({epoch,children,tokenize}:{epoch:string;children:ReactNode;tokenize?:SnapshotTokenizer}){
+  const panelWindow=usePanelWindow();
   const [preview,setPreview]=useState<Preview|null>(null),panel=useRef<HTMLElement>(null);
   useLayoutEffect(()=>setPreview(null),[epoch]);
   useLayoutEffect(()=>{
@@ -14,25 +16,25 @@ export function CitationPreviews({epoch,children,tokenize}:{epoch:string;childre
     const anchor=preview.anchor,element=panel.current,chat=anchor.closest('.agent-chat'),body=anchor.closest('.agent-chat-body');
     const position=()=>{
       const rect=anchor.getBoundingClientRect(),bounds=chat?.getBoundingClientRect(),clip=body?.getBoundingClientRect();
-      const left=Math.max(0,bounds?.left??0)+8,right=Math.min(window.innerWidth,bounds?.right??window.innerWidth)-8;
-      const top=Math.max(0,bounds?.top??0)+8,bottom=Math.min(window.innerHeight,bounds?.bottom??window.innerHeight)-8;
+      const left=Math.max(0,bounds?.left??0)+8,right=Math.min(panelWindow.innerWidth,bounds?.right??panelWindow.innerWidth)-8;
+      const top=Math.max(0,bounds?.top??0)+8,bottom=Math.min(panelWindow.innerHeight,bounds?.bottom??panelWindow.innerHeight)-8;
       if(!anchor.isConnected||!rect.width||rect.bottom<(clip?.top??top-8)||rect.top>(clip?.bottom??bottom+8)){setPreview(null);return;}
       element.style.maxWidth=Math.max(1,Math.min(620,right-left))+'px';
-      const preferred=Math.min(element.scrollHeight+2,440,window.innerHeight/2);
+      const preferred=Math.min(element.scrollHeight+2,440,panelWindow.innerHeight/2);
       const above=rect.top-6-top,below=bottom-rect.bottom-6,placeAbove=above>=preferred||(below<preferred&&above>=below);
-      element.style.maxHeight=Math.max(1,Math.min(440,window.innerHeight/2,placeAbove?above:below))+'px';
+      element.style.maxHeight=Math.max(1,Math.min(440,panelWindow.innerHeight/2,placeAbove?above:below))+'px';
       element.style.left=Math.max(left,Math.min(rect.left+(rect.width-element.offsetWidth)/2,right-element.offsetWidth))+'px';
       element.style.top=(placeAbove?rect.top-6-element.offsetHeight:rect.bottom+6)+'px';
     };
     const dismiss=(event:PointerEvent)=>{const target=event.target as Node;if(!element.contains(target)&&!anchor.contains(target))setPreview(null);};
     const escape=(event:KeyboardEvent)=>{if(event.key==='Escape'){event.preventDefault();event.stopPropagation();setPreview(null);anchor.focus();}};
-    position();const observer=new ResizeObserver(position);observer.observe(element);observer.observe(anchor);if(chat)observer.observe(chat);
-    window.addEventListener('scroll',position,true);window.addEventListener('resize',position);
-    document.addEventListener('keydown',escape,true);document.addEventListener('pointerdown',dismiss);
-    return()=>{observer.disconnect();window.removeEventListener('scroll',position,true);window.removeEventListener('resize',position);document.removeEventListener('keydown',escape,true);document.removeEventListener('pointerdown',dismiss);};
-  },[preview]);
+    position();const observer=new panelWindow.ResizeObserver(position);observer.observe(element);observer.observe(anchor);if(chat)observer.observe(chat);
+    panelWindow.addEventListener('scroll',position,true);panelWindow.addEventListener('resize',position);
+    panelWindow.document.addEventListener('keydown',escape,true);panelWindow.document.addEventListener('pointerdown',dismiss);
+    return()=>{observer.disconnect();panelWindow.removeEventListener('scroll',position,true);panelWindow.removeEventListener('resize',position);panelWindow.document.removeEventListener('keydown',escape,true);panelWindow.document.removeEventListener('pointerdown',dismiss);};
+  },[preview,panelWindow]);
   return <PreviewContext.Provider value={next=>setPreview(current=>current?.anchor===next.anchor?null:next)}>{children}
-    {preview&&createPortal(<aside role="dialog" aria-label="Code snapshot" ref={panel} className="citation-preview"><CitationCode snapshot={preview.snapshot} tokenize={tokenize}/></aside>,document.body)}
+    {preview&&createPortal(<aside role="dialog" aria-label="Code snapshot" ref={panel} data-app-scrollbars className="citation-preview"><CitationCode snapshot={preview.snapshot} tokenize={tokenize}/></aside>,panelWindow.document.body)}
   </PreviewContext.Provider>;
 }
 export function CitationChip({reference,onGoto,onEdit,onCopy,onDelete,onView}:{reference:CitationReference;onGoto:(target:CiteTarget)=>void;onEdit?:()=>void;onCopy?:()=>void;onDelete?:()=>void;onView?:(anchor:HTMLElement)=>void}){

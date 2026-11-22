@@ -9,6 +9,7 @@ export interface RevuContextMenuItem<T extends string=string> {
 }
 
 interface ContextMenuRequest {
+  owner:Window;
   x:number;
   y:number;
   items:readonly RevuContextMenuItem[];
@@ -17,11 +18,12 @@ interface ContextMenuRequest {
 
 let openContextMenu:((request:ContextMenuRequest)=>void)|undefined;
 
-export const showContextMenu=<T extends string>(event:{clientX:number;clientY:number;preventDefault:()=>void},items:readonly RevuContextMenuItem<T>[])=>{
+export const showContextMenu=<T extends string>(event:{clientX:number;clientY:number;currentTarget?:EventTarget|null;preventDefault:()=>void},items:readonly RevuContextMenuItem<T>[])=>{
   event.preventDefault();
   return new Promise<T|null>(resolve=>{
     if(!openContextMenu){resolve(null);return;}
-    openContextMenu({x:event.clientX,y:event.clientY,items,resolve:value=>resolve(value as T|null)});
+    const owner=(event.currentTarget as Node|null)?.ownerDocument?.defaultView??window;
+    openContextMenu({owner,x:event.clientX,y:event.clientY,items,resolve:value=>resolve(value as T|null)});
   });
 };
 
@@ -44,20 +46,21 @@ export default function ContextMenuHost(){
   useLayoutEffect(()=>{
     if(!request||!menuRef.current)return;
     const rect=menuRef.current.getBoundingClientRect();const margin=6;
-    setPosition({left:Math.max(margin,Math.min(request.x,window.innerWidth-rect.width-margin)),top:Math.max(margin,Math.min(request.y,window.innerHeight-rect.height-margin))});
+    setPosition({left:Math.max(margin,Math.min(request.x,request.owner.innerWidth-rect.width-margin)),top:Math.max(margin,Math.min(request.y,request.owner.innerHeight-rect.height-margin))});
     menuRef.current.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
   },[request]);
   useEffect(()=>{
     if(!request)return;
-    const close=()=>finish(null);window.addEventListener('blur',close);window.addEventListener('resize',close);
-    return()=>{window.removeEventListener('blur',close);window.removeEventListener('resize',close);};
+    const {owner}=request;const close=()=>finish(null);
+    owner.addEventListener('blur',close);owner.addEventListener('resize',close);owner.addEventListener('pagehide',close);
+    return()=>{owner.removeEventListener('blur',close);owner.removeEventListener('resize',close);owner.removeEventListener('pagehide',close);};
   },[request]);
   if(!request)return null;
   const moveFocus=(event:React.KeyboardEvent)=>{
     if(event.key==='Escape'){event.preventDefault();finish(null);return;}
     if(event.key!=='ArrowDown'&&event.key!=='ArrowUp')return;
     event.preventDefault();const buttons=[...menuRef.current!.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
-    const current=buttons.indexOf(document.activeElement as HTMLButtonElement);const step=event.key==='ArrowDown'?1:-1;
+    const current=buttons.indexOf(request.owner.document.activeElement as HTMLButtonElement);const step=event.key==='ArrowDown'?1:-1;
     buttons[(current+step+buttons.length)%buttons.length]?.focus();
   };
   return createPortal(<div className="revu-context-menu-layer" onPointerDown={event=>{if(event.target===event.currentTarget)finish(null);}} onContextMenu={event=>event.preventDefault()}>
@@ -65,5 +68,5 @@ export default function ContextMenuHost(){
       {request.items.map(item=><button type="button" role="menuitem" className={item.separatorBefore?'separator':''} disabled={item.disabled}
         key={item.id} onClick={()=>finish(item.id)}>{item.label}</button>)}
     </div>
-  </div>,document.body);
+  </div>,request.owner.document.body);
 }

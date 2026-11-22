@@ -4,7 +4,7 @@ import { appendInputHistory, buildRuns, directBashCommand, editDiffRows, formatA
 import type { ToolState } from '../src/AgentChat';
 import { askUserPresentation } from '../src/AskUserCard';
 import type { PiSessionSnapshot } from '../shared/piTypes';
-import { calculatePiCacheHitPercent, countPiSessionRuns } from '../shared/piSession';
+import { calculatePiCacheHitPercent, countPiSessionRuns, piSessionActivity } from '../shared/piSession';
 import { acceptPiQueueHead, emptyPiQueue, mergePiQueues, updatePiQueueItem } from '../shared/piQueue';
 import { renderMarkdown } from '../src/MarkdownContent';
 
@@ -90,6 +90,20 @@ test('Pi session Runs count user messages on the active branch only',()=>{
     {type:'message',message:{role:'user'}},{type:'message',message:{role:'assistant'}},
     {type:'message',message:{role:'toolResult'}},{type:'custom'},{type:'message',message:{role:'user'}},
   ]),2);
+});
+
+test('session history follows submitted input across assistant, tool and metadata updates',()=>{
+  const time=Date.UTC(2026,10,22,9);
+  const background=[
+    {type:'message',message:{role:'assistant',timestamp:time+100}},
+    {type:'message',message:{role:'toolResult',timestamp:time+200}},
+    {type:'session_info',name:'Renamed',timestamp:new Date(time+300).toISOString()},
+  ];
+  assert.deepEqual(piSessionActivity(background),{runCount:0,lastInputAt:0});
+  const userInput={type:'message',message:{role:'user',timestamp:time}};
+  assert.deepEqual(piSessionActivity([userInput,...background]),{runCount:1,lastInputAt:time});
+  const bashInput={type:'message',timestamp:new Date(time+50).toISOString(),message:{role:'bashExecution'}};
+  assert.deepEqual(piSessionActivity([userInput,bashInput,...background]),{runCount:1,lastInputAt:time+50});
 });
 
 test('reloading a snapshot preserves in-flight tool cards but clears stale stream text',()=>{

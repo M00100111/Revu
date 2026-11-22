@@ -8,10 +8,21 @@ export function piSessionProjectKey(cwd:string){
   return key||path;
 }
 
-export const countPiSessionRuns=(entries:unknown[])=>entries.reduce<number>((total,entry)=>{
-  const value=record(entry);
-  return total+(value.type==='message'&&record(value.message).role==='user'?1:0);
-},0);
+export function piSessionActivity(entries:unknown[]){
+  let runCount=0;
+  let lastInputAt=0;
+  for(const entry of entries){
+    const value=record(entry);
+    if(value.type!=='message')continue;
+    const message=record(value.message);
+    if(message.role==='user')runCount++;
+    else if(message.role!=='bashExecution')continue;
+    const timestamp=typeof message.timestamp==='number'?message.timestamp:Date.parse(String(value.timestamp));
+    if(Number.isFinite(timestamp))lastInputAt=Math.max(lastInputAt,timestamp);
+  }
+  return {runCount,lastInputAt};
+}
+export const countPiSessionRuns=(entries:unknown[])=>piSessionActivity(entries).runCount;
 
 export const calculatePiCacheHitPercent=(input:number,cacheRead:number,cacheWrite:number)=>{
   const total=input+cacheRead+cacheWrite;

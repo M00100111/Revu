@@ -65,6 +65,7 @@ interface RevuAgentApi {
 declare global {
   interface Window{
     revu:{
+      panels:import('../shared/panelWindows').PanelWindowApi;
       invoke<T>(body:Record<string,unknown>):Promise<RevuResponse<T>>;
       copyText(text:string):Promise<boolean>;
       chooseChatFiles(projectId:string,options?:import('../shared/types').ChatFilePickerOptions):Promise<string[]>;

@@ -62,7 +62,8 @@ export default function ExtensionInput({request,active,onReply,navigation}:{requ
     onKeyDown={event=>{
       if(event.nativeEvent.isComposing)return;
       if(event.key==='Escape'){event.preventDefault();event.stopPropagation();if(!locked)void reply({cancelled:true});return;}
-      if(event.target instanceof HTMLElement&&event.target.closest('button')&&!event.target.closest('[role="option"]'))return;
+      const target=event.target as Element;
+      if(target.closest('button')&&!target.closest('[role="option"]'))return;
       if(!locked&&!expired&&choiceCount&&!event.shiftKey&&!event.ctrlKey&&!event.altKey&&(event.key==='ArrowUp'||event.key==='ArrowDown')){event.preventDefault();const next=(selected+(event.key==='ArrowDown'?1:-1)+choiceCount)%choiceCount;setSelected(next);(root.current?.querySelector(`[data-choice-index="${next}"]`) as HTMLElement|null)?.focus();return;}
       if(event.key==='Enter'&&(request.method!=='editor'||event.ctrlKey||event.metaKey)){event.preventDefault();submit();}
     }}>

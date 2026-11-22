@@ -60,7 +60,7 @@ export function SettingsSidebar({width,onResize,category,onCategoryChange}:{
 
 export default function SettingsPage({category,chatToolbar,syncWidths,onChange,mixed,onModeChange,hideSingleProjectTabs,onHideSingleProjectTabsChange,fontSize,
   onFontSizeChange,onResetEditor,previewMode,onPreviewModeChange,fileTabOverflow,onFileTabOverflowChange,reviewFileLabels,onReviewFileLabelsChange,dark,onThemeChange,
-  showThemeSwitcher,onShowThemeSwitcherChange,lightThemeColor,darkThemeColor,onLightThemeColorChange,onDarkThemeColorChange,onResetThemeColors}:{
+  showThemeSwitcher,onShowThemeSwitcherChange,showDockButton,onShowDockButtonChange,lightThemeColor,darkThemeColor,onLightThemeColorChange,onDarkThemeColorChange,onResetThemeColors}:{
   category:SettingsCategory;syncWidths:boolean;onChange:(value:boolean)=>void;
   chatToolbar:ReturnType<typeof useChatToolbarSettings>;
   mixed:boolean;onModeChange:(mixed:boolean)=>void;hideSingleProjectTabs:boolean;
@@ -70,6 +70,7 @@ export default function SettingsPage({category,chatToolbar,syncWidths,onChange,m
   fileTabOverflow:FileTabOverflow;onFileTabOverflowChange:(value:FileTabOverflow)=>void;
   reviewFileLabels:ReviewFileLabels;onReviewFileLabelsChange:(value:ReviewFileLabels)=>void;
   dark:boolean;onThemeChange:(dark:boolean)=>void;showThemeSwitcher:boolean;onShowThemeSwitcherChange:(value:boolean)=>void;
+  showDockButton?:boolean;onShowDockButtonChange?:(value:boolean)=>void;
   lightThemeColor:string;darkThemeColor:string;onLightThemeColorChange:(value:string)=>void;
   onDarkThemeColorChange:(value:string)=>void;onResetThemeColors:()=>void;
 }){
@@ -149,6 +150,11 @@ export default function SettingsPage({category,chatToolbar,syncWidths,onChange,m
         <ChatToolbarSettings {...chatToolbar}/>
       </>:<>
         <h1>Activity Bar</h1>
+        <label className="setting-row">
+          <span><strong>Merge all windows</strong><small>Show a shortcut when Chat or Review is in a separate window.</small></span>
+          <input type="checkbox" checked={showDockButton??true}
+            onChange={event=>onShowDockButtonChange?.(event.target.checked)}/>
+        </label>
         <label className="setting-row">
           <span><strong>Theme switcher</strong><small>Show the theme switcher in the Activity Bar.</small></span>
           <input type="checkbox" checked={showThemeSwitcher}

@@ -8,6 +8,7 @@ import {isCodeEncoding} from '../shared/codeSource';
 import type { PiAgentRequest } from '../shared/piTypes';
 import type { ChatFilePickerOptions } from '../shared/types';
 import { PiManager } from './piManager';
+import {attachPanelWindows,chatWindow} from './panelWindows';
 
 let mainWindow:BrowserWindow|null=null;
 let hasDirtyDrafts=false;
@@ -173,13 +174,15 @@ async function invokeAgent(body:PiAgentRequest,sourceWindow?:BrowserWindow|null)
     case 'abandonNew':return piManager.abandonNew(body.projectId);
     case 'getSessionInfo':return piManager.getSessionInfo(body.projectId,body.sessionId);
     case 'chooseSessionFolder':{
-      const owner=sourceWindow??mainWindow;const options:OpenDialogOptions={title:'Select Session Folder',defaultPath:await piManager.getSessionDirectory(body.projectId),
+      const options:OpenDialogOptions={title:'Select Session Folder',defaultPath:await piManager.getSessionDirectory(body.projectId),
         properties:['openDirectory','createDirectory']};
+      const owner=chatWindow()??sourceWindow??mainWindow;
       const selected=owner?await dialog.showOpenDialog(owner,options):await dialog.showOpenDialog(options);
       if(selected.canceled||!selected.filePaths[0])return null;
       const confirmation={type:'question' as const,title:'Session Folder',message:'Copy existing sessions to the new folder?',
         detail:'Existing session files will remain in their current location.',buttons:['Cancel',"Don't Copy",'Copy'],cancelId:0,defaultId:2};
-      const choice=owner?await dialog.showMessageBox(owner,confirmation):await dialog.showMessageBox(confirmation);
+      const confirmationOwner=chatWindow()??sourceWindow??mainWindow;
+      const choice=confirmationOwner?await dialog.showMessageBox(confirmationOwner,confirmation):await dialog.showMessageBox(confirmation);
       if(choice.response===0)return null;
       return piManager.setSessionFolder(body.projectId,selected.filePaths[0],choice.response===2);
     }
@@ -198,7 +201,7 @@ async function invokeAgent(body:PiAgentRequest,sourceWindow?:BrowserWindow|null)
         title:'Export Conversation',defaultPath:join(workspace.get(body.projectId).root,fileName),
         filters:[{name:'HTML',extensions:['html']}],properties:['showOverwriteConfirmation'],
       };
-      const owner=sourceWindow??mainWindow;const result=owner?await dialog.showSaveDialog(owner,options):await dialog.showSaveDialog(options);
+      const owner=chatWindow()??sourceWindow??mainWindow;const result=owner?await dialog.showSaveDialog(owner,options):await dialog.showSaveDialog(options);
       if(result.canceled||!result.filePath)return null;
       return piManager.exportHtml(body.projectId,body.sessionId,result.filePath);
     }
@@ -249,7 +252,7 @@ ipcMain.handle('revu:copy-text',(_event,value:unknown)=>{
 });
 ipcMain.handle('revu:choose-chat-files',async(event,projectId:unknown,picker?:ChatFilePickerOptions)=>{
   if(typeof projectId!=='string')return [];
-  const project=workspace.get(projectId);const owner=BrowserWindow.fromWebContents(event.sender)??mainWindow;
+  const project=workspace.get(projectId);
   const options:OpenDialogOptions={title:'Choose Files',defaultPath:project.root,properties:['openFile','multiSelections']};
   if(picker&&'startDirectory' in picker){
     if(typeof picker.startDirectory!=='string'||!isAbsolute(picker.startDirectory)||!(await stat(picker.startDirectory)).isDirectory())throw new Error('Folder is unavailable.');
@@ -260,6 +263,7 @@ ipcMain.handle('revu:choose-chat-files',async(event,projectId:unknown,picker?:Ch
     options.defaultPath=dirname(normalize(picker.path));
     options.properties=[picker.directory?'openDirectory':'openFile'];
   }
+  const owner=chatWindow()??BrowserWindow.fromWebContents(event.sender)??mainWindow;
   const result=owner?await dialog.showOpenDialog(owner,options):await dialog.showOpenDialog(options);
   return result.canceled?[]:result.filePaths;
 });
@@ -291,14 +295,14 @@ function createWindow(){
     frame:false,
     webPreferences:{preload:join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false},
   });
-  mainWindow.webContents.setWindowOpenHandler(()=>({action:'deny'}));
+  const closePanelWindows=attachPanelWindows(mainWindow);
   mainWindow.webContents.on('before-input-event',(event,input)=>{
     if(input.type==='keyDown'&&input.key==='F12'){event.preventDefault();mainWindow?.webContents.toggleDevTools();}
   });
   const maximized=()=>mainWindow?.webContents.send('revu:maximized',mainWindow.isMaximized());
   mainWindow.on('maximize',maximized);mainWindow.on('unmaximize',maximized);
   mainWindow.on('close',event=>{
-    if(closeApproved||!hasDirtyDrafts)return;
+    if(closeApproved||!hasDirtyDrafts){closePanelWindows();return;}
     event.preventDefault();
     if(confirmingClose||!mainWindow)return;
     confirmingClose=true;
@@ -345,6 +349,7 @@ app.whenReady().then(async()=>{
 app.on('window-all-closed',()=>app.quit());
 app.on('before-quit',event=>{
   if(shutdownStarted)return;
+  if(mainWindow){event.preventDefault();mainWindow.close();return;}
   event.preventDefault();shutdownStarted=true;
   piManager?.enableStandby(false);piManager?.abandonNew();
   const stopping=piManager?.dispose()??Promise.resolve();

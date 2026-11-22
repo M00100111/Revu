@@ -1,10 +1,28 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import type {PanelWindow,PanelWindowApi} from '../shared/panelWindows';
 import type {PiExtensionPending,PiExtensionReply} from '../shared/piTypes';
 import type { PiRuntimeConfig,PiRuntimeInfo,PiRuntimeChange, PiTrustSaveResponse, PiProjectTrust, PiSlashCommand, PiTrustChoice, PiAgentRequest, PiCompactionConfiguration, PiCompactionResponse, PiContextProjection, PiDirectBashState, PiDiscoveredSessionResponse, PiEntriesResponse, PiForkResponse, PiModelDefaults, PiModelSummary, PiProviderStatus, PiQueueState, PiSessionCatalog, PiSessionFolderResult, PiSessionInfo, PiSessionScope, PiSessionSearchResult, PiSessionSnapshot, PiSessionSort, PiSessionTreeResponse, PiThinkingLevel, PiTreeNavigationResponse, RevuPiEvent } from '../shared/piTypes';
 
 const agentInvoke=<T>(body:PiAgentRequest)=>ipcRenderer.invoke('revu:agent',body) as Promise<{ok:boolean;value?:T;error?:string}>;
 
+const panels:PanelWindowApi={
+  focus:target=>ipcRenderer.invoke('revu:panel-focus',target),
+  close:panel=>ipcRenderer.invoke('revu:panel-close',panel),
+  control:(panel,action)=>ipcRenderer.invoke('revu:panel-control',panel,action),
+  onRequestMerge:listener=>{
+    const receive=(_event:Electron.IpcRendererEvent,panel:PanelWindow)=>listener(panel);
+    ipcRenderer.on('revu:panel-merge-request',receive);
+    return ()=>ipcRenderer.removeListener('revu:panel-merge-request',receive);
+  },
+  onMaximized:listener=>{
+    const receive=(_event:Electron.IpcRendererEvent,panel:PanelWindow,maximized:boolean)=>listener(panel,maximized);
+    ipcRenderer.on('revu:panel-maximized',receive);
+    return ()=>ipcRenderer.removeListener('revu:panel-maximized',receive);
+  },
+};
+
 contextBridge.exposeInMainWorld('revu',{
+  panels,
   invoke:(body:Record<string,unknown>)=>ipcRenderer.invoke('revu:invoke',body),
   copyText:(text:string)=>ipcRenderer.invoke('revu:copy-text',text) as Promise<boolean>,
   chooseChatFiles:(projectId:string,options?:import('../shared/types').ChatFilePickerOptions)=>ipcRenderer.invoke('revu:choose-chat-files',projectId,options) as Promise<string[]>,

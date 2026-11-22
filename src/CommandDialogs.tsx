@@ -1,3 +1,4 @@
+import {usePanelWindow} from './PanelPortal';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { PiCwdRequest,PiEntriesResponse,PiProjectTrust,PiTrustChoice } from '../shared/piTypes';
@@ -5,9 +6,10 @@ import { activePiBranch } from '../shared/piCommands';
 import Icon from './Icon';
 
 function useEscape(close:()=>void,busy:boolean){
+  const panelWindow=usePanelWindow();
   const callback=useRef(close);callback.current=close;
   useEffect(()=>{const listener=(event:KeyboardEvent)=>{if(event.key==='Escape'){event.preventDefault();event.stopPropagation();if(!busy)callback.current();}};
-    window.addEventListener('keydown',listener,true);return()=>window.removeEventListener('keydown',listener,true);},[busy]);
+    panelWindow.addEventListener('keydown',listener,true);return()=>panelWindow.removeEventListener('keydown',listener,true);},[busy,panelWindow]);
 }
 const errorText=(error:unknown)=>error instanceof Error?error.message:String(error);
 
@@ -54,12 +56,13 @@ export function ForkDialog({projectId,sessionId,onFork,onClose}:{projectId:strin
 }
 
 export function ProjectTrustDialog({trust,onSave,onClose}:{trust:PiProjectTrust;onSave:(choice:PiTrustChoice)=>Promise<void>;onClose:()=>void}){
+  const panelWindow=usePanelWindow();
   const [choice,setChoice]=useState<PiTrustChoice>(trust.saved?.decision===false?'untrust':trust.parentPath&&trust.saved?.path.toLocaleLowerCase()===trust.parentPath.toLocaleLowerCase()?'parent':'trust');
   const [busy,setBusy]=useState(false);const [error,setError]=useState('');useEscape(onClose,busy);
   const inherited=trust.saved&&trust.saved.path.toLocaleLowerCase()!==trust.cwd.toLocaleLowerCase();
   const saving=useRef(false);
   const save=async(value:PiTrustChoice=choice)=>{if(saving.current)return;saving.current=true;setBusy(true);setError('');try{await onSave(value);}catch(error){setError(errorText(error));}finally{saving.current=false;setBusy(false);}};
-  return createPortal(<div className="project-trust-backdrop" onMouseDown={event=>{if(event.target===event.currentTarget&&!busy)onClose();}}>
+  return createPortal(<div data-app-scrollbars className="project-trust-backdrop" onMouseDown={event=>{if(event.target===event.currentTarget&&!busy)onClose();}}>
     <section className="agent-chat-modal project-trust-dialog" role="dialog" aria-modal="true" aria-label="Project trust">
       <header><div><strong>Project trust</strong><span title={trust.cwd}>{trust.cwd}</span></div><button className="agent-icon-button" disabled={busy} onClick={onClose} aria-label="Close"><Icon name="close" size={14}/></button></header>
       <div className="command-dialog-content"><dl className="trust-status"><div><dt>Saved decision:</dt><dd>{trust.saved?(trust.saved.decision?'trusted':'untrusted'):'none'}
@@ -73,15 +76,16 @@ export function ProjectTrustDialog({trust,onSave,onClose}:{trust:PiProjectTrust;
         </div>{error&&<p className="command-dialog-error" role="alert">{error}</p>}
       </div>
     </section>
-  </div>,document.body);
+  </div>,panelWindow.document.body);
 }
 
 export function CwdRecoveryDialog({request,onRespond}:{request:PiCwdRequest;onRespond:(accept:boolean)=>Promise<void>}){
+  const panelWindow=usePanelWindow();
   const [busy,setBusy]=useState(false);const [error,setError]=useState('');const pending=useRef(false);
   const respond=async(accept:boolean)=>{if(pending.current)return;pending.current=true;setBusy(true);try{await onRespond(accept);}catch(error){setError(errorText(error));pending.current=false;setBusy(false);}};
   useEscape(()=>void respond(false),busy);
-  return createPortal(<div className="project-trust-backdrop"><section className="agent-chat-modal cwd-recovery-dialog" role="dialog" aria-modal="true" aria-label="Session directory unavailable">
+  return createPortal(<div data-app-scrollbars className="project-trust-backdrop"><section className="agent-chat-modal cwd-recovery-dialog" role="dialog" aria-modal="true" aria-label="Session directory unavailable">
     <header><strong>Session directory unavailable</strong></header><div className="command-dialog-content"><dl><dt>Saved directory</dt><dd>{request.saved}</dd><dt>Current directory</dt><dd>{request.current}</dd></dl><p>Continue in the current directory?</p>{error&&<p role="alert">{error}</p>}</div>
     <footer><button disabled={busy} onClick={()=>void respond(false)}>Cancel</button><button className="agent-primary" autoFocus disabled={busy} onClick={()=>void respond(true)}>Use Current Directory</button></footer>
-  </section></div>,document.body);
+  </section></div>,panelWindow.document.body);
 }

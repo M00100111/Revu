@@ -14,6 +14,9 @@ import ReviewDashboard from './ReviewDashboard';
 import ReadonlyEditor from './ReadonlyEditor';
 import SettingsPage, { SettingsSidebar, type ReviewFileLabels, type SettingsCategory } from './SettingsPage';
 import WindowControls from './WindowControls';
+import PanelWindowControls from './PanelWindowControls';
+import {usePanelWindows} from './usePanelWindows';
+import type {PanelWindow} from '../shared/panelWindows';
 import {useChatToolbarSettings} from './ChatToolbarSettings';
 import NotificationCenter, { type AppNotification, type NotificationAction, type NotificationLevel } from './NotificationCenter';
 import { defaultTabExpansion, type FileTabExpansion, type FileTabOverflow } from './tabLayout';
@@ -53,6 +56,7 @@ export default function App(){
   const [lightThemeColor,setLightThemeColor]=useState(()=>savedColor('revu-light-theme-color','#FFFFFF'));
   const [darkThemeColor,setDarkThemeColor]=useState(()=>savedColor('revu-dark-theme-color','#191919'));
   const [showThemeSwitcher,setShowThemeSwitcher]=useState(()=>localStorage.getItem('revu-show-theme-switcher')!=='false');
+  const [showDockButton,setShowDockButton]=useState(()=>localStorage.getItem('revu-show-dock-button')!=='false');
   const chatToolbar=useChatToolbarSettings();
   const [panel,setPanel]=useState<Panel>('files');
   const [syncWidths,setSyncWidths]=useState(()=>localStorage.getItem('revu-sync-sidebar-widths')!=='false');
@@ -89,7 +93,6 @@ export default function App(){
   const [reveal,setReveal]=useState<{id:string;line:number;lastLine?:number;href?:string;pinId?:string}|null>(null);
   const [citeRequest,setCiteRequest]=useState<CiteRequest>();
   const [treeTarget,setTreeTarget]=useState<{projectId:string;path:string;token:number}>();
-  const cite=useCallback((request:CiteRequest)=>{setCiteRequest(request);setAgentOpen(true);},[]);
   const [reviewFilter,setReviewFilter]=useState('all');
   const [reviewSelected,setReviewSelected]=useState('');
   const [reviewReveal,setReviewReveal]=useState<{fileId:string;itemId:string;token:number}|null>(null);
@@ -110,6 +113,28 @@ export default function App(){
     });
   },[]);
   const notifyError=useCallback((message:string)=>notify('error',message),[notify]);
+  const onDetach=useCallback((name:PanelWindow)=>{
+    if(name==='review')setPanel(current=>current==='review'?null:current);
+    else setAgentOpen(true);
+  },[]);
+  const onDock=useCallback((name:PanelWindow)=>{
+    if(name==='review')setPanel('review');else setAgentOpen(true);
+  },[]);
+  const {windows,isDetached,focus:focusWindow,toggle:toggleWindow,dockAll}=usePanelWindows(onDetach,onDock,notifyError);
+  const reviewVisible=panel==='review'||!!windows.review;
+  const showChat=useCallback(()=>{
+    setAgentOpen(true);
+    focusWindow('chat');
+  },[focusWindow]);
+  const showReview=()=>{
+    if(!isDetached('review'))setPanel('review');
+    focusWindow('review');
+  };
+  const showEditor=useCallback(()=>{
+    setPanel(current=>current==='settings'?null:current);
+    focusWindow('main');
+  },[focusWindow]);
+  const cite=useCallback((request:CiteRequest)=>{setCiteRequest(request);showChat();},[showChat]);
   const notifyWarning=useCallback((message:string)=>notify('warning',message),[notify]);
   const dismissToast=useCallback((id:string)=>setNotifications(current=>current.map(item=>
     item.id===id?{...item,toast:false}:item)),[]);
@@ -119,11 +144,11 @@ export default function App(){
     setNotifications(current=>current.map(item=>item.id===id?{...item,read:true,toast:false}:item));
     const action=notification?.action;
     if(action?.type==='open-agent-session'){
-      setAgentOpen(true);setNotificationsOpen(false);
+      showChat();setNotificationsOpen(false);
       setAgentNavigation(current=>({projectId:action.projectId,sessionId:action.sessionId,
         runKey:action.runKey,token:(current?.token??0)+1}));
     }
-  },[notifications]);
+  },[notifications,showChat]);
   const handleAgentNotice=useCallback((notice:AgentNotice)=>{
     if(notice.question===false){setNotifications(current=>current.map(item=>item.action?.question&&item.action.projectId===notice.projectId&&item.action.sessionId===notice.sessionId
       ?{...item,read:true,toast:false,message:item.message.replace(/^Question ·/,'Question resolved ·'),action:{...item.action,question:false}}:item));return;}
@@ -160,20 +185,20 @@ export default function App(){
     setReviewReveal(current=>({fileId:file.id,itemId,token:(current?.token??0)+1}));
   },[]);
   useEffect(()=>{
-    if(panel!=='review')return;
+    if(!reviewVisible)return;
     for(const {projectId,path} of pins.requiredFiles){
       const project=projects.find(item=>item.id===projectId);
       if(project)void loadPinFile.current(project,path).catch(()=>{});
     }
-  },[panel,projects,pins.requiredFiles]);
+  },[reviewVisible,projects,pins.requiredFiles]);
   useEffect(()=>{
-    if(panel!=='review'||!reveal||!activeReviewFile||activeReviewFile.id!==reveal.id||lastCodeReview.current===reveal)return;
+    if(!reviewVisible||!reveal||!activeReviewFile||activeReviewFile.id!==reveal.id||lastCodeReview.current===reveal)return;
     const placements=pins.byFile.get(reveal.id);
     const placement=reveal.pinId?placements?.find(pin=>pin.id===reveal.pinId)
       :reveal.href?placements?.find(pin=>pin.reference.href===reveal.href):undefined;
     if(!placement)return;
     lastCodeReview.current=reveal;focusReviewChunk(activeReviewFile,placement.chunkId??placement.id);
-  },[panel,reveal,activeReviewFile,pins.byFile,focusReviewChunk]);
+  },[reviewVisible,reveal,activeReviewFile,pins.byFile,focusReviewChunk]);
   const fileEditorTabs:AppEditorTab[]=openFiles.map(file=>({kind:'file',file,id:file.id,name:file.name,
     title:file.project.name+'/'+file.path,projectName:file.project.name,groupId:file.project.id,dirty:file.dirty,preview:previews.includes(file.id)}));
   const toolEditorTabs:AppEditorTab[]=toolDocuments.map(toolDocument=>({kind:'tool',toolDocument,id:toolDocument.id,name:toolDocument.name,
@@ -209,6 +234,7 @@ export default function App(){
     localStorage.setItem('revu-dark-theme-color',darkThemeColor);
   },[dark,lightThemeColor,darkThemeColor]);
   useEffect(()=>localStorage.setItem('revu-show-theme-switcher',String(showThemeSwitcher)),[showThemeSwitcher]);
+  useEffect(()=>localStorage.setItem('revu-show-dock-button',String(showDockButton)),[showDockButton]);
   useEffect(()=>{
     localStorage.setItem('revu-sync-sidebar-widths',String(syncWidths));
     localStorage.setItem('revu-sidebar-width',String(widths.shared));
@@ -339,6 +365,7 @@ export default function App(){
     }catch(error){notifyError(errorMessage(error));}finally{setPicking(false);}
   }
   const openToolDetail=useCallback((detail:ToolDetailRequest)=>{
+    showEditor();
     setToolDocuments(current=>{
       const existing=current.find(document=>document.id===detail.id);
       if(existing){if(existing.model.getValue()!==detail.content)existing.model.setValue(detail.content);return current;}
@@ -349,7 +376,7 @@ export default function App(){
         toolCallId:detail.toolCallId,name:detail.fileName,model}];
     });
     lastToolDocument.current=detail.id;setActiveId(detail.id);setOtherSelected(!mixed);setReveal(null);
-  },[mixed]);
+  },[mixed,showEditor]);
   const updateToolDetail=useCallback((detail:ToolDetailRequest)=>{
     setToolDocuments(current=>{
       const existing=current.find(document=>document.id===detail.id);if(!existing)return current;
@@ -369,6 +396,7 @@ export default function App(){
     }catch(error){notifyError(errorMessage(error));}
   }
   function revealListedPin(file:OpenFile,pin:PinPlacement){
+    showEditor();
     const snapshot=toolDocuments.find(document=>document.id===file.id&&document.snapshotFile);
     if(snapshot)selectToolDocument(snapshot);
     else{
@@ -381,6 +409,7 @@ export default function App(){
     const located=locateCitation(target.path,chat,projects),project=located.project;
     try{
       if(!project){await api('revealExternalCitation',{projectId,path:located.path,directory:!!target.directory});return;}
+      focusWindow('main');
       const path=located.path.replace(/\/$/,'').replace(/^\.$/,'');
       await api('checkCitation',{projectId:project.id,path,directory:!!target.directory});
       setPanel('files');toggleProject(project.root,true);
@@ -401,7 +430,8 @@ export default function App(){
       const placement=file?placementsFor(file,target):undefined;
       if(file&&placement!==undefined&&(placement.length||file.computing)){
         if(request!==codeRequest.current||!pins.selectReference(target))return;
-        setPanel('review');
+        showEditor();
+        if(!isDetached('review'))setPanel('review');
         showFile(file);
         setReveal({id:file.id,line:startLine,href});return;
       }
@@ -425,11 +455,12 @@ export default function App(){
         document={id,projectId:project.id,sessionId:source.sessionId,toolCallId:'',name:label,model,snapshotFile};
         const opened=document;setToolDocuments(current=>[...current,opened]);
       }
-      setPanel('review');selectToolDocument(document);setReveal({id,line:startLine,href});
+      showEditor();if(!isDetached('review'))setPanel('review');
+      selectToolDocument(document);setReveal({id,line:startLine,href});
     }catch{if(request===codeRequest.current)notifyWarning(`Code reference expired: ${path}:${startLine}. The original version is unavailable.`);}
   }
   const openPinSource=({source}:PinTarget)=>{
-    setAgentOpen(true);
+    showChat();
     setAgentNavigation(current=>({projectId:source.projectId,sessionId:source.sessionId,messageId:source.messageId,token:(current?.token??0)+1}));
   };
   function closeEditorTabs(targets:AppEditorTab[]){
@@ -510,12 +541,17 @@ export default function App(){
     setSyncWidths(value);
   };
   const showProjectBar=!mixed&&(!hideSingleProjectTabs||projects.length>1||toolDocuments.length>0);
-  return <div className={'app '+(agentOpen?'agent-open':'')}>
+  return <div className={'app '+(agentOpen&&!windows.chat?'agent-open':'')}>
     <WindowControls onSave={()=>{if(activeFile)void workspace.save(activeFile);}}
       saveDisabled={!activeFile||!activeFile.dirty||!!(activeFile.saving||activeFile.syncing||activeFile.reason)}
       saving={!!activeFile?.saving}/>
+    {windows.review&&<PanelWindowControls panel="review" targetWindow={windows.review}/>}
+    {windows.chat&&<PanelWindowControls panel="chat" targetWindow={windows.chat}/>}
     <Sidebar panel={panel} setPanel={setPanel} dark={dark} toggleTheme={()=>setDark(!dark)}
       showThemeSwitcher={showThemeSwitcher}
+      showDock={showDockButton&&!!(windows.review||windows.chat)} onDockAll={dockAll}
+      reviewDetached={!!windows.review} chatDetached={!!windows.chat}
+      onFocusReview={()=>focusWindow('review')} onFocusChat={()=>focusWindow('chat')}
       agentOpen={agentOpen} toggleAgent={()=>setAgentOpen(open=>!open)}
       notificationCount={notifications.filter(item=>!item.read).length} notificationsOpen={notificationsOpen}
       toggleNotifications={()=>setNotificationsOpen(open=>!open)}/>
@@ -532,13 +568,15 @@ export default function App(){
       }} onCloseProject={project=>void closeProject(project)}
       onExpandAllSubfolders={(project,path)=>void expandAllSubfolders(project,path)} onCollapseAllSubfolders={collapseAllSubfolders}
       onProjectToggle={toggleProject} onDirectoryToggle={toggleDirectory} onError={notifyError}/>}
-    {panel==='review'&&<ReviewDashboard projects={projects} documents={documents} snapshots={snapshots} statuses={statuses}
+    {reviewVisible&&<ReviewDashboard projects={projects} documents={documents} snapshots={snapshots} statuses={statuses}
+      detachedWindow={windows.review} onToggleWindow={()=>toggleWindow('review')}
       filter={reviewFilter} selected={reviewSelected} onFilterChange={setReviewFilter} onSelectedChange={setReviewSelected}
       revealTarget={reviewReveal}
       expandedRecords={expandedReviewRecords} onToggleReviewPreview={(file,itemId,line)=>{
         void openFile(file.project,file.path,line);toggleReviewPreview(itemId);
       }}
       width={sidebarWidth} onResize={resizeSidebar} onOpen={openFile} onAction={workspace.act}
+      onGoto={(project,path,line)=>{showEditor();void openFile(project,path,line);}}
       onOpenSnapshot={fileId=>{const document=toolDocuments.find(item=>item.id===fileId);if(document)selectToolDocument(document);}}
       onBulk={workspace.bulk} onFileBulk={workspace.bulkFile}
       pinsByFile={pins.byFile} keptIds={pins.keptIds} onPinAction={pins.updatePiece} onPinSource={openPinSource} onRevealPin={revealListedPin}
@@ -556,6 +594,7 @@ export default function App(){
       fileTabOverflow={fileTabOverflow} onFileTabOverflowChange={setFileTabOverflow}
       reviewFileLabels={reviewFileLabels} onReviewFileLabelsChange={setReviewFileLabels}
       dark={dark} onThemeChange={setDark} showThemeSwitcher={showThemeSwitcher}
+      showDockButton={showDockButton} onShowDockButtonChange={setShowDockButton}
       lightThemeColor={lightThemeColor} darkThemeColor={darkThemeColor}
       onLightThemeColorChange={setLightThemeColor} onDarkThemeColorChange={setDarkThemeColor}
       onResetThemeColors={()=>{setLightThemeColor('#FFFFFF');setDarkThemeColor('#191919');}}
@@ -583,7 +622,7 @@ export default function App(){
         {(activeFile.reason||activeFile.diffError)&&<div className="review-warning">{activeFile.reason||activeFile.diffError}</div>}
         <div className="editor-container"><EditorArea file={activeFile} dark={dark} editorRef={editorRef} onCite={cite}
           tick={tick} onAction={workspace.act} onReviewReveal={itemId=>{
-            setPanel('review');
+            showReview();
             focusReviewChunk(activeFile,itemId);
           }} expandedRecords={expandedReviewRecords} onToggleReviewPreview={toggleReviewPreview}
           reveal={reveal?.id===activeFile.id?reveal:undefined} pins={pins.byFile.get(activeFile.id)} keptIds={pins.keptIds}
@@ -597,7 +636,7 @@ export default function App(){
         <div className="editor-container">{activeToolDocument.snapshotFile
           ?<EditorArea file={activeToolDocument.snapshotFile} dark={dark} editorRef={editorRef} fontSize={fontSize} tick={tick}
             onAction={workspace.act} onReviewReveal={itemId=>{
-              if(activeToolDocument.snapshotFile){setPanel('review');focusReviewChunk(activeToolDocument.snapshotFile,itemId);}
+              if(activeToolDocument.snapshotFile){showReview();focusReviewChunk(activeToolDocument.snapshotFile,itemId);}
             }} expandedRecords={expandedReviewRecords} onToggleReviewPreview={toggleReviewPreview}
             readOnly reveal={reveal?.id===activeToolDocument.id?reveal:undefined} pins={pins.byFile.get(activeToolDocument.id)} keptIds={pins.keptIds}
             onPinAction={pins.updatePiece} onPinSource={openPinSource}/>
@@ -610,7 +649,9 @@ export default function App(){
       </div>}
     </main>
     </>}
-    <AgentChat hiddenToolbarButtons={chatToolbar.hidden} citeRequest={citeRequest} onGoto={gotoReference} tokenizeSnapshot={tokenizeSnapshot} onOpenSettings={()=>{setSettingsCategory('chat');setPanel('settings');}} open={agentOpen} projects={projects} activeProjectId={projectId}
+    <AgentChat detachedWindow={windows.chat} onToggleWindow={()=>toggleWindow('chat')}
+      hiddenToolbarButtons={chatToolbar.hidden} citeRequest={citeRequest} onGoto={gotoReference} tokenizeSnapshot={tokenizeSnapshot}
+      onOpenSettings={()=>{setSettingsCategory('chat');setPanel('settings');focusWindow('main');}} open={agentOpen} projects={projects} activeProjectId={projectId}
       dirtyProjectIds={new Set(documents.filter(file=>file.dirty).map(file=>file.project.id))}
       width={agentWidth} onResize={setAgentWidth}
       onResizeEnd={value=>localStorage.setItem('revu-agent-width',String(value))} notify={notify}

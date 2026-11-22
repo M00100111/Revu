@@ -4,15 +4,24 @@ import {references,type CitationReference,type CiteTarget} from '../shared/citat
 import {CitationChip} from './CitationView';
 
 export interface ComposerHandle {element:HTMLDivElement;selectionStart:number;selectionEnd:number;focus:()=>void;setSelectionRange:(start:number,end:number)=>void}
-const raw=(node:Node):string=>node instanceof HTMLElement&&node.hasAttribute('data-raw')?node.dataset.raw!:node.nodeType===Node.TEXT_NODE?node.textContent??'':node.nodeName==='BR'?'\n':node.childNodes.length===1&&node.firstChild?.nodeName==='BR'?'':Array.from(node.childNodes,raw).join('');
+function raw(node:Node):string{
+  if(node.nodeType===Node.ELEMENT_NODE){
+    const token=(node as Element).getAttribute('data-raw');
+    if(token!==null)return token;
+  }
+  if(node.nodeType===Node.TEXT_NODE)return node.textContent??'';
+  if(node.nodeName==='BR')return '\n';
+  if(node.childNodes.length===1&&node.firstChild?.nodeName==='BR')return '';
+  return Array.from(node.childNodes,raw).join('');
+}
 function point(root:HTMLElement,offset:number):[Node,number]{
   for(const [index,node] of Array.from(root.childNodes).entries()){const size=raw(node).length;if(offset<=size)return node.nodeType===Node.TEXT_NODE?[node,offset]:[root,index+(offset>0?1:0)];offset-=size;}return [root,root.childNodes.length];
 }
 function selected(root:HTMLElement){
-  const selection=window.getSelection();if(!selection?.rangeCount||!root.contains(selection.anchorNode)||!root.contains(selection.focusNode))return [raw(root).length,raw(root).length];
-  const range=selection.getRangeAt(0);const length=(node:Node,offset:number)=>{const prefix=document.createRange();prefix.selectNodeContents(root);prefix.setEnd(node,offset);return raw(prefix.cloneContents()).length;};return [length(range.startContainer,range.startOffset),length(range.endContainer,range.endOffset)];
+  const selection=root.ownerDocument.getSelection();if(!selection?.rangeCount||!root.contains(selection.anchorNode)||!root.contains(selection.focusNode))return [raw(root).length,raw(root).length];
+  const range=selection.getRangeAt(0);const length=(node:Node,offset:number)=>{const prefix=root.ownerDocument.createRange();prefix.selectNodeContents(root);prefix.setEnd(node,offset);return raw(prefix.cloneContents()).length;};return [length(range.startContainer,range.startOffset),length(range.endContainer,range.endOffset)];
 }
-function place(root:HTMLElement,start:number,end:number){const range=document.createRange();range.setStart(...point(root,start));range.setEnd(...point(root,end));const selection=window.getSelection();selection?.removeAllRanges();selection?.addRange(range);}
+function place(root:HTMLElement,start:number,end:number){const range=root.ownerDocument.createRange();range.setStart(...point(root,start));range.setEnd(...point(root,end));const selection=root.ownerDocument.getSelection();selection?.removeAllRanges();selection?.addRange(range);}
 export function CitationComposer({ref,value,freshCitationTail=false,disabled,onValue,onCaret,onKeyDown,onBlur,onPaste,onGoto,onEdit,onDelete}:{ref:Ref<ComposerHandle>;value:string;freshCitationTail?:boolean;disabled:boolean;onValue:(text:string,caret:number)=>void;onCaret:(offset:number)=>void;onKeyDown:KeyboardEventHandler<HTMLDivElement>;onBlur:FocusEventHandler<HTMLDivElement>;onPaste:ClipboardEventHandler<HTMLDivElement>;onGoto:(target:CiteTarget)=>void;onEdit:(ref:CitationReference)=>void;onDelete:(ref:CitationReference)=>void}){
   const root=useRef<HTMLDivElement>(null),composing=useRef(false);const [portals,setPortals]=useState<{node:HTMLSpanElement;ref:ReturnType<typeof references>[number]}[]>([]);
   const pendingCaret=useRef<{value:string;offset:number}|null>(null);
@@ -22,10 +31,10 @@ export function CitationComposer({ref,value,freshCitationTail=false,disabled,onV
     const pending=pendingCaret.current;pendingCaret.current=null;
     if(raw(edit)===value&&existing.length===refs.length&&refs.every((ref,index)=>existing[index]===portals[index]?.node&&portals[index].ref.offset===ref.offset&&portals[index].ref.raw===ref.raw)){
       if(freshCitationTail){edit.focus();place(edit,value.length,value.length);}
-      else if(pending?.value===value&&document.activeElement===edit)place(edit,pending.offset,pending.offset);
+      else if(pending?.value===value&&edit.ownerDocument.activeElement===edit)place(edit,pending.offset,pending.offset);
       return;
     }
-    const caret=pending?.value===value?[pending.offset,pending.offset]:selected(edit),focused=document.activeElement===edit;let offset=0;const fragment=document.createDocumentFragment();const next=refs.map(ref=>{fragment.append(value.slice(offset,ref.offset));const node=document.createElement('span');node.contentEditable='false';node.dataset.raw=ref.raw;fragment.append(node);offset=ref.offset+ref.raw.length;return {node,ref};});fragment.append(value.slice(offset));edit.replaceChildren(fragment);setPortals(next);if(focused)place(edit,caret[0],caret[1]);
+    const caret=pending?.value===value?[pending.offset,pending.offset]:selected(edit),focused=edit.ownerDocument.activeElement===edit;let offset=0;const fragment=edit.ownerDocument.createDocumentFragment();const next=refs.map(ref=>{fragment.append(value.slice(offset,ref.offset));const node=edit.ownerDocument.createElement('span');node.contentEditable='false';node.dataset.raw=ref.raw;fragment.append(node);offset=ref.offset+ref.raw.length;return {node,ref};});fragment.append(value.slice(offset));edit.replaceChildren(fragment);setPortals(next);if(focused)place(edit,caret[0],caret[1]);
   },[value,portals,freshCitationTail]);
   const commit=(text:string,caret:number,allowSeparator:boolean,restoreCaret:boolean)=>{
     if(freshCitationTail&&allowSeparator&&caret===text.length&&text.startsWith(value)&&/^[^\s\p{P}]/u.test(text.slice(value.length))){

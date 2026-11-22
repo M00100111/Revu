@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeFile, ProjectStatus, ReviewBulkAction } from '../shared/types';
 import type { OpenFile, Project } from './editor';
 import { reviewItems, ReviewActions, PinActions, type ActionHandler, type PinActionHandler } from './ReviewActions';
@@ -7,6 +7,7 @@ import ResizeHandle from './ResizeHandle';
 import ProjectDropdown from './ProjectDropdown';
 import Icon from './Icon';
 import type { ReviewFileLabels } from './SettingsPage';
+import { PanelPortal } from './PanelPortal';
 
 interface ReviewFileRow {id:string;project:Project;status?:ChangeFile;file?:OpenFile;path:string;snapshot?:boolean}
 const MIN_DETAIL_HEIGHT=120;
@@ -34,13 +35,14 @@ const savedChangesHeight=()=>{
   return Number.isFinite(value)&&value>=MIN_CHANGES_HEIGHT?value:null;
 };
 
-export default function ReviewDashboard({projects,documents,snapshots,statuses,filter,selected,revealTarget,expandedRecords,onToggleReviewPreview,width,onResize,onOpen,onOpenSnapshot,onAction,onBulk,onFileBulk,onFilterChange,onSelectedChange,split,onSplitChange,chunkWidth,onChunkResize,fileLabels,pinsByFile,keptIds,onPinAction,onPinSource,onRevealPin}:{
+export default function ReviewDashboard({projects,documents,snapshots,statuses,filter,selected,revealTarget,expandedRecords,onToggleReviewPreview,width,onResize,onOpen,onGoto=onOpen,onOpenSnapshot,onAction,onBulk,onFileBulk,onFilterChange,onSelectedChange,split,onSplitChange,chunkWidth,onChunkResize,fileLabels,pinsByFile,keptIds,onPinAction,onPinSource,onRevealPin,detachedWindow,onToggleWindow}:{
   projects:Project[];documents:OpenFile[];statuses:Record<string,ProjectStatus>;
   snapshots:OpenFile[];
   filter:string;selected:string;
   revealTarget:{fileId:string;itemId:string;token:number}|null;
   expandedRecords:ReadonlySet<string>;onToggleReviewPreview:(file:OpenFile,itemId:string,line:number)=>void;
   width:number;onResize:(width:number)=>void;onOpen:(project:Project,path:string,line?:number)=>void;
+  onGoto?:(project:Project,path:string,line?:number)=>void;detachedWindow?:Window|null;onToggleWindow?:()=>void;
   onOpenSnapshot:(fileId:string)=>void;
   onAction:ActionHandler;onBulk:(projectIds:string[],action:ReviewBulkAction)=>void;
   onFileBulk:(file:OpenFile,action:ReviewBulkAction)=>void;
@@ -51,24 +53,19 @@ export default function ReviewDashboard({projects,documents,snapshots,statuses,f
   onPinAction:PinActionHandler;onPinSource:(pin:PinPlacement)=>void;onRevealPin:(file:OpenFile,pin:PinPlacement)=>void;
 }){
   const [changesHeight,setChangesHeight]=useState<number|null>(savedChangesHeight);
+  const [detachedListWidth,setDetachedListWidth]=useState<number>();
   const dashboardRef=useRef<HTMLElement|null>(null);
   const changesRef=useRef<HTMLElement|null>(null);
   const chunkRefs=useRef(new Map<string,HTMLDivElement>());
   const dragRef=useRef<{y:number;height:number}|null>(null);
-  const clampChangesHeight=useCallback((height:number)=>{
+  const clampChangesHeight=(height:number)=>{
     const available=(dashboardRef.current?.clientHeight??window.innerHeight)-REVIEW_HEADER_HEIGHT-REVIEW_RESIZE_HEIGHT;
     const maximum=Math.max(MIN_CHANGES_HEIGHT,available-MIN_DETAIL_HEIGHT);
     return Math.max(MIN_CHANGES_HEIGHT,Math.min(Math.round(height),maximum));
-  },[]);
+  };
   useEffect(()=>{
     if(changesHeight!==null)localStorage.setItem('revu-review-changes-height',String(changesHeight));
   },[changesHeight]);
-  useEffect(()=>{
-    const dashboard=dashboardRef.current;
-    if(!dashboard)return;
-    const observer=new ResizeObserver(()=>setChangesHeight(current=>current===null?null:clampChangesHeight(current)));
-    observer.observe(dashboard);return()=>observer.disconnect();
-  },[clampChangesHeight]);
   useEffect(()=>{if(filter!=='all'&&!projects.some(project=>project.id===filter))onFilterChange('all');},[filter,projects,onFilterChange]);
   const scoped=useMemo(()=>projects.filter(project=>filter==='all'||project.id===filter),[filter,projects]);
   const rows=useMemo(()=>scoped.flatMap(project=>{
@@ -83,9 +80,10 @@ export default function ReviewDashboard({projects,documents,snapshots,statuses,f
   useEffect(()=>{if(selected&&!rows.some(row=>row.id===selected))onSelectedChange('');},[rows,selected,onSelectedChange]);
   useEffect(()=>{
     if(!revealTarget||revealTarget.fileId!==selected)return;
-    const frame=requestAnimationFrame(()=>chunkRefs.current.get(revealTarget.itemId)
+    const view=dashboardRef.current?.ownerDocument.defaultView??window;
+    const frame=view.requestAnimationFrame(()=>chunkRefs.current.get(revealTarget.itemId)
       ?.scrollIntoView({block:'center',inline:'nearest',behavior:'smooth'}));
-    return()=>cancelAnimationFrame(frame);
+    return()=>view.cancelAnimationFrame(frame);
   },[revealTarget?.token,selected]);
   const current=rows.find(row=>row.id===selected);
   const currentFile=current?.file;
@@ -110,7 +108,7 @@ export default function ReviewDashboard({projects,documents,snapshots,statuses,f
       if(row.snapshot)onOpenSnapshot(key);
       else if(!(row.status?.reason&&!file))onOpen(row.project,row.path);
     };
-    return <div key={key} className={'review-file-row '+(selected===key?'active':'')}>
+    return <div key={key} data-panel-anchor={key} className={'review-file-row '+(selected===key?'active':'')}>
       <button className={'review-file-name '+nameClass} title={row.path} onClick={open}>{displayPath(row.path,fileLabels)}{row.snapshot?' · Snapshot':''}</button>
       <div className="review-file-actions">
         <button className="action-accept" disabled={unavailable||!file?.chunks.length}
@@ -126,7 +124,7 @@ export default function ReviewDashboard({projects,documents,snapshots,statuses,f
       <span className={'review-file-status status-'+status.toLowerCase()}>{status}</span>
     </div>;
   };
-  const detail=<section className="review-detail">
+  const detail=<section className="review-detail" data-panel-scroll>
         {!current?<p className="sidebar-empty">Select a file to view chunks</p>:<>
           <div className="review-detail-heading"><strong title={current.path}>{displayPath(current.path,fileLabels)}</strong>
             <span>{currentItems.length} chunk{currentItems.length===1?'':'s'}</span></div>
@@ -139,7 +137,7 @@ export default function ReviewDashboard({projects,documents,snapshots,statuses,f
             const setRef=(node:HTMLDivElement|null)=>{if(node)chunkRefs.current.set(item.id,node);else chunkRefs.current.delete(item.id);};
             if('reference' in item){
               const reveal=()=>onRevealPin(currentFile,item);
-              return <div className="dashboard-chunk" aria-current={active||undefined} key={item.id} ref={setRef}>
+              return <div className="dashboard-chunk" data-panel-anchor={item.id} aria-current={active||undefined} key={item.id} ref={setRef}>
                 <PinActions pin={item} kept={keptIds.has(item.id)} onAction={onPinAction} onSource={onPinSource} onReveal={reveal}/>
                 <button className="chunk-preview" title="Go to code" onClick={reveal}><span>{item.preview.trimStart()||'\u00a0'}</span></button>
                 {item.reference.note&&<div className="code-pin-notes">{item.reference.note}</div>}
@@ -148,12 +146,12 @@ export default function ReviewDashboard({projects,documents,snapshots,statuses,f
             const record='decision' in item;
             const expanded=record&&expandedRecords.has(item.id);
             const notes=currentChunks?.notes.get(item.id);
-            return <div className={'dashboard-chunk '+(active?'active':'')} key={item.id} ref={setRef}>
+            return <div className={'dashboard-chunk '+(active?'active':'')} data-panel-anchor={item.id} key={item.id} ref={setRef}>
               <ReviewActions file={currentFile} item={item} onAction={onAction}
                 detailsExpanded={expanded} onToggleDetails={record?()=>onToggleReviewPreview(currentFile,item.id,item.line):undefined}
-                onReveal={()=>onOpen(current.project,current.path,item.line)}/>
+                onReveal={()=>onGoto(current.project,current.path,item.line)}/>
               <button className="chunk-preview" title="Go to code"
-                onClick={()=>onOpen(current.project,current.path,item.line)}>
+                onClick={()=>onGoto(current.project,current.path,item.line)}>
                 <span className="removed">{firstPreviewLine(item.oldText)?'- '+firstPreviewLine(item.oldText):''}</span>
                 <span className="added">{firstPreviewLine(item.newText)?'+ '+firstPreviewLine(item.newText):''}</span>
               </button>
@@ -180,11 +178,11 @@ export default function ReviewDashboard({projects,documents,snapshots,statuses,f
         onKeyDown={event=>{
           if(event.key!=='ArrowUp'&&event.key!=='ArrowDown')return;
           event.preventDefault();
-          const height=changesHeight??changesRef.current?.getBoundingClientRect().height??MIN_CHANGES_HEIGHT;
+          const height=changesRef.current?.getBoundingClientRect().height??MIN_CHANGES_HEIGHT;
           setChangesHeight(clampChangesHeight(height+(event.key==='ArrowUp'?12:-12)));
         }}/>;
   const changes=<section ref={changesRef} className={'review-changes '+(split?'split':'')} aria-label="Review files"
-        style={split||changesHeight===null?undefined:{flexBasis:changesHeight}}>
+        style={split||changesHeight===null?undefined:{flexBasis:changesHeight,maxHeight:`calc(100% - ${REVIEW_HEADER_HEIGHT+REVIEW_RESIZE_HEIGHT+MIN_DETAIL_HEIGHT}px)`}}>
         <header className="review-changes-header">
           {projects.length===1?<strong className="review-project-name" title={projects[0].name}>{projects[0].name}</strong>:
             <ProjectDropdown projects={projects} value={filter} onChange={onFilterChange}/>}
@@ -198,7 +196,7 @@ export default function ReviewDashboard({projects,documents,snapshots,statuses,f
               disabled={!reviewed} onClick={()=>bulk('undo')}>Undo</button>
           </div>
         </header>
-        <div className="review-file-list">
+        <div className="review-file-list" data-panel-scroll>
           {grouped?scoped.map(project=>{
             const projectRows=rows.filter(row=>row.project.id===project.id);
             if(!projectRows.length)return null;
@@ -220,22 +218,30 @@ export default function ReviewDashboard({projects,documents,snapshots,statuses,f
           }):rows.map(fileRow)}
         </div>
       </section>;
-  return <>
-    <aside ref={dashboardRef} className="explorer review-dashboard" style={{width}}>
-      <header className="explorer-header"><span>Review</span>
+  const splitWindow=!!detachedWindow&&split&&projects.length>0;
+  return <PanelPortal targetWindow={detachedWindow}>
+    <aside ref={dashboardRef} className={'explorer review-dashboard'+(splitWindow?' detached-split':'')}
+      style={{width:detachedWindow?(splitWindow?(detachedListWidth??'50%'):'100%'):width}}>
+      <header className="explorer-header"><span>Review</span><div className="review-header-actions">
         <button className="icon-button" title={split?'Merge review panes':'Split review panes'}
           aria-label={split?'Merge review panes':'Split review panes'} onClick={()=>onSplitChange(!split)}>
           <Icon name={split?'merge':'split'} size={17}/>
         </button>
+        {!detachedWindow&&onToggleWindow&&<button className="icon-button" title="Separate Review window" aria-label="Separate Review window" onClick={onToggleWindow}>
+          <Icon name="panelSeparate" size={17}/>
+        </button>}
+        </div>
       </header>
       {!projects.length?<p className="sidebar-empty">Open a project to begin</p>:
         split?changes:<>{detail}{heightHandle}{changes}</>}
-      <ResizeHandle width={width} onResize={onResize}/>
+      {detachedWindow
+        ?splitWindow&&<ResizeHandle onResize={setDetachedListWidth} label="Resize review panes"/>
+        :<ResizeHandle width={width} onResize={onResize}/>}
     </aside>
-    {split&&projects.length>0&&<section className="review-chunk-pane" style={{width:chunkWidth}}>
+    {split&&projects.length>0&&<section className="review-chunk-pane" style={detachedWindow?undefined:{width:chunkWidth}}>
       <header className="explorer-header"><span>Chunks</span></header>
       {detail}
-      <ResizeHandle width={chunkWidth} onResize={onChunkResize} label="Resize chunk pane"/>
+      {!detachedWindow&&<ResizeHandle width={chunkWidth} onResize={onChunkResize} label="Resize chunk pane"/>}
     </section>}
-  </>;
+  </PanelPortal>;
 }

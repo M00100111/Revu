@@ -1,4 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import {PanelPortal,usePanelWindow} from './PanelPortal';
+import ScrollbarScope from './ScrollbarScope';
+import {useChatSessionSidebar} from './useChatSessionSidebar';
 import { SessionTabRetention } from './sessionTabRetention';
 import { AskUserQuestions, askUserPresentation } from './AskUserCard';
 import { createPortal, flushSync } from 'react-dom';
@@ -10,6 +13,8 @@ import type {PiExtensionPending,PiExtensionRequest} from '../shared/piTypes';
 import MarkdownContent, {linkedCodeReferences} from './MarkdownContent';
 import {CODE_PIN_TOOL,codeReferences,type CodeReference,type PinSource,type PinTarget} from '../shared/codePins';
 import SessionTreeDialog from './SessionTreeDialog';
+import ChatSessionSidebar from './ChatSessionSidebar';
+import {canCloneOrExportSession,savedSessionSort,sessionDateGroups,SessionSearchInput,useSessionSearch} from './SessionSearch';
 import SummaryCard from './SummaryCard';
 import SubagentCard from './SubagentCard';
 import { CwdRecoveryDialog,ForkDialog, ProjectTrustDialog, RenameSessionDialog } from './CommandDialogs';
@@ -99,7 +104,6 @@ const addUsage=(target:MessageUsage,value?:MessageUsage)=>{if(!value)return;targ
   target.cacheWrite+=value.cacheWrite;target.reasoning+=value.reasoning;target.totalTokens+=value.totalTokens;target.cost+=value.cost;};
 const combinedUsage=(stats:RunStats)=>{const total=emptyMessageUsage();addUsage(total,stats.assistantUsage);addUsage(total,stats.toolUsage);return total;};
 const emptyRunStats=():RunStats=>({modelTimeMs:0,toolTimeMs:0,assistantUsage:emptyMessageUsage(),toolUsage:emptyMessageUsage(),calls:[]});
-const savedSessionSort=():PiSessionSort=>{const value=localStorage.getItem('revu-session-sort');return value==='recent'||value==='relevance'?value:'threaded';};
 const CHAT_HISTORY_KEY='revu-chat-input-history';const CHAT_HISTORY_LIMIT=50;
 export const normalizeInputHistory=(value:unknown):string[]=>Array.isArray(value)
   ?value.filter((item):item is string=>typeof item==='string'&&!!item.trim()).slice(-CHAT_HISTORY_LIMIT):[];
@@ -512,16 +516,17 @@ function SessionDialog({projects,projectId,selectedSessionId,sessions,doneSessio
   onDelete:(session:PiSessionSummary)=>void;onClone:(session:PiSessionSummary)=>void;onExport:(session:PiSessionSummary)=>void;
   onFolderChanged:()=>void;onClose:()=>void;notify:Notify;
 }){
-  const [renaming,setRenaming]=useState<string|null>(null);const [name,setName]=useState('');const [query,setQuery]=useState('');
-  const [sort,setSort]=useState<PiSessionSort>(savedSessionSort);const [results,setResults]=useState<PiSessionSearchResult[]>([]);const [searching,setSearching]=useState(false);
+  const [renaming,setRenaming]=useState<string|null>(null);const [name,setName]=useState('');
+  const [sort,setSort]=useState<PiSessionSort>(savedSessionSort);
   const [scope,setScope]=useState<PiSessionScope>('current');const [namedOnly,setNamedOnly]=useState(false);
   const [catalog,setCatalog]=useState<PiSessionCatalog>({groups:[],sessions:[]});const [catalogLoading,setCatalogLoading]=useState(false);
+  const panelDocument=usePanelWindow().document;
   const [folderMenuOpen,setFolderMenuOpen]=useState(false);const folderMenuRef=useRef<HTMLDivElement>(null);
   const selectedProject=projects.find(project=>project.id===projectId)??projects[0];const [selectedCwd,setSelectedCwd]=useState(()=>piSessionProjectKey(selectedProject?.root??''));
-  const trimmedQuery=query.trim();
+  const {query,setQuery,trimmedQuery,results,searching}=useSessionSearch(projectId,scope,sort,sessions);
   useEffect(()=>localStorage.setItem('revu-session-sort',sort),[sort]);
   useEffect(()=>{if(!folderMenuOpen)return;const close=(event:MouseEvent)=>{if(!folderMenuRef.current?.contains(event.target as Node))setFolderMenuOpen(false);};
-    document.addEventListener('mousedown',close);return()=>document.removeEventListener('mousedown',close);},[folderMenuOpen]);
+    panelDocument.addEventListener('mousedown',close);return()=>panelDocument.removeEventListener('mousedown',close);},[folderMenuOpen,panelDocument]);
   useEffect(()=>{if(scope==='current'&&selectedProject)setSelectedCwd(piSessionProjectKey(selectedProject.root));},[scope,selectedProject?.root]);
   useEffect(()=>{
     if(scope!=='all'){setCatalog({groups:[],sessions:[]});setCatalogLoading(false);return;}
@@ -532,14 +537,6 @@ function SessionDialog({projects,projectId,selectedSessionId,sessions,doneSessio
       .finally(()=>{if(!cancelled)setCatalogLoading(false);});
     return()=>{cancelled=true;};
   },[scope,projectId,sessions]);
-  useEffect(()=>{
-    if(!trimmedQuery){setResults([]);setSearching(false);return;}
-    let cancelled=false;setSearching(true);
-    const timer=setTimeout(()=>void window.revu.agent.searchSessions(projectId,trimmedQuery,sort,scope).then(unwrap).then(items=>{
-      if(!cancelled)setResults(items);
-    }).catch(()=>{if(!cancelled)setResults([]);}).finally(()=>{if(!cancelled)setSearching(false);}),150);
-    return()=>{cancelled=true;clearTimeout(timer);};
-  },[projectId,trimmedQuery,sort,scope,sessions]);
   const openGroups:PiSessionGroup[]=projects.map(project=>({key:piSessionProjectKey(project.root),name:project.name,cwd:project.root,available:true}));
   const openGroupKeys=new Set(openGroups.map(group=>group.key));
   const projectGroups=scope==='current'?openGroups:[...openGroups,...catalog.groups.filter(group=>!openGroupKeys.has(group.key))];
@@ -549,14 +546,7 @@ function SessionDialog({projects,projectId,selectedSessionId,sessions,doneSessio
   const chooseSessionFolder=async()=>{setFolderMenuOpen(false);try{const result=await window.revu.agent.chooseSessionFolder(projectId).then(unwrap);if(!result)return;
     onFolderChanged();notify('info',result.copied?`Session folder changed. Copied ${result.copied} ${result.copied===1?'session':'sessions'}.`:'Session folder changed.');
   }catch(error){notify('error',errorMessage(error));}};
-  const now=new Date();const today=new Date(now.getFullYear(),now.getMonth(),now.getDate()).getTime();
-  const groups=[
-    ['Today',(item:PiSessionSummary)=>item.modifiedAt>=today],
-    ['Yesterday',(item:PiSessionSummary)=>item.modifiedAt>=today-86400000&&item.modifiedAt<today],
-    ['Previous 7 Days',(item:PiSessionSummary)=>item.modifiedAt>=today-6*86400000&&item.modifiedAt<today-86400000],
-    ['Older',(item:PiSessionSummary)=>item.modifiedAt<today-6*86400000],
-  ] as const;
-  const renderSession=(session:PiSessionSummary|PiSessionSearchResult,thread?:ThreadedPiSession<PiSessionSummary>)=>{const tone=sessionTone(session.status,doneSessionIds.has(session.id),session.question);const enabled=(session.status==='idle'||session.status==='error')&&session.hasSessionFile!==false&&!session.isCompacting&&!session.question;
+  const renderSession=(session:PiSessionSummary|PiSessionSearchResult,thread?:ThreadedPiSession<PiSessionSummary>)=>{const tone=sessionTone(session.status,doneSessionIds.has(session.id),session.question);const enabled=canCloneOrExportSession(session);
     const modifiedAt=new Date(session.modifiedAt);
     const openProject=projects.find(project=>piSessionProjectKey(project.root)===piSessionProjectKey(session.cwd));const canRuntimeAction=enabled&&!!openProject;
     const actionSession=openProject?{...session,projectId:openProject.id,scope:'current' as const}:session;
@@ -583,13 +573,12 @@ function SessionDialog({projects,projectId,selectedSessionId,sessions,doneSessio
       <div className="session-project-bar"><nav className="session-project-tabs" aria-label="Projects">{projectGroups.map(group=><button key={group.key} title={group.cwd}
         className={group.key===selectedCwd?'active':''} onClick={()=>{setSelectedCwd(group.key);if(scope==='current'){const project=projects.find(item=>piSessionProjectKey(item.root)===group.key);if(project)onProject(project.id);}}}>{group.name}</button>)}</nav>
         <div className="session-scope-switch" role="group" aria-label="Session scope"><button className={scope==='current'?'active':''} onClick={()=>setScope('current')}>Current</button><button className={scope==='all'?'active':''} onClick={()=>setScope('all')}>All</button></div></div>
-      <div className="session-search"><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="Search conversations..." aria-label="Search conversations"/>
+      <div className="session-search"><SessionSearchInput query={query} setQuery={setQuery}/>
         <AgentSelect compact align="end" showCheck={false} value={sort} placeholder="Sort" groups={[{options:[{value:'threaded',label:'Threaded'},{value:'relevance',label:'Relevant'},{value:'recent',label:'Recent'}]}]}
           onChange={value=>setSort(value as PiSessionSort)}/><label className="session-named-filter"><input type="checkbox" checked={namedOnly} onChange={event=>setNamedOnly(event.target.checked)}/><span>Named</span></label><button className="session-new-chat" onClick={onNew}>New Chat</button></div>
       <div className="session-groups">{trimmedQuery
         ?searching?<p className="agent-empty">Searching…</p>:visibleResults.length?<section className="session-group search-results">{visibleResults.map(session=>renderSession(session))}</section>:<p className="agent-empty">No matching conversations.</p>
-        :catalogLoading&&scope==='all'?<p className="agent-empty">Loading conversations…</p>:visibleSessions.length===0?<p className="agent-empty">No conversations yet.</p>:sort==='threaded'?<section className="session-group threaded">{threadPiSessions(visibleSessions).map(item=>renderSession(item.session,item))}</section>:groups.map(([label,match])=>{
-        const items=visibleSessions.filter(match);if(!items.length)return null;
+        :catalogLoading&&scope==='all'?<p className="agent-empty">Loading conversations…</p>:visibleSessions.length===0?<p className="agent-empty">No conversations yet.</p>:sort==='threaded'?<section className="session-group threaded">{threadPiSessions(visibleSessions).map(item=>renderSession(item.session,item))}</section>:sessionDateGroups(visibleSessions).map(({label,items})=>{
         return <section className="session-group" key={label}><h3>{label}</h3>{items.map(session=>renderSession(session))}</section>;
       })}</div>
     </section>
@@ -686,7 +675,8 @@ function ModelDialog({projectId,sessionId,onClose,onChanged,notify}:{projectId:s
   </div>;
 }
 
-export default function AgentChat({hiddenToolbarButtons,onOpenSettings,open,projects,activeProjectId,dirtyProjectIds,width,onResize,onResizeEnd,notify,navigationRequest,onNotice,onProjectAdded,onOpenToolDetail,onUpdateToolDetail,onPinSession,onShowPins,onOpenCode,visiblePinSource,citeRequest,onGoto,tokenizeSnapshot}:{
+export default function AgentChat({detachedWindow,onToggleWindow,hiddenToolbarButtons,onOpenSettings,open,projects,activeProjectId,dirtyProjectIds,width,onResize,onResizeEnd,notify,navigationRequest,onNotice,onProjectAdded,onOpenToolDetail,onUpdateToolDetail,onPinSession,onShowPins,onOpenCode,visiblePinSource,citeRequest,onGoto,tokenizeSnapshot}:{
+  detachedWindow?:Window|null;onToggleWindow?:()=>void;
   hiddenToolbarButtons:ReadonlySet<ChatToolbarButton>;
   tokenizeSnapshot?:SnapshotTokenizer;
   citeRequest?:CiteRequest;onGoto:(projectId:string,target:CiteTarget)=>void;
@@ -698,6 +688,14 @@ export default function AgentChat({hiddenToolbarButtons,onOpenSettings,open,proj
   onPinSession:(sessionId:string|null,latest?:PinSource)=>void;onShowPins:(source:PinSource,hide:boolean)=>void;
   onOpenCode:(target:PinTarget)=>void;visiblePinSource?:string;
 }){
+  const panelWindow=detachedWindow?.document.defaultView??window;
+  const panelDocument=panelWindow.document;
+  const subscribeResize=useCallback((update:()=>void)=>{
+    panelWindow.addEventListener('resize',update);
+    return ()=>panelWindow.removeEventListener('resize',update);
+  },[panelWindow]);
+  const viewport=useSyncExternalStore(subscribeResize,()=>panelWindow.innerWidth+'x'+panelWindow.innerHeight);
+  const sessionSidebar=useChatSessionSidebar(detachedWindow);
   const [selectedProjectId,setSelectedProjectId]=useState<string>('');const [selectedSessionId,setSelectedSessionId]=useState<string|null>(null);
   const previousSessionId=useRef<string|null>(null);
   useEffect(()=>{
@@ -705,6 +703,12 @@ export default function AgentChat({hiddenToolbarButtons,onOpenSettings,open,proj
     previousSessionId.current=selectedSessionId;
   },[selectedSessionId,notify]);
   const [sessions,setSessions]=useState<Record<string,PiSessionSummary[]>>({});const [chats,setChats]=useState<Record<string,ChatState>>({});
+  const catalogRequests=useRef(new Map<string,number>());
+  const projectSessions=sessions[selectedProjectId];
+  const historySessions=useMemo(()=>sessionSidebar.visible?(projectSessions??[]).flatMap(session=>{
+    if(session.historyAt===null)return [];
+    return [session.historyAt===undefined?session:{...session,modifiedAt:session.historyAt}];
+  }):[],[projectSessions,sessionSidebar.visible]);
   const [draftState,setDraftState]=useState<{text:string;items:DraftSelection[];freshCitationTail?:boolean}>({text:'',items:[]});const draft=draftState.text;
   const [sessionDialog,setSessionDialog]=useState(false);const [modelDialog,setModelDialog]=useState(false);
   const draftData=useRef(draftState);
@@ -758,7 +762,7 @@ export default function AgentChat({hiddenToolbarButtons,onOpenSettings,open,proj
   const [modelMenuStyle,setModelMenuStyle]=useState<React.CSSProperties>({});
   const [mention,setMention]=useState<MentionMatch|null>(null);
   const [fileDragActive,setFileDragActive]=useState(false);const [abortArmed,setAbortArmed]=useState(false);
-  const bodyRef=useRef<HTMLDivElement|null>(null);const chatContentRef=useRef<HTMLDivElement|null>(null);const activeSessionTabRef=useRef<HTMLDivElement|null>(null);const sessionTabsRef=useRef<HTMLDivElement|null>(null);
+  const bodyRef=useRef<HTMLDivElement|null>(null);const runRailRef=useRef<HTMLElement|null>(null);const activeSessionTabRef=useRef<HTMLDivElement|null>(null);const sessionTabsRef=useRef<HTMLDivElement|null>(null);
   const sessionMoreRef=useRef<HTMLButtonElement|null>(null);const sessionMoreMenuRef=useRef<HTMLDivElement|null>(null);const statsButtonRef=useRef<HTMLButtonElement|null>(null);const statsMenuRef=useRef<HTMLDivElement|null>(null);
   const modelControlRef=useRef<HTMLDivElement|null>(null);const modelMenuRef=useRef<HTMLDivElement|null>(null);
   const usageRef=useRef<HTMLDivElement|null>(null);const contextRef=useRef<HTMLDivElement|null>(null);const draftConfigRequest=useRef(0);
@@ -825,7 +829,7 @@ export default function AgentChat({hiddenToolbarButtons,onOpenSettings,open,proj
       setCommandMatch(null);setMention(null);setModelMenu(false);
     }else{
       const saved=questionDrafts.current.get(selectedSessionId);if(!saved)return;questionDrafts.current.delete(selectedSessionId);setDraft(saved.text,saved.items);
-      if(open)requestAnimationFrame(()=>{const input=textareaRef.current;input?.focus();input?.setSelectionRange(saved.caret,saved.caret);});
+      if(open)panelWindow.requestAnimationFrame(()=>{const input=textareaRef.current;input?.focus();input?.setSelectionRange(saved.caret,saved.caret);});
     }
   },[selectedSessionId,activeQuestion?.id,open]);
   const hasRunningTool=!!current?.tools.some(tool=>tool.status==='running');
@@ -874,7 +878,7 @@ export default function AgentChat({hiddenToolbarButtons,onOpenSettings,open,proj
   useLayoutEffect(()=>{
     const input=textareaRef.current?.element;if(!input||activeQuestion)return;
     input.style.height='auto';input.style.overflowY='hidden';
-    const style=getComputedStyle(input);const lineHeight=Number.parseFloat(style.lineHeight)||20;
+    const style=panelWindow.getComputedStyle(input);const lineHeight=Number.parseFloat(style.lineHeight)||20;
     const padding=(Number.parseFloat(style.paddingTop)||0)+(Number.parseFloat(style.paddingBottom)||0);
     const collapsedMin=80;const collapsedMax=Math.ceil(lineHeight*6+padding);const contentHeight=input.scrollHeight;
     const needsExpanded=contentHeight>collapsedMax+1;
@@ -883,7 +887,7 @@ export default function AgentChat({hiddenToolbarButtons,onOpenSettings,open,proj
     if(composerExpanded&&composerExpansionSource.current==='auto'&&!needsExpanded){composerExpansionSource.current=null;setComposerExpanded(false);return;}
     if(composerExpanded){input.style.removeProperty('height');input.style.overflowY='auto';}
     else{input.style.height=`${Math.max(collapsedMin,Math.min(contentHeight,collapsedMax))}px`;input.style.overflowY=needsExpanded?'auto':'hidden';}
-  },[draft,width,composerExpanded,activeQuestion?.id]);
+  },[draft,width,viewport,panelWindow,sessionSidebar.visible,composerExpanded,activeQuestion?.id]);
   useEffect(()=>{
     if(!current)return;
     for(const tool of current.tools)if(tool.status==='running')onUpdateToolDetail(toolDetail(current,tool,toolClock));
@@ -901,10 +905,15 @@ export default function AgentChat({hiddenToolbarButtons,onOpenSettings,open,proj
   useEffect(()=>{setForkTarget(null);setRenameTarget(null);setInputWarning('');},[selectedProjectId,selectedSessionId]);
   useEffect(()=>{if(commandMatch)composerRef.current?.querySelector('[aria-label="Commands"] [aria-selected="true"]')?.scrollIntoView({block:'nearest'});},[commandMatch,commandIndex]);
   const dirty=!!selectedProjectId&&dirtyProjectIds.has(selectedProjectId)&&!draftData.current.items.length;
-  const reloadSessions=async(projectId:string)=>{
-    try{const catalog=await window.revu.agent.listSessions(projectId).then(unwrap);const items=catalog.sessions;setSessions(current=>({...current,[projectId]:items}));return items;}
-    catch(error){notify('error',error instanceof Error?error.message:String(error));return [];}
-  };
+  const reloadSessions=useCallback(async(projectId:string)=>{
+    const request=(catalogRequests.current.get(projectId)??0)+1;
+    catalogRequests.current.set(projectId,request);
+    try{
+      const {sessions:items}=await window.revu.agent.listSessions(projectId).then(unwrap);
+      if(catalogRequests.current.get(projectId)===request)setSessions(current=>({...current,[projectId]:items}));
+      return items;
+    }catch(error){if(catalogRequests.current.get(projectId)===request)notify('error',errorMessage(error));return [];}
+  },[notify]);
   const openSessionById=async(projectId:string,sessionId:string,targetRunKey?:string,targetMessageId?:string)=>{const request=++chatNavigation.current;setLoading(true);try{
     const snapshot=await window.revu.agent.openSession(projectId,sessionId).then(unwrap);
     const entries=await window.revu.agent.getEntries(projectId,snapshot.sessionId).then(unwrap);
@@ -952,18 +961,19 @@ export default function AgentChat({hiddenToolbarButtons,onOpenSettings,open,proj
     }
   },[activeProjectId,projects,selectedProjectId]);
   const hasSelectedSession=!!selectedSessionId;
-  useEffect(()=>{if(open&&selectedProjectId&&hasSelectedSession)void reloadSessions(selectedProjectId);},[open,selectedProjectId,hasSelectedSession]);
-  useEffect(()=>{if(open&&sessionDialog&&selectedProjectId)void reloadSessions(selectedProjectId);},[open,sessionDialog,selectedProjectId]);
+  useEffect(()=>{
+    if(open&&selectedProjectId&&(hasSelectedSession||sessionDialog||sessionSidebar.visible))void reloadSessions(selectedProjectId);
+  },[open,selectedProjectId,hasSelectedSession,sessionDialog,sessionSidebar.visible,reloadSessions]);
   useLayoutEffect(()=>{activeSessionTabRef.current?.scrollIntoView({block:'nearest',inline:'nearest'});},[selectedProjectId,selectedSessionId,sessionTabs.length]);
   useLayoutEffect(()=>{const container=sessionTabsRef.current;if(!container)return;const update=()=>setSessionTabCapacity(Math.max(1,Math.floor((container.clientWidth+3)/95)));
-    update();const observer=new ResizeObserver(update);observer.observe(container);return()=>observer.disconnect();},[]);
+    update();const observer=new panelWindow.ResizeObserver(update);observer.observe(container);return()=>observer.disconnect();},[panelWindow]);
   useEffect(()=>{if(open&&draftProject===selectedProjectId&&selectedProjectId&&!selectedSessionId)void loadNewChatDefaults(selectedProjectId);},[open,draftProject,selectedProjectId,selectedSessionId]);
   useEffect(()=>{if(open&&selectedSessionId)clearDone(selectedSessionId);},[open,selectedSessionId,clearDone]);
   useEffect(()=>()=>{for(const timer of doneTimers.current.values())clearTimeout(timer);if(copiedTimer.current)clearTimeout(copiedTimer.current);if(abortTimer.current)clearTimeout(abortTimer.current);},[]);
   useEffect(()=>{if(selectedSessionId)draftConfigRequest.current++;historyIndex.current=null;setMention(null);setAbortArmed(false);if(abortTimer.current)clearTimeout(abortTimer.current);
     composerExpansionSource.current=null;composerManuallyCollapsed.current=false;setComposerExpanded(false);setModelMenu(false);setSessionMenuOpen(false);setStatsRunKey('');setContextOpen(false);setUsageOpen(false);setCompactionResult(undefined);},[selectedSessionId,selectedProjectId]);
   useEffect(()=>{setSessionInfoOpen(false);setSessionInfo(undefined);setSessionInfoError('');},[selectedSessionId]);
-  useEffect(()=>{if(!sessionInfoOpen)return;const keydown=(event:KeyboardEvent)=>{if(event.key==='Escape')setSessionInfoOpen(false);};window.addEventListener('keydown',keydown);return()=>window.removeEventListener('keydown',keydown);},[sessionInfoOpen]);
+  useEffect(()=>{if(!sessionInfoOpen)return;const keydown=(event:KeyboardEvent)=>{if(event.key==='Escape')setSessionInfoOpen(false);};panelWindow.addEventListener('keydown',keydown);return()=>panelWindow.removeEventListener('keydown',keydown);},[sessionInfoOpen,panelWindow]);
   useEffect(()=>{
     const available=open&&projects.length>0;
     const opening=available&&!wasOpen.current;wasOpen.current=available;
@@ -983,39 +993,45 @@ export default function AgentChat({hiddenToolbarButtons,onOpenSettings,open,proj
     if(target){target.scrollIntoView({block:'start'});target.focus({preventScroll:true});return;}
     void openSessionById(navigationRequest.projectId,navigationRequest.sessionId,navigationRequest.messageId?undefined:navigationRequest.runKey??'__latest__',navigationRequest.messageId);},[navigationRequest?.token]);
   useLayoutEffect(()=>{if(!modelMenu||!modelControlRef.current)return;const trigger=modelControlRef.current.getBoundingClientRect();
-    const panel=modelControlRef.current.closest('.agent-chat')?.getBoundingClientRect();const limitLeft=panel?panel.left+8:8;const limitRight=panel?panel.right-8:window.innerWidth-8;
+    const panel=modelControlRef.current.closest('.agent-chat')?.getBoundingClientRect();const limitLeft=panel?panel.left+8:8;const limitRight=panel?panel.right-8:panelWindow.innerWidth-8;
     const width=Math.max(190,Math.min(236,limitRight-limitLeft));const left=Math.max(limitLeft,Math.min(limitRight-width,trigger.right-width));
-    setModelMenuStyle({position:'fixed',left,width,bottom:window.innerHeight-trigger.top+7,maxHeight:Math.max(160,Math.min(340,trigger.top-14))});
-  },[modelMenu]);
+    setModelMenuStyle({position:'fixed',left,width,bottom:panelWindow.innerHeight-trigger.top+7,maxHeight:Math.max(160,Math.min(340,trigger.top-14))});
+  },[modelMenu,panelWindow,viewport]);
   useEffect(()=>{if(!modelMenu)return;
     const outside=(event:PointerEvent|FocusEvent)=>{const target=event.target as Node;if(!modelControlRef.current?.contains(target)&&!modelMenuRef.current?.contains(target))setModelMenu(false);};
     const escape=(event:KeyboardEvent)=>{if(event.key==='Escape')setModelMenu(false);};
-    document.addEventListener('pointerdown',outside);document.addEventListener('focusin',outside);document.addEventListener('keydown',escape);
-    return()=>{document.removeEventListener('pointerdown',outside);document.removeEventListener('focusin',outside);document.removeEventListener('keydown',escape);};
-  },[modelMenu]);
-  useLayoutEffect(()=>{if(!sessionMenuOpen||!sessionMoreRef.current)return;const rect=sessionMoreRef.current.getBoundingClientRect();const panel=sessionMoreRef.current.closest('.agent-chat')?.getBoundingClientRect();
-    const left=panel?panel.left+16:16;const width=Math.max(220,(panel?.width??252)-32);const bottom=panel?.bottom??window.innerHeight;
-    setSessionMenuStyle({position:'fixed',width,left,top:rect.bottom+5,maxHeight:Math.max(120,bottom-rect.bottom-13)});
-  },[sessionMenuOpen,selectedProjectId,sessionTabs.length]);
+    panelDocument.addEventListener('pointerdown',outside);panelDocument.addEventListener('focusin',outside);panelDocument.addEventListener('keydown',escape);
+    return()=>{panelDocument.removeEventListener('pointerdown',outside);panelDocument.removeEventListener('focusin',outside);panelDocument.removeEventListener('keydown',escape);};
+  },[modelMenu,panelWindow,viewport]);
+  useLayoutEffect(()=>{
+    const trigger=sessionMoreRef.current;
+    if(!sessionMenuOpen||!trigger)return;
+    const rect=trigger.getBoundingClientRect();
+    const panel=trigger.closest('.agent-chat')!.getBoundingClientRect();
+    const right=Math.min(rect.right,panel.right-16);
+    const menuWidth=Math.max(0,Math.min(360,right-panel.left-16));
+    setSessionMenuStyle({width:menuWidth,left:right-menuWidth,top:rect.bottom+5,
+      maxHeight:Math.max(120,panel.bottom-rect.bottom-13)});
+  },[sessionMenuOpen,selectedProjectId,sessionTabs.length,width,panelWindow,viewport]);
   useEffect(()=>{if(!sessionMenuOpen)return;const outside=(event:PointerEvent|FocusEvent)=>{const target=event.target as Node;if(!sessionMoreRef.current?.contains(target)&&!sessionMoreMenuRef.current?.contains(target))setSessionMenuOpen(false);};
-    const escape=(event:KeyboardEvent)=>{if(event.key==='Escape')setSessionMenuOpen(false);};document.addEventListener('pointerdown',outside);document.addEventListener('focusin',outside);document.addEventListener('keydown',escape);
-    return()=>{document.removeEventListener('pointerdown',outside);document.removeEventListener('focusin',outside);document.removeEventListener('keydown',escape);};},[sessionMenuOpen]);
-  useLayoutEffect(()=>{if(!statsRunKey||!statsButtonRef.current)return;const rect=statsButtonRef.current.getBoundingClientRect();const bounds=chatContentRef.current?.getBoundingClientRect();
-    const width=Math.min(360,Math.max(260,(bounds?.width??376)-16));const limitLeft=(bounds?.left??8)+8;const limitRight=(bounds?.right??window.innerWidth)-8;
-    const left=Math.max(limitLeft,Math.min(limitRight-width,rect.right-width));const above=Math.max(0,rect.top-(bounds?.top??8)-7);const below=Math.max(0,(bounds?.bottom??window.innerHeight)-rect.bottom-7);
-    setStatsMenuStyle(above>=below?{position:'fixed',width,left,bottom:window.innerHeight-rect.top+5,maxHeight:Math.max(120,above)}:{position:'fixed',width,left,top:rect.bottom+5,maxHeight:Math.max(120,below)});
-  },[statsRunKey]);
+    const escape=(event:KeyboardEvent)=>{if(event.key==='Escape')setSessionMenuOpen(false);};panelDocument.addEventListener('pointerdown',outside);panelDocument.addEventListener('focusin',outside);panelDocument.addEventListener('keydown',escape);
+    return()=>{panelDocument.removeEventListener('pointerdown',outside);panelDocument.removeEventListener('focusin',outside);panelDocument.removeEventListener('keydown',escape);};},[sessionMenuOpen,panelDocument]);
+  useLayoutEffect(()=>{if(!statsRunKey||!statsButtonRef.current)return;const rect=statsButtonRef.current.getBoundingClientRect();const bounds=bodyRef.current?.getBoundingClientRect();
+    const width=Math.min(360,Math.max(260,(bounds?.width??376)-16));const limitLeft=(bounds?.left??8)+8;const limitRight=(bounds?.right??panelWindow.innerWidth)-8;
+    const left=Math.max(limitLeft,Math.min(limitRight-width,rect.right-width));const above=Math.max(0,rect.top-(bounds?.top??8)-7);const below=Math.max(0,(bounds?.bottom??panelWindow.innerHeight)-rect.bottom-7);
+    setStatsMenuStyle(above>=below?{position:'fixed',width,left,bottom:panelWindow.innerHeight-rect.top+5,maxHeight:Math.max(120,above)}:{position:'fixed',width,left,top:rect.bottom+5,maxHeight:Math.max(120,below)});
+  },[statsRunKey,panelWindow,viewport]);
   useEffect(()=>{if(!statsRunKey)return;const outside=(event:PointerEvent|FocusEvent)=>{const target=event.target as Node;if(!statsButtonRef.current?.contains(target)&&!statsMenuRef.current?.contains(target))setStatsRunKey('');};
-    const escape=(event:KeyboardEvent)=>{if(event.key==='Escape')setStatsRunKey('');};document.addEventListener('pointerdown',outside);document.addEventListener('focusin',outside);document.addEventListener('keydown',escape);
-    return()=>{document.removeEventListener('pointerdown',outside);document.removeEventListener('focusin',outside);document.removeEventListener('keydown',escape);};},[statsRunKey]);
+    const escape=(event:KeyboardEvent)=>{if(event.key==='Escape')setStatsRunKey('');};panelDocument.addEventListener('pointerdown',outside);panelDocument.addEventListener('focusin',outside);panelDocument.addEventListener('keydown',escape);
+    return()=>{panelDocument.removeEventListener('pointerdown',outside);panelDocument.removeEventListener('focusin',outside);panelDocument.removeEventListener('keydown',escape);};},[statsRunKey,panelWindow,viewport]);
   useEffect(()=>{if(!usageOpen)return;const outside=(event:PointerEvent|FocusEvent)=>{const target=event.target as Node;if(!usageRef.current?.contains(target))setUsageOpen(false);};
-    const escape=(event:KeyboardEvent)=>{if(event.key==='Escape')setUsageOpen(false);};document.addEventListener('pointerdown',outside);document.addEventListener('focusin',outside);document.addEventListener('keydown',escape);
-    return()=>{document.removeEventListener('pointerdown',outside);document.removeEventListener('focusin',outside);document.removeEventListener('keydown',escape);};
-  },[usageOpen]);
+    const escape=(event:KeyboardEvent)=>{if(event.key==='Escape')setUsageOpen(false);};panelDocument.addEventListener('pointerdown',outside);panelDocument.addEventListener('focusin',outside);panelDocument.addEventListener('keydown',escape);
+    return()=>{panelDocument.removeEventListener('pointerdown',outside);panelDocument.removeEventListener('focusin',outside);panelDocument.removeEventListener('keydown',escape);};
+  },[usageOpen,panelDocument]);
   useEffect(()=>{if(!contextOpen)return;const outside=(event:PointerEvent|FocusEvent)=>{const target=event.target as Node;if(!contextRef.current?.contains(target))setContextOpen(false);};
-    const escape=(event:KeyboardEvent)=>{if(event.key==='Escape')setContextOpen(false);};document.addEventListener('pointerdown',outside);document.addEventListener('focusin',outside);document.addEventListener('keydown',escape);
-    return()=>{document.removeEventListener('pointerdown',outside);document.removeEventListener('focusin',outside);document.removeEventListener('keydown',escape);};
-  },[contextOpen]);
+    const escape=(event:KeyboardEvent)=>{if(event.key==='Escape')setContextOpen(false);};panelDocument.addEventListener('pointerdown',outside);panelDocument.addEventListener('focusin',outside);panelDocument.addEventListener('keydown',escape);
+    return()=>{panelDocument.removeEventListener('pointerdown',outside);panelDocument.removeEventListener('focusin',outside);panelDocument.removeEventListener('keydown',escape);};
+  },[contextOpen,panelDocument]);
   const updateRunRail=useCallback(()=>{
     const body=bodyRef.current;if(!body)return;const entries=[...runRefs.current.entries()].filter((entry):entry is [string,HTMLElement]=>!!entry[1]);
     if(!entries.length){setActiveRunKey('');return;}
@@ -1123,10 +1139,10 @@ export default function AgentChat({hiddenToolbarButtons,onOpenSettings,open,proj
     if(event.type==='sessions-changed')void reloadSessions(event.projectId);
   }),[onNotice,markDone,clearDone,onUpdateToolDetail,receiveQuestions]);
   useLayoutEffect(()=>{
-    const body=bodyRef.current;if(!body)return;const frame=requestAnimationFrame(updateRunRail);const observer=new ResizeObserver(updateRunRail);observer.observe(body);
+    const body=bodyRef.current;if(!body)return;const frame=panelWindow.requestAnimationFrame(updateRunRail);const observer=new panelWindow.ResizeObserver(updateRunRail);observer.observe(body);
     for(const element of runRefs.current.values())observer.observe(element);body.addEventListener('scroll',updateRunRail,{passive:true});
-    return()=>{cancelAnimationFrame(frame);observer.disconnect();body.removeEventListener('scroll',updateRunRail);};
-  },[selectedSessionId,width,current?.messages,current?.streamText,current?.streamThinking,current?.tools,current?.summaryOperations,updateRunRail]);
+    return()=>{panelWindow.cancelAnimationFrame(frame);observer.disconnect();body.removeEventListener('scroll',updateRunRail);};
+  },[selectedSessionId,width,current?.messages,current?.streamText,current?.streamThinking,current?.tools,current?.summaryOperations,updateRunRail,panelWindow]);
   useLayoutEffect(()=>{const requested=pendingRunKey.current;if(!requested)return;const key=requested==='__latest__'?runs.at(-1)?.key:requested;
     const element=key?runRefs.current.get(key):undefined;if(key&&element&&bodyRef.current){skipAutoScroll.current=true;bodyRef.current.scrollTo({top:Math.max(0,element.offsetTop-12)});setActiveRunKey(key);}
     pendingRunKey.current=undefined;
@@ -1169,7 +1185,7 @@ export default function AgentChat({hiddenToolbarButtons,onOpenSettings,open,proj
   const sessionTabContext=async(event:React.MouseEvent,sessionId:string)=>{const action=await showContextMenu(event,[{id:'close',label:'Close'},{id:'closeOthers',label:'Close Others'},{id:'closeAll',label:'Close All'}] as const);
     if(action==='close')closeSessionTab(sessionId);if(action==='closeOthers')closeOtherSessionTabs(sessionId);if(action==='closeAll')closeAllSessionTabs();};
   const closeNewChatTab=()=>{const next=(openSessionIds[selectedProjectId]??[]).at(-1);if(next)void openSessionById(selectedProjectId,next);};
-  const focusComposer=(caret:number)=>requestAnimationFrame(()=>{const input=textareaRef.current;if(!input||selectedSessionId&&questionsRef.current[selectedSessionId]?.length)return;input.focus();input.setSelectionRange(caret,caret);});
+  const focusComposer=(caret:number)=>panelWindow.requestAnimationFrame(()=>{const input=textareaRef.current;if(!input||selectedSessionId&&questionsRef.current[selectedSessionId]?.length)return;input.focus();input.setSelectionRange(caret,caret);});
   useEffect(()=>{
     if(!open||!citeRequest||consumedCite.current===citeRequest||!selectedProject)return;
     const source=projects.find(project=>project.id===citeRequest.projectId);if(!source)return;
@@ -1416,15 +1432,15 @@ export default function AgentChat({hiddenToolbarButtons,onOpenSettings,open,proj
   }catch(error){notify('error',error instanceof Error?error.message:String(error));}};
   const beginResize=(event:React.PointerEvent)=>{event.currentTarget.setPointerCapture(event.pointerId);const start=event.clientX;const initial=width;let latest=initial;
     const move=(moveEvent:PointerEvent)=>{latest=Math.max(320,Math.min(720,initial+start-moveEvent.clientX));onResize(latest);};
-    const up=()=>{window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',up);window.removeEventListener('pointercancel',up);onResizeEnd(latest);};
-    window.addEventListener('pointermove',move);window.addEventListener('pointerup',up);window.addEventListener('pointercancel',up);
+    const up=()=>{panelWindow.removeEventListener('pointermove',move);panelWindow.removeEventListener('pointerup',up);panelWindow.removeEventListener('pointercancel',up);onResizeEnd(latest);};
+    panelWindow.addEventListener('pointermove',move);panelWindow.addEventListener('pointerup',up);panelWindow.addEventListener('pointercancel',up);
   };
   const selectedModel=current?.model??newChatModel;const selectedThinking=current?.thinkingLevel??newChatThinking;
   const thinkingOptions=(current?.availableThinkingLevels??THINKING_LEVELS).map(level=>({value:level,label:level}));
   const groupedModels=modelGroups(models);const contextWindow=usage.contextWindow??selectedModel?.contextWindow??0;const contextTokens=usage.contextTokens??0;
   const remainingContext=Math.max(0,contextWindow-contextTokens);
   const showRunPreview=(event:React.MouseEvent<HTMLButtonElement>|React.FocusEvent<HTMLButtonElement>,key:string)=>{
-    const content=chatContentRef.current;if(content){const marker=event.currentTarget.getBoundingClientRect();const bounds=content.getBoundingClientRect();
+    const rail=runRailRef.current;if(rail){const marker=event.currentTarget.getBoundingClientRect();const bounds=rail.getBoundingClientRect();
       setPreviewTop(Math.max(8,Math.min(marker.top-bounds.top-8,bounds.height-128)));}setPreviewRunKey(key);
   };
   const copyMessage=async(key:string,text:string)=>{
@@ -1460,6 +1476,21 @@ export default function AgentChat({hiddenToolbarButtons,onOpenSettings,open,proj
   const exportSession=async(session:PiSessionSummary)=>{
     try{const path=await window.revu.agent.exportHtml(session.projectId,session.id).then(unwrap);if(path)notify('info','Conversation exported.');}
     catch(error){notify('error',errorMessage(error));}
+  };
+  const renameSession=async(projectId:string,sessionId:string,name:string,scope?:PiSessionScope)=>{
+    await window.revu.agent.renameSession(projectId,sessionId,name,scope).then(unwrap);
+    setChats(state=>state[sessionId]?{...state,[sessionId]:{...state[sessionId],name}}:state);
+    await reloadSessions(projectId);
+  };
+  const deleteSession=async(session:PiSessionSummary)=>{
+    if(!panelWindow.confirm(`Delete “${session.name}”? The session will be moved to the Recycle Bin.`))return;
+    try{
+      await window.revu.agent.deleteSession(session.projectId,session.id,session.scope).then(unwrap);
+      setChats(state=>{const next={...state};delete next[session.id];return next;});
+      setOpenSessionIds(current=>({...current,[session.projectId]:(current[session.projectId]??[]).filter(id=>id!==session.id)}));
+      if(viewRef.current.selectedSessionId===session.id)startNewChat();
+      await reloadSessions(session.projectId);
+    }catch(error){notify('error',errorMessage(error));}
   };
   const executeBuiltin=async(text:string)=>{
     const command=parsePiCommand(text);if(!command||!selectedProjectId)return;
@@ -1521,14 +1552,18 @@ export default function AgentChat({hiddenToolbarButtons,onOpenSettings,open,proj
     }
     setTrustDialogs(items=>items.slice(1));
   };
-  return <CitationPreviews epoch={citationEpoch} tokenize={tokenizeSnapshot}>
-    <aside className={`agent-chat ${open?'open':''} ${fileDragActive?'file-drag-active':''}`} style={{width:open?width:0}} aria-hidden={!open}
+  return <PanelPortal targetWindow={detachedWindow}><ScrollbarScope><CitationPreviews epoch={citationEpoch} tokenize={tokenizeSnapshot}>
+    <aside className={`agent-chat ${detachedWindow?'detached':''} ${open?'open':''} ${fileDragActive?'file-drag-active':''}`} style={{width:detachedWindow?'100%':open?width:0}} aria-hidden={!open}
       onDragEnter={event=>{if(event.dataTransfer.types.includes('Files'))setFileDragActive(true);}}
       onDragOver={event=>{if(!event.dataTransfer.types.includes('Files'))return;event.preventDefault();event.dataTransfer.dropEffect='copy';setFileDragActive(true);}}
       onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node|null))setFileDragActive(false);}}
       onDrop={dropFiles}>
-      <div className="agent-resize-handle" onPointerDown={beginResize}/>
-      <header className="agent-chat-header"><button className="agent-project-trigger" disabled={!projects.length} onClick={()=>setSessionDialog(true)}>
+      {!detachedWindow&&<div className="agent-resize-handle" onPointerDown={beginResize}/>}
+      <header className="agent-chat-header">
+        {sessionSidebar.available&&<button className="agent-icon-button" type="button" aria-label="Toggle sessions sidebar"
+          aria-expanded={sessionSidebar.visible} title={sessionSidebar.visible?'Hide sessions sidebar':'Show sessions sidebar'} onClick={sessionSidebar.toggle}>
+          <Icon name="sessionSidebar" size={17}/></button>}
+        <button className="agent-project-trigger" disabled={!projects.length} onClick={()=>setSessionDialog(true)}>
         <span>{selectedProject?.name??'No Project'}</span><Icon name="down" size={11}/></button>
         <div className="agent-session-tabs" ref={sessionTabsRef} role="tablist" aria-label="Open chats">{visibleSessionTabs.map(sessionId=>{
           const summary=(sessions[selectedProjectId]??[]).find(item=>item.id===sessionId);const chat=chats[sessionId];const active=selectedSessionId===sessionId;
@@ -1540,17 +1575,27 @@ export default function AgentChat({hiddenToolbarButtons,onOpenSettings,open,proj
           {!selectedSessionId&&selectedProjectId&&<div ref={activeSessionTabRef} className="agent-session-tab active new"><button role="tab" aria-selected="true">New Chat</button>
             {!!sessionTabs.length&&<button className="agent-session-tab-close" title="Close Chat" aria-label="Close New Chat" onClick={closeNewChatTab}><Icon name="close" size={10}/></button>}</div>}
         </div>
+        <button className="agent-icon-button agent-new-chat" title="New Chat" disabled={!selectedProjectId||loading} onClick={startNewChat}><Icon name="newChat" size={15}/></button>
         <button ref={sessionMoreRef} className="agent-icon-button agent-session-more" title="Open Chats" aria-label="Open chats" aria-haspopup="listbox" aria-expanded={sessionMenuOpen}
           disabled={!projectsWithChats.length} onClick={()=>setSessionMenuOpen(value=>!value)}><Icon name="more" size={15}/></button>
-        <button className="agent-icon-button agent-new-chat" title="New Chat" disabled={!selectedProjectId||loading} onClick={startNewChat}><Icon name="add" size={15}/></button></header>
-      <div className="agent-chat-content" ref={chatContentRef}>
-        <nav className="agent-run-rail" aria-label="Runs"><div><div className="agent-run-markers">{runs.map((run,index)=><button key={run.key}
+        {!detachedWindow&&onToggleWindow&&<button className="agent-icon-button" title="Separate Chat window" aria-label="Separate Chat window"
+          onClick={onToggleWindow}><Icon name="panelSeparate" size={15}/></button>}</header>
+      <div className="agent-chat-layout">
+      {sessionSidebar.visible&&<ChatSessionSidebar key={selectedProjectId} project={selectedProject} sessions={historySessions} selectedSessionId={selectedSessionId}
+        getTone={session=>sessionTone(chats[session.id]?.status??session.status,doneSessionIds.has(session.id),questions[session.id]!==undefined?questions[session.id].length>0:session.question)}
+        onOpen={session=>void openSession(session)}
+        onRename={session=>setRenameTarget({projectId:session.projectId,sessionId:session.id,name:session.name})}
+        onDelete={deleteSession} onClone={cloneSession} onExport={exportSession}/>}
+      <div className="agent-chat-conversation">
+      <div className="agent-chat-main">
+      <div className="agent-chat-content">
+        <nav className="agent-run-rail" aria-label="Runs" ref={runRailRef}><div><div className="agent-run-markers">{runs.map((run,index)=><button key={run.key}
           className={run.key===activeRunKey?'active':''} aria-label={`Go to run ${index+1}`}
           onMouseEnter={event=>showRunPreview(event,run.key)} onMouseLeave={()=>setPreviewRunKey('')}
           onFocus={event=>showRunPreview(event,run.key)} onBlur={()=>setPreviewRunKey('')} onClick={()=>{const element=runRefs.current.get(run.key);if(element&&bodyRef.current)bodyRef.current.scrollTo({top:Math.max(0,element.offsetTop-12),behavior:'smooth'});}}/>)}
           <button className="agent-run-tree" disabled={!current} title="Session Tree" aria-label="Open session tree" onClick={()=>setTreeDialog(true)}><Icon name="tree" size={13}/></button></div></div></nav>
         {previewRun&&<aside className="agent-run-preview" style={{top:previewTop}}><strong>{previewRun.user||'Run'}</strong><p>{finalAnswer(previewRun)||'Pi is still working…'}</p></aside>}
-        <div className="agent-chat-body" ref={bodyRef}>{!projects.length?<div className="agent-welcome"><strong>Open a folder to start</strong></div>
+        <div className="agent-chat-body" data-panel-scroll ref={bodyRef}>{!projects.length?<div className="agent-welcome"><strong>Open a folder to start</strong></div>
         :!current?null
         :<>{archivedSource?.sessionId===current.sessionId&&<section className="agent-archived-source" tabIndex={-1} ref={archivedSourceRef}>
           <header><strong>Source from another branch</strong><button className="agent-icon-button" title="Close Source" aria-label="Close Source" onClick={()=>setArchivedSource(null)}><Icon name="close" size={12}/></button></header>
@@ -1570,7 +1615,7 @@ export default function AgentChat({hiddenToolbarButtons,onOpenSettings,open,proj
             return <button type="button" title={title} aria-label={title} onClick={()=>onShowPins(source,hide)}><Icon name={hide?'hide':'pin'} size={14}/></button>;
           };
           const renderItem=(part:RunItem)=>{
-            if(part.summary)return <SummaryCard key={part.summary.id} operation={part.summary} now={summaryWaiting?retryClock:Date.now()} onOpenJson={openSummaryJson} onToggle={()=>requestAnimationFrame(updateRunRail)}/>;
+            if(part.summary)return <SummaryCard key={part.summary.id} operation={part.summary} now={summaryWaiting?retryClock:Date.now()} onOpenJson={openSummaryJson} onToggle={()=>panelWindow.requestAnimationFrame(updateRunRail)}/>;
             if(part.type==='answer'){
               const partKey=`${current.sessionId}:${part.pinSource?.messageId??part.key}`;
               const partSource=sourceMessageKeys.has(partKey);
@@ -1588,19 +1633,19 @@ export default function AgentChat({hiddenToolbarButtons,onOpenSettings,open,proj
                   </div>}
               </div>;
             }
-            if(part.type==='thinking')return <details className="agent-thinking" key={part.key} open={part.streaming||undefined} onToggle={()=>requestAnimationFrame(updateRunRail)}><summary title="Toggle thought process"><Icon name="thought" size={16}/><span>Thought process</span></summary><div>{part.text}</div></details>;
-            if(part.type==='fallback')return <details className="agent-unknown-message" key={part.key} onToggle={()=>requestAnimationFrame(updateRunRail)}><summary><span>Unsupported message</span><code>{part.label}</code>
+            if(part.type==='thinking')return <details className="agent-thinking" key={part.key} open={part.streaming||undefined} onToggle={()=>panelWindow.requestAnimationFrame(updateRunRail)}><summary title="Toggle thought process"><Icon name="thought" size={16}/><span>Thought process</span></summary><div>{part.text}</div></details>;
+            if(part.type==='fallback')return <details className="agent-unknown-message" key={part.key} onToggle={()=>panelWindow.requestAnimationFrame(updateRunRail)}><summary><span>Unsupported message</span><code>{part.label}</code>
               <small>{part.text||'Raw message data is available.'}</small></summary><pre>{messageJson(part.raw)}</pre></details>;
             if(part.type==='bash'&&part.bash){
               const latest=runs.at(-1);
               const laterUserMessage=run!==latest||(part.bash.startedAt>0&&(latest?.userTimestamp??0)>part.bash.startedAt);
-              return <BashCard bash={part.bash} key={part.key} laterUserMessage={laterUserMessage} onAbort={part.bash.status==='running'?()=>void abortBash():undefined} onToggle={()=>requestAnimationFrame(updateRunRail)}/>;
+              return <BashCard bash={part.bash} key={part.key} laterUserMessage={laterUserMessage} onAbort={part.bash.status==='running'?()=>void abortBash():undefined} onToggle={()=>panelWindow.requestAnimationFrame(updateRunRail)}/>;
             }
-            if(part.type==='custom'||part.type==='branchSummary'||part.type==='compactionSummary')return <TimelineSummaryCard item={part} key={part.key} onToggle={()=>requestAnimationFrame(updateRunRail)}/>;
-            if(part.tool)return <ToolCard key={part.key} tool={part.tool} now={toolClock} onOpenDetail={()=>onOpenToolDetail(toolDetail(current,part.tool!,toolClock))} onToggle={()=>requestAnimationFrame(updateRunRail)}/>;
+            if(part.type==='custom'||part.type==='branchSummary'||part.type==='compactionSummary')return <TimelineSummaryCard item={part} key={part.key} onToggle={()=>panelWindow.requestAnimationFrame(updateRunRail)}/>;
+            if(part.tool)return <ToolCard key={part.key} tool={part.tool} now={toolClock} onOpenDetail={()=>onOpenToolDetail(toolDetail(current,part.tool!,toolClock))} onToggle={()=>panelWindow.requestAnimationFrame(updateRunRail)}/>;
             return null;
           };
-          return <section className="agent-run" key={run.key} ref={element=>{if(element)runRefs.current.set(run.key,element);else runRefs.current.delete(run.key);}}>
+          return <section className="agent-run" data-panel-anchor key={run.key} ref={element=>{if(element)runRefs.current.set(run.key,element);else runRefs.current.delete(run.key);}}>
           {run.user&&<article className="agent-message user"><CitationBubble text={run.user} selections={run.selections} epoch={`${current.sessionId}:${runs.at(-1)?.key}:${runs.at(-1)?.userTimestamp}`} onGoto={target=>onGoto(selectedProjectId,target)} onCopy={text=>void copyMessage(messageKey+'-citation',text)}/>
             <footer className="agent-user-meta">{run.userTimestamp!==undefined&&<time dateTime={new Date(run.userTimestamp).toISOString()} title={formatFullTime(run.userTimestamp)}>{formatTime(run.userTimestamp)}</time>}
               <button type="button" title={copiedMessageKey===messageKey+'-user'?'Copied':'Copy'} aria-label="Copy user message" onClick={()=>void copyMessage(messageKey+'-user',run.user)}>
@@ -1715,6 +1760,7 @@ export default function AgentChat({hiddenToolbarButtons,onOpenSettings,open,proj
           {current?.status==='running'||current?.status==='stopping'?<button className="agent-send stop" onClick={()=>void stop()}>{abortArmed?'Abort ?':<><Icon name="stop" size={14}/>Stop</>}</button>
             :<button className="agent-send" disabled={!selectedProjectId||!draft.trim()||(!draftBash&&!draftBuiltin&&((!selectedModel&&!draftExtension)||dirty))||!!current?.bash} onClick={submitInput}><Icon name="send" size={14}/>Send</button>}</footer>
       </div>
+      </div>
       {selectedProjectId&&<div className="agent-session-meta"><span className="agent-project-path" title={current?.cwd??runtimeCwd}>{current?.cwd??(runtimeCwd||'Checking…')}</span>
         <div className="agent-context-control" ref={contextRef}><button className="agent-context-summary" aria-haspopup="dialog" aria-expanded={contextOpen} onClick={()=>setContextOpen(value=>!value)}>{formatContextPercent(usage.contextPercent)}</button>
           {contextOpen&&<section className="agent-context-popover" role="dialog" aria-label="Context usage"><header><strong>Context</strong><span>{(current?.isCompacting||contextOperation==='compact')&&'Compacting…'}</span>
@@ -1736,10 +1782,9 @@ export default function AgentChat({hiddenToolbarButtons,onOpenSettings,open,proj
           </dl></section>}</div>
       </div>}
 
-      {renameTarget&&<RenameSessionDialog key={renameTarget.sessionId} name={renameTarget.name} onClose={()=>{setRenameTarget(null);focusComposer(draftRef.current.length);}} onSave={async name=>{
-        await window.revu.agent.renameSession(renameTarget.projectId,renameTarget.sessionId,name).then(unwrap);
-        setChats(state=>({...state,[renameTarget.sessionId]:{...state[renameTarget.sessionId],name}}));await reloadSessions(renameTarget.projectId);
-      }}/>}
+      </div></div>
+      {renameTarget&&<RenameSessionDialog key={renameTarget.sessionId} name={renameTarget.name} onClose={()=>{setRenameTarget(null);focusComposer(draftRef.current.length);}}
+        onSave={name=>renameSession(renameTarget.projectId,renameTarget.sessionId,name)}/>}
       {sessionInfoOpen&&<div className="agent-chat-modal-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)setSessionInfoOpen(false);}}>
         <section className="agent-chat-modal session-info-dialog" role="dialog" aria-modal="true" aria-label="Session Info">
           <header><strong>Session Info</strong><button className="agent-icon-button" onClick={()=>setSessionInfoOpen(false)} aria-label="Close"><Icon name="close" size={14}/></button></header>
@@ -1786,7 +1831,7 @@ export default function AgentChat({hiddenToolbarButtons,onOpenSettings,open,proj
         </section>
       </div>}
     </aside>
-    {sessionMenuOpen&&projectsWithChats.length>0&&createPortal(<div ref={sessionMoreMenuRef} style={sessionMenuStyle} className="agent-session-more-menu" role="listbox" aria-label="Open chats">
+    {sessionMenuOpen&&projectsWithChats.length>0&&createPortal(<div ref={sessionMoreMenuRef} style={sessionMenuStyle} data-app-scrollbars className="agent-session-more-menu" role="listbox" aria-label="Open chats">
       {projectsWithChats.map(project=>{
         const grouped=projectsWithChats.length>1;
         return <div key={project.id} role={grouped?'group':undefined} aria-label={grouped?project.name:undefined}>
@@ -1803,25 +1848,21 @@ export default function AgentChat({hiddenToolbarButtons,onOpenSettings,open,proj
           })}
         </div>;
       })}
-    </div>,document.body)}
-    {statsRun&&createPortal(<aside ref={statsMenuRef} style={statsMenuStyle} className="agent-run-stats-popover" role="dialog" aria-label="Run details"><RunStatsDetails run={statsRun}/></aside>,document.body)}
-    {modelMenu&&createPortal(<div ref={modelMenuRef} style={modelMenuStyle} className="agent-model-menu combined" role="dialog" aria-label="Model and thinking">
+    </div>,panelDocument.body)}
+    {statsRun&&createPortal(<aside ref={statsMenuRef} style={statsMenuStyle} data-app-scrollbars className="agent-run-stats-popover" role="dialog" aria-label="Run details"><RunStatsDetails run={statsRun}/></aside>,panelDocument.body)}
+    {modelMenu&&createPortal(<div ref={modelMenuRef} style={modelMenuStyle} data-app-scrollbars className="agent-model-menu combined" role="dialog" aria-label="Model and thinking">
       <div className="agent-model-picker"><div className="agent-model-list">{groupedModels.map(group=><section key={group.label}><strong>{group.label}</strong>
         {group.options.map(option=>{const [provider,id]=option.value.split('\u0000');const selected=selectedModel?.provider===provider&&selectedModel.id===id;return <button className={selected?'selected':''}
           key={option.value} onClick={()=>{const model=models.find(item=>item.provider===provider&&item.id===id);if(model)void setModel(model);}}><span>{option.label}</span>{selected&&<Icon name="check" size={11}/>}</button>;})}</section>)}</div>
         {selectedModel&&<div className="agent-thinking-list"><strong>Thinking</strong>{thinkingOptions.map(option=><button className={option.value===selectedThinking?'selected':''} key={option.value}
           onClick={()=>void setThinking(option.value as PiThinkingLevel).then(()=>setModelMenu(false))}>{option.label}{option.value===selectedThinking&&<Icon name="check" size={11}/>}</button>)}</div>}</div>
       <button className="configure-models" onClick={()=>{setModelMenu(false);setModelDialog(true);}}><Icon name="settings" size={13}/>Configure Models</button>
-    </div>,document.body)}
+    </div>,panelDocument.body)}
     {sessionDialog&&selectedProjectId&&<SessionDialog projects={projects} projectId={selectedProjectId} selectedSessionId={selectedSessionId}
       sessions={sessions[selectedProjectId]??[]} doneSessionIds={doneSessionIds} notify={notify}
       onProject={id=>{chatNavigation.current++;setLoading(false);setSelectedProjectId(id);setSelectedSessionId(null);setNewChatModel(undefined);prepareDraft(id);}} onOpen={session=>void openCatalogSession(session)} onNew={startNewChat}
-      onRename={(session,name)=>void window.revu.agent.renameSession(session.projectId,session.id,name,session.scope).then(unwrap).then(()=>{setChats(current=>{
-        const chat=current[session.id];return chat?{...current,[session.id]:{...chat,name}}:current;});return reloadSessions(session.projectId);}).catch(error=>notify('error',errorMessage(error)))}
-      onDelete={session=>{if(window.confirm(`Delete “${session.name}”? The session will be moved to the Recycle Bin.`))void window.revu.agent.deleteSession(session.projectId,session.id,session.scope).then(unwrap).then(()=>{
-        setChats(current=>{const next={...current};delete next[session.id];return next;});setOpenSessionIds(current=>({...current,[session.projectId]:(current[session.projectId]??[]).filter(id=>id!==session.id)}));
-        if(selectedSessionId===session.id)startNewChat();return reloadSessions(session.projectId);
-      }).catch(error=>notify('error',errorMessage(error)));}} onClone={session=>void cloneSession(session)} onExport={session=>void exportSession(session)}
+      onRename={(session,name)=>void renameSession(session.projectId,session.id,name,session.scope).catch(error=>notify('error',errorMessage(error)))}
+      onDelete={deleteSession} onClone={cloneSession} onExport={exportSession}
       onFolderChanged={()=>void reloadSessions(selectedProjectId)} onClose={()=>setSessionDialog(false)}/>}
       {forkTarget&&<ForkDialog key={forkTarget.sessionId} {...forkTarget} onClose={()=>{setForkTarget(null);focusComposer(draftRef.current.length);}} onFork={async entryId=>{
         const response=await window.revu.agent.forkSession(forkTarget.projectId,forkTarget.sessionId,entryId).then(unwrap);
@@ -1834,7 +1875,7 @@ export default function AgentChat({hiddenToolbarButtons,onOpenSettings,open,proj
     {!!trustDialogs.length&&<ProjectTrustDialog key={trustDialogs[0].id??`${trustDialogs[0].projectId}:${trustDialogs[0].sessionId}`} trust={trustDialogs[0].trust} onSave={saveTrust} onClose={()=>void closeTrust()}/>}
     {modelDialog&&selectedProjectId&&<ModelDialog projectId={selectedProjectId} sessionId={selectedSessionId??undefined} onClose={()=>setModelDialog(false)}
       onChanged={()=>{if(!selectedSessionId)void loadNewChatDefaults(selectedProjectId);}} notify={notify}/>} 
-  </CitationPreviews>;
+  </CitationPreviews></ScrollbarScope></PanelPortal>;
 }
 
 function errorMessage(error:unknown){return error instanceof Error?error.message:String(error);}
