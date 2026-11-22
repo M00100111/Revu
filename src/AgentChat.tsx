@@ -1459,10 +1459,25 @@ export default function AgentChat({detachedWindow,onToggleWindow,hiddenToolbarBu
     setOpenSessionIds(current=>{const ids=current[projectId]??[];return ids.includes(snapshot.sessionId)?current:{...current,[projectId]:[...ids,snapshot.sessionId]};});
     savedDrafts.current.set(JSON.stringify([projectId,snapshot.sessionId]),{text:draftText,items:[]});setSelectedProjectId(projectId);setSelectedSessionId(snapshot.sessionId);setSessionDialog(false);await reloadSessions(projectId);
   };
-  const adoptTreeNavigation=async(response:PiTreeNavigationResponse)=>{
+  const refreshTreeBranch=async(response:PiTreeNavigationResponse)=>{
     const entries=await window.revu.agent.getEntries(response.snapshot.projectId,response.snapshot.sessionId).then(unwrap);
     setChats(current=>{const next={...current,[response.snapshot.sessionId]:withEntries(withSnapshot(response.snapshot,current[response.snapshot.sessionId]),entries)};chatsRef.current=next;return next;});
+  };
+  const adoptTreeNavigation=async(response:PiTreeNavigationResponse)=>{
+    await refreshTreeBranch(response);
     setDraft(response.editorText??'');setTreeDialog(false);await reloadSessions(response.snapshot.projectId);
+  };
+  const canRetryRun=(run:ChatRun)=>!!current&&!!run.userEntryId&&!!run.user.trim()&&!dirty&&['idle','error'].includes(current.status)&&!current.isCompacting&&current.bash?.status!=='running';
+  const retryRun=async(run:ChatRun)=>{
+    if(!current||!run.userEntryId||sending.current||!canRetryRun(run))return;
+    sending.current=true;
+    try{
+      const {projectId,sessionId}=current;
+      const response=await window.revu.agent.navigateSessionTree(projectId,sessionId,run.userEntryId,false).then(unwrap);
+      if(response.cancelled||response.aborted)return;
+      await refreshTreeBranch(response);
+      await window.revu.agent.prompt(projectId,sessionId,packInput(response.editorText??run.user,run.selections??[])).then(unwrap);
+    }catch(error){notify('error',errorMessage(error));}finally{sending.current=false;}
   };
   const forkRun=async(run:ChatRun)=>{
     if(!current||!run.userEntryId)return;
@@ -1662,8 +1677,7 @@ export default function AgentChat({detachedWindow,onToggleWindow,hiddenToolbarBu
                 <button type="button" disabled={!answerText} title={showSource?'Show Preview':'Show Source'} aria-label={showSource?'Show Markdown preview':'Show Markdown source'}
                   aria-pressed={showSource} onClick={()=>toggleMessageSource(messageKey)}><Icon name="format" size={14}/></button>
                 {pinButton(footerSource)}
-                <button type="button" disabled title="Retry · Coming soon" aria-label="Retry · Coming soon"><Icon name="retry" size={14}/></button>
-                <button type="button" disabled title="More · Coming soon" aria-label="More · Coming soon"><Icon name="more" size={14}/></button>
+                <button type="button" disabled={!canRetryRun(run)} title="Retry" aria-label="Retry" onClick={()=>void retryRun(run)}><Icon name="retry" size={14}/></button>
               </div>}<div className="agent-response-meta">{run.stopReason&&<span className={`agent-stop-reason ${run.stopReason}`}>{stopReasonLabel(run.stopReason)}</span>}
                 {showActions&&answerText&&<button ref={statsRunKey===run.key?statsButtonRef:undefined} type="button" className="agent-run-stats-button" title="View run details" aria-haspopup="dialog" aria-expanded={statsRunKey===run.key}
                   onClick={()=>setStatsRunKey(current=>current===run.key?'':run.key)}>{runStatsSummary(run)}</button>}</div></div>}{trailingItems.map(renderItem)}</div>}
