@@ -3,9 +3,11 @@ import { createPortal } from 'react-dom';
 import type { PanelWindow } from '../shared/panelWindows';
 import Icon from './Icon';
 
-export default function PanelWindowControls({panel,targetWindow}:{panel:PanelWindow;targetWindow:Window}){
+export function usePanelMaximized(panel:PanelWindow,targetWindow?:Window|null){
   const [maximized,setMaximized]=useState(false);
   useEffect(()=>{
+    setMaximized(false);
+    if(!targetWindow)return;
     let pending=true;
     const unsubscribe=window.revu.panels.onMaximized((changed,value)=>{
       if(changed===panel){pending=false;setMaximized(value);}
@@ -13,6 +15,10 @@ export default function PanelWindowControls({panel,targetWindow}:{panel:PanelWin
     void window.revu.panels.control(panel,'isMaximized').then(value=>{if(pending)setMaximized(value);});
     return ()=>{pending=false;unsubscribe();};
   },[panel,targetWindow]);
+  return maximized;
+}
+
+export default function PanelWindowControls({panel,targetWindow,maximized}:{panel:PanelWindow;targetWindow:Window;maximized:boolean}){
   const maximizeLabel=maximized?'Restore':'Maximize';
   return createPortal(<div className="window-controls panel-window-controls" aria-label="Window controls">
     <button title="Minimize" aria-label="Minimize" onClick={()=>void window.revu.panels.control(panel,'minimize')}>

@@ -46,6 +46,9 @@ button, input, label, .tab-bar, .project-bar, .tab, .project-tab, .project-dropd
 .brand { height: 64px; display: grid; place-items: center; font-family: Georgia, serif; font-size: 29px; font-weight: bold; letter-spacing: -3px; padding-right: 4px; user-select: none; }
 .activity-button { display: grid; place-items: center; width: 52px; height: 48px; color: var(--muted); position: relative; }
 .activity-button:hover, .activity-button.selected { color: var(--text); }
+.project-bar, .project-tabs, .tab-bar.under-window-controls, .tab-bar.under-window-controls .tabs { -webkit-app-region: drag; }
+:root[data-theme="light"] .activity-button.selected::before,
+:root[data-theme="light"] .tab.active::before { background: #9A9A9A; }
 .activity-button.selected::before { content: ''; position: absolute; left: 0; top: 12px; bottom: 12px; width: 2px; background: var(--text); }
 .activity-footer { margin-top: auto; padding-bottom: 12px; }
 .notification-badge { position: absolute; top: 5px; right: 6px; min-width: 15px; height: 15px; padding: 0 4px; display: grid; place-items: center; border-radius: 8px; background: #b6454d; color: #fff; font-size: 8px; line-height: 1; }
@@ -117,7 +120,7 @@ kbd { font: inherit; border: 1px solid var(--border); border-radius: 3px; paddin
 .project-tab { display: flex; align-items: center; gap: 8px; flex-shrink: 0; max-width: 240px; padding: 0 17px; border-right: 1px solid var(--border); color: var(--muted); font-size: 12px; }
 .project-tab > span:not(.dirty-dot) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-tab .dirty-dot { flex-shrink: 0; }
-.project-tab.active { color: var(--text); background: var(--active); }
+.project-tab.active { color: var(--text); background: color-mix(in srgb, var(--panel) 55%, var(--active)); }
 .project-tab:hover { background: var(--hover); color: var(--text); }
 .tab-project { color: var(--muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-tree { margin-bottom: 4px; }

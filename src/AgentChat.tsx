@@ -675,8 +675,8 @@ function ModelDialog({projectId,sessionId,onClose,onChanged,notify}:{projectId:s
   </div>;
 }
 
-export default function AgentChat({detachedWindow,onToggleWindow,hiddenToolbarButtons,onOpenSettings,open,projects,activeProjectId,dirtyProjectIds,width,onResize,onResizeEnd,notify,navigationRequest,onNotice,onProjectAdded,onOpenToolDetail,onUpdateToolDetail,onPinSession,onShowPins,onOpenCode,visiblePinSource,citeRequest,onGoto,tokenizeSnapshot}:{
-  detachedWindow?:Window|null;onToggleWindow?:()=>void;
+export default function AgentChat({detachedWindow,maximized,onToggleWindow,hiddenToolbarButtons,onOpenSettings,open,projects,activeProjectId,dirtyProjectIds,width,onResize,onResizeEnd,notify,navigationRequest,onNotice,onProjectAdded,onOpenToolDetail,onUpdateToolDetail,onPinSession,onShowPins,onOpenCode,visiblePinSource,citeRequest,onGoto,tokenizeSnapshot}:{
+  detachedWindow?:Window|null;maximized?:boolean;onToggleWindow?:()=>void;
   hiddenToolbarButtons:ReadonlySet<ChatToolbarButton>;
   tokenizeSnapshot?:SnapshotTokenizer;
   citeRequest?:CiteRequest;onGoto:(projectId:string,target:CiteTarget)=>void;
@@ -1008,11 +1008,12 @@ export default function AgentChat({detachedWindow,onToggleWindow,hiddenToolbarBu
     if(!sessionMenuOpen||!trigger)return;
     const rect=trigger.getBoundingClientRect();
     const panel=trigger.closest('.agent-chat')!.getBoundingClientRect();
-    const right=Math.min(rect.right,panel.right-16);
-    const menuWidth=Math.max(0,Math.min(360,right-panel.left-16));
-    setSessionMenuStyle({width:menuWidth,left:right-menuWidth,top:rect.bottom+5,
+    const anchored=detachedWindow&&maximized;
+    const right=anchored?rect.right:panel.right-12;
+    const left=anchored?panelWindow.innerWidth/2:panel.left+12;
+    setSessionMenuStyle({width:Math.max(0,right-left),left,top:rect.bottom+5,
       maxHeight:Math.max(120,panel.bottom-rect.bottom-13)});
-  },[sessionMenuOpen,selectedProjectId,sessionTabs.length,width,panelWindow,viewport]);
+  },[sessionMenuOpen,selectedProjectId,sessionTabs.length,width,panelWindow,viewport,detachedWindow,maximized]);
   useEffect(()=>{if(!sessionMenuOpen)return;const outside=(event:PointerEvent|FocusEvent)=>{const target=event.target as Node;if(!sessionMoreRef.current?.contains(target)&&!sessionMoreMenuRef.current?.contains(target))setSessionMenuOpen(false);};
     const escape=(event:KeyboardEvent)=>{if(event.key==='Escape')setSessionMenuOpen(false);};panelDocument.addEventListener('pointerdown',outside);panelDocument.addEventListener('focusin',outside);panelDocument.addEventListener('keydown',escape);
     return()=>{panelDocument.removeEventListener('pointerdown',outside);panelDocument.removeEventListener('focusin',outside);panelDocument.removeEventListener('keydown',escape);};},[sessionMenuOpen,panelDocument]);

@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import type { EditorTabItem } from './TabBar';
 import { api, errorMessage } from './files';
 import type { OpenFile, Project } from './editor';
 import FileTree from './FileTree';
+import {useFileTreeReveal} from './useFileTreeReveal';
 import Icon from './Icon';
 import ResizeHandle from './ResizeHandle';
 import ScrollbarScope from './ScrollbarScope';
@@ -22,7 +23,7 @@ const savedOrder=()=>{
 export default function FileSidebar({width,projects,projectsLoaded,tabs,activeId,activeFile,mixed,picking,collapsedProjects,
   expandedDirectories,onResize,onAddFolder,onSelectTab,onKeep,onOpenFile,onCloseProject,onExpandAllSubfolders,onCollapseAllSubfolders,
   onProjectToggle,onDirectoryToggle,onError,onCite,target}:{
-  onCite:(request:CiteRequest)=>void;target?:{projectId:string;path:string;token:number};
+  onCite:(request:CiteRequest)=>void;target?:{projectId:string|null;path:string;token:number;fromEditor?:boolean};
   width:number;projects:Project[];projectsLoaded:boolean;tabs:SidebarEditorTab[];activeId:string|null;activeFile?:OpenFile;mixed:boolean;picking:boolean;
   collapsedProjects:ReadonlySet<string>;expandedDirectories:ReadonlySet<string>;
   onResize:(width:number)=>void;onAddFolder:(root?:string)=>void;onSelectTab:(tab:EditorTabItem)=>void;onKeep:(id:string)=>void;
@@ -31,7 +32,7 @@ export default function FileSidebar({width,projects,projectsLoaded,tabs,activeId
   onProjectToggle:(root:string,open:boolean)=>void;onDirectoryToggle:(key:string)=>void;onError:(message:string)=>void;
 }){
   const rootsKey=projects.map(project=>project.root).join('\0');
-  const revealRoot=useCallback((node:HTMLElement|null)=>node?.scrollIntoView({block:'nearest'}),[target?.token]);
+  const revealRoot=useFileTreeReveal(target);
   const [historyOpen,setHistoryOpen]=useState(false);
   const [recent,setRecent]=useState<string[]>([]);
   const historyRef=useRef<HTMLDivElement>(null);
@@ -107,7 +108,7 @@ export default function FileSidebar({width,projects,projectsLoaded,tabs,activeId
   const openEditors=<details key={OPEN_EDITORS_KEY} className={dragClass(OPEN_EDITORS_KEY)} open={!openEditorsCollapsed}
     onToggle={event=>setOpenEditorsCollapsed(!event.currentTarget.open)}
     >
-    <summary className="workspace-name" draggable onDragStart={event=>beginDrag(event,OPEN_EDITORS_KEY)}
+    <summary className="workspace-name" ref={target?.projectId===null?revealRoot:undefined} draggable onDragStart={event=>beginDrag(event,OPEN_EDITORS_KEY)}
       onDragOver={event=>dragOver(event,OPEN_EDITORS_KEY)} onDrop={event=>finishDrop(event,OPEN_EDITORS_KEY)}
       onDragEnd={()=>{setDragged(null);setDrop(null);}}>
       <Icon name="down" size={12}/><Icon name="file" size={15}/><span>Open Editors</span>

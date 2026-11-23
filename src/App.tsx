@@ -14,7 +14,7 @@ import ReviewDashboard from './ReviewDashboard';
 import ReadonlyEditor from './ReadonlyEditor';
 import SettingsPage, { SettingsSidebar, type ReviewFileLabels, type SettingsCategory } from './SettingsPage';
 import WindowControls from './WindowControls';
-import PanelWindowControls from './PanelWindowControls';
+import PanelWindowControls, {usePanelMaximized} from './PanelWindowControls';
 import {usePanelWindows} from './usePanelWindows';
 import type {PanelWindow} from '../shared/panelWindows';
 import {useChatToolbarSettings} from './ChatToolbarSettings';
@@ -92,7 +92,9 @@ export default function App(){
   const [picking,setPicking]=useState(false);
   const [reveal,setReveal]=useState<{id:string;line:number;lastLine?:number;href?:string;pinId?:string}|null>(null);
   const [citeRequest,setCiteRequest]=useState<CiteRequest>();
-  const [treeTarget,setTreeTarget]=useState<{projectId:string;path:string;token:number}>();
+  const [revealEditorSelection,setRevealEditorSelection]=useState(()=>localStorage.getItem('revu-reveal-editor-selection')==='true');
+  useEffect(()=>localStorage.setItem('revu-reveal-editor-selection',String(revealEditorSelection)),[revealEditorSelection]);
+  const [treeTarget,setTreeTarget]=useState<{projectId:string|null;path:string;token:number;fromEditor?:boolean}>();
   const [reviewFilter,setReviewFilter]=useState('all');
   const [reviewSelected,setReviewSelected]=useState('');
   const [reviewReveal,setReviewReveal]=useState<{fileId:string;itemId:string;token:number}|null>(null);
@@ -121,6 +123,8 @@ export default function App(){
     if(name==='review')setPanel('review');else setAgentOpen(true);
   },[]);
   const {windows,isDetached,focus:focusWindow,toggle:toggleWindow,dockAll}=usePanelWindows(onDetach,onDock,notifyError);
+  const chatMaximized=usePanelMaximized('chat',windows.chat);
+  const reviewMaximized=usePanelMaximized('review',windows.review);
   const reviewVisible=panel==='review'||!!windows.review;
   const showChat=useCallback(()=>{
     setAgentOpen(true);
@@ -311,9 +315,10 @@ export default function App(){
     const document=toolDocuments.find(item=>item.id===lastToolDocument.current)??toolDocuments[0];
     if(document)selectToolDocument(document);
   }
-  function selectEditorTab(tab:EditorTabItem){
+  function selectEditorTab(tab:EditorTabItem,fromEditor=false){
     const item=editorTabs.find(candidate=>candidate.id===tab.id);if(!item)return;
     if(item.kind==='file')selectFile(item.file);else selectToolDocument(item.toolDocument);
+    if(fromEditor)revealEditorTarget(item.kind==='file'?item.file.project:undefined,item.kind==='file'?item.file.path:'');
   }
   function toggleDirectory(key:string){
     setExpandedDirectories(current=>{
@@ -404,6 +409,21 @@ export default function App(){
     }
     setReveal({id:file.id,line:pin.line,pinId:pin.id});
   }
+  function revealEditorTarget(project?:Project,path=''){
+    if(!revealEditorSelection||panel!=='files')return;
+    if(project&&path)expandTreePath(project,path);
+    setTreeTarget({projectId:project?.id??null,path,token:performance.now(),fromEditor:true});
+  }
+  function expandTreePath(project:Project,path:string,directory=false){
+    toggleProject(project.root,true);
+    const parts=path.split('/').filter(Boolean);
+    const folders=directory?parts:parts.slice(0,-1);
+    if(folders.length)setExpandedDirectories(current=>{
+      const next=new Set(current);
+      for(let i=1;i<=folders.length;i++)next.add(project.root+'\n'+folders.slice(0,i).join('/'));
+      return next;
+    });
+  }
   async function gotoReference(projectId:string,target:CiteTarget){
     const chat=projects.find(item=>item.id===projectId);if(!chat)return;
     const located=locateCitation(target.path,chat,projects),project=located.project;
@@ -412,8 +432,7 @@ export default function App(){
       focusWindow('main');
       const path=located.path.replace(/\/$/,'').replace(/^\.$/,'');
       await api('checkCitation',{projectId:project.id,path,directory:!!target.directory});
-      setPanel('files');toggleProject(project.root,true);
-      if(path)setExpandedDirectories(current=>{const next=new Set(current);const parts=path.split('/');for(let count=1;count<parts.length+(target.directory?1:0);count++)next.add(project.root+'\n'+parts.slice(0,count).join('/'));return next;});
+      setPanel('files');expandTreePath(project,path,target.directory);
       setTreeTarget({projectId:project.id,path,token:performance.now()});
       if(target.directory){selectProject(project.id);return;}
       const file=await workspace.load(project,path);if(file.model.isDisposed())return;showFile(file,'preview');if(target.line)setReveal({id:file.id,line:target.line,lastLine:target.lastLine??target.line});
@@ -545,8 +564,8 @@ export default function App(){
     <WindowControls onSave={()=>{if(activeFile)void workspace.save(activeFile);}}
       saveDisabled={!activeFile||!activeFile.dirty||!!(activeFile.saving||activeFile.syncing||activeFile.reason)}
       saving={!!activeFile?.saving}/>
-    {windows.review&&<PanelWindowControls panel="review" targetWindow={windows.review}/>}
-    {windows.chat&&<PanelWindowControls panel="chat" targetWindow={windows.chat}/>}
+    {windows.review&&<PanelWindowControls panel="review" maximized={reviewMaximized} targetWindow={windows.review}/>}
+    {windows.chat&&<PanelWindowControls panel="chat" maximized={chatMaximized} targetWindow={windows.chat}/>}
     <Sidebar panel={panel} setPanel={setPanel} dark={dark} toggleTheme={()=>setDark(!dark)}
       showThemeSwitcher={showThemeSwitcher}
       showDock={showDockButton&&!!(windows.review||windows.chat)} onDockAll={dockAll}
@@ -584,7 +603,7 @@ export default function App(){
       chunkWidth={reviewChunkWidth} onChunkResize={setReviewChunkWidth} fileLabels={reviewFileLabels}/>}
     {panel==='settings'&&<SettingsSidebar width={sidebarWidth} onResize={resizeSidebar}
       category={settingsCategory} onCategoryChange={setSettingsCategory}/>}
-    {panel==='settings'?<SettingsPage chatToolbar={chatToolbar} category={settingsCategory} syncWidths={syncWidths} onChange={changeWidthSync}
+    {panel==='settings'?<SettingsPage revealEditorSelection={revealEditorSelection} onRevealEditorSelectionChange={setRevealEditorSelection} chatToolbar={chatToolbar} category={settingsCategory} syncWidths={syncWidths} onChange={changeWidthSync}
       mixed={mixed} onModeChange={setMixed} hideSingleProjectTabs={hideSingleProjectTabs}
       onHideSingleProjectTabsChange={setHideSingleProjectTabs} fontSize={fontSize}
       previewMode={previewMode} onPreviewModeChange={setPreviewMode}
@@ -603,15 +622,15 @@ export default function App(){
       {(projects.length>0||toolDocuments.length>0)&&<>
         {showProjectBar&&<div className="project-bar"><div className="project-tabs" aria-label="Project tabs">
           {projects.map(project=><button key={project.id} className={'project-tab '+(!otherSelected&&project.id===projectId?'active':'')}
-            aria-pressed={!otherSelected&&project.id===projectId} onClick={()=>selectProject(project.id)} onContextMenu={event=>void projectMenu(event,project)}>
+            aria-pressed={!otherSelected&&project.id===projectId} onClick={()=>{selectProject(project.id);revealEditorTarget(project);}} onContextMenu={event=>void projectMenu(event,project)}>
             <Icon name="projectFolder" size={14}/><span>{project.name}</span>
             {documents.some(file=>file.project.id===project.id&&file.dirty)&&<span className="dirty-dot"/>}
           </button>)}
-          {!!toolDocuments.length&&<button className={'project-tab '+(otherSelected?'active':'')} aria-pressed={otherSelected} onClick={selectOther} onContextMenu={event=>void projectMenu(event)}>
+          {!!toolDocuments.length&&<button className={'project-tab '+(otherSelected?'active':'')} aria-pressed={otherSelected} onClick={()=>{selectOther();revealEditorTarget();}} onContextMenu={event=>void projectMenu(event)}>
             <Icon name="projectFolder" size={14}/><span>Other</span>
           </button>}
         </div></div>}
-        <TabBar tabs={visibleEditorTabs} activeId={activeId} onSelect={selectEditorTab} onClose={closeEditorTab}
+        <TabBar tabs={visibleEditorTabs} activeId={activeId} onSelect={tab=>selectEditorTab(tab,true)} onClose={closeEditorTab}
           onContextAction={tabContext} onKeep={keepTab}
           mixed={mixed} overflowMode={fileTabOverflow} expansion={fileTabExpansion}
           onExpansionChange={setFileTabExpansion}
@@ -649,7 +668,7 @@ export default function App(){
       </div>}
     </main>
     </>}
-    <AgentChat detachedWindow={windows.chat} onToggleWindow={()=>toggleWindow('chat')}
+    <AgentChat maximized={chatMaximized} detachedWindow={windows.chat} onToggleWindow={()=>toggleWindow('chat')}
       hiddenToolbarButtons={chatToolbar.hidden} citeRequest={citeRequest} onGoto={gotoReference} tokenizeSnapshot={tokenizeSnapshot}
       onOpenSettings={()=>{setSettingsCategory('chat');setPanel('settings');focusWindow('main');}} open={agentOpen} projects={projects} activeProjectId={projectId}
       dirtyProjectIds={new Set(documents.filter(file=>file.dirty).map(file=>file.project.id))}

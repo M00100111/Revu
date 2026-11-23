@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import Icon from './Icon';
+import ScrollbarScope from './ScrollbarScope';
 
 export type NotificationLevel='info'|'success'|'warning'|'error';
 export interface NotificationAction {type:'open-agent-session';projectId:string;sessionId:string;runKey?:string;question?:boolean}
@@ -39,7 +40,7 @@ export default function NotificationCenter({notifications,open,onClose,onDismiss
           <Icon name="close" size={14}/>
         </button>
       </div></header>
-      <div className="notification-list">
+      <ScrollbarScope className="notification-list">
         {!notifications.length?<p className="notification-empty">No notifications</p>:notifications.map(notification=><article
           key={notification.id} className={'notification-item '+notification.level+(notification.read?' read':' unread')}>
           <button className="notification-item-body" onClick={()=>onActivate(notification.id)}>
@@ -50,7 +51,7 @@ export default function NotificationCenter({notifications,open,onClose,onDismiss
           <button className="icon-button notification-delete" title="Delete" aria-label="Delete notification"
             onClick={()=>onDelete(notification.id)}><Icon name="close" size={12}/></button>
         </article>)}
-      </div>
+      </ScrollbarScope>
     </section>}
     <div className="notification-toasts" aria-label="New notifications">
       {toasts.map(notification=><Toast key={notification.id} notification={notification} onClose={onDismissToast} onActivate={onActivate}/>) }

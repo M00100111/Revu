@@ -1,7 +1,8 @@
-import { useCallback,useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, errorMessage } from './files';
 import type { Entry } from '../shared/types';
 import Icon from './Icon';
+import {useFileTreeReveal} from './useFileTreeReveal';
 import { showContextMenu } from './ContextMenu';
 import type {CiteRequest} from '../shared/citations';
 type Props = {
@@ -10,12 +11,12 @@ type Props = {
   expandedDirectories: ReadonlySet<string>; onDirectoryToggle: (key: string) => void;
   onExpandAllSubfolders:(path:string)=>void;onCollapseAllSubfolders:(path:string)=>void;
   path?: string; depth?: number;
-  onCite:(request:CiteRequest)=>void;target?:{path:string;token:number};
+  onCite:(request:CiteRequest)=>void;target?:{path:string;token:number;fromEditor?:boolean};
 };
 export default function FileTree({ projectId, projectRoot, activePath, onOpen, onError, expandedDirectories, onDirectoryToggle,
   onExpandAllSubfolders, onCollapseAllSubfolders,onCite,target, path = '', depth = 0 }: Props) {
   const [entries,setEntries]=useState<Entry[]>([]);
-  const revealRow=useCallback((node:HTMLButtonElement|null)=>{node?.scrollIntoView({block:'nearest'});},[target?.token]);
+  const revealRow=useFileTreeReveal(target);
   const [status,setStatus]=useState('Loading…');
   useEffect(()=>{
     let live=true;
@@ -48,7 +49,7 @@ export default function FileTree({ projectId, projectRoot, activePath, onOpen, o
 function Directory(props:Props & {name:string;path:string;depth:number}){
   const key=props.projectRoot+'\n'+props.path;
   const expanded=props.expandedDirectories.has(key);
-  const revealRow=useCallback((node:HTMLButtonElement|null)=>{node?.scrollIntoView({block:'nearest'});},[props.target?.token]);
+  const revealRow=useFileTreeReveal(props.target);
   return <li><button className={'tree-row directory-row '+(props.target?.path===props.path?'active':'')} style={{paddingLeft:8+props.depth*14}}
     ref={props.target?.path===props.path?revealRow:undefined}
     aria-expanded={expanded} onClick={()=>props.onDirectoryToggle(key)} onContextMenu={async event=>{
