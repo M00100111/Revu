@@ -18,7 +18,6 @@ export interface ExternalReviewState {
   records: ReviewRecord[];
   computing: boolean;
   syncError?: string;
-  notice: string;
 }
 
 export interface ExternalReviewDraft { text:string; records:ReviewRecord[] }
@@ -74,7 +73,5 @@ export function resetForExternalSnapshot(state: ExternalReviewState, external: S
   state.records = review.records;
   state.computing = false;
   state.syncError = '';
-  state.notice = review.records.length
-    ? 'External changes loaded. Unchanged review decisions were kept.'
-    : 'External changes loaded. Review state was updated.';
+
 }

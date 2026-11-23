@@ -612,10 +612,10 @@ function ModelDialog({projectId,sessionId,onClose,onChanged,notify}:{projectId:s
   const removeKey=async()=>{setBusy(true);try{await window.revu.agent.removeApiKey(selectedProvider).then(unwrap);await load();onChanged();}catch(error){notify('error',error instanceof Error?error.message:String(error));}finally{setBusy(false);}};
   const saveDefaults=async()=>{
     if(!defaults.provider||!defaults.modelId)return;setBusy(true);
-    try{await window.revu.agent.saveModelDefaults(defaults.provider,defaults.modelId,defaults.thinkingLevel).then(unwrap);onChanged();notify('info','Model defaults saved.');onClose();}
+    try{await window.revu.agent.saveModelDefaults(defaults.provider,defaults.modelId,defaults.thinkingLevel).then(unwrap);onChanged();onClose();}
     catch(error){notify('error',error instanceof Error?error.message:String(error));}finally{setBusy(false);}
   };
-  const saveCompaction=async()=>{setBusy(true);try{await window.revu.agent.saveCompactionConfiguration(compaction).then(unwrap);setSavedCompaction(compaction);onChanged();notify('info','Compaction settings saved.');}
+  const saveCompaction=async()=>{setBusy(true);try{await window.revu.agent.saveCompactionConfiguration(compaction).then(unwrap);setSavedCompaction(compaction);onChanged();}
     catch(error){notify('error',errorMessage(error));}finally{setBusy(false);}};
   const editOverride=(key:string)=>{const value=compaction.modelOverrides[key]??{};const separator=key.indexOf('/');const provider=separator<0?key:key.slice(0,separator);const id=separator<0?'':key.slice(separator+1);setOverrideModel(modelValue(provider,id));
     setOverrideReserve(value.reserveTokens===undefined?'':String(value.reserveTokens));setOverrideKeep(value.keepRecentTokens===undefined?'':String(value.keepRecentTokens));};
@@ -675,8 +675,8 @@ function ModelDialog({projectId,sessionId,onClose,onChanged,notify}:{projectId:s
   </div>;
 }
 
-export default function AgentChat({detachedWindow,maximized,onToggleWindow,hiddenToolbarButtons,onOpenSettings,open,projects,activeProjectId,dirtyProjectIds,width,onResize,onResizeEnd,notify,navigationRequest,onNotice,onProjectAdded,onOpenToolDetail,onUpdateToolDetail,onPinSession,onShowPins,onOpenCode,visiblePinSource,citeRequest,onGoto,tokenizeSnapshot}:{
-  detachedWindow?:Window|null;maximized?:boolean;onToggleWindow?:()=>void;
+export default function AgentChat({detachedWindow,onToggleWindow,hiddenToolbarButtons,onOpenSettings,open,projects,activeProjectId,dirtyProjectIds,width,onResize,onResizeEnd,notify,navigationRequest,onNotice,onProjectAdded,onOpenToolDetail,onUpdateToolDetail,onPinSession,onShowPins,onOpenCode,visiblePinSource,citeRequest,onGoto,tokenizeSnapshot}:{
+  detachedWindow?:Window|null;onToggleWindow?:()=>void;
   hiddenToolbarButtons:ReadonlySet<ChatToolbarButton>;
   tokenizeSnapshot?:SnapshotTokenizer;
   citeRequest?:CiteRequest;onGoto:(projectId:string,target:CiteTarget)=>void;
@@ -808,7 +808,8 @@ export default function AgentChat({detachedWindow,maximized,onToggleWindow,hidde
     setSessions(state=>({...state,[projectId]:(state[projectId]??[]).map(session=>session.id===sessionId?{...session,question:requests.length>0}:session)}));
     if(requests.length){
       clearDone(sessionId);const view=viewRef.current;
-      if(!previous.length&&(!view.open||view.selectedSessionId!==sessionId)){
+      if(previous[0]?.id!==requests[0].id){
+        if(previous.length)onNotice({level:'info',question:false,projectId,sessionId,message:''});
         const project=view.projects.find(item=>item.id===projectId);const session=(view.sessions[projectId]??[]).find(item=>item.id===sessionId);
         onNotice({level:'info',question:true,projectId,sessionId,message:`Question · ${project?.name??'Project'} / ${titleFor(session,chatsRef.current[sessionId])}\n${requests[0].title}`});
       }
@@ -1006,14 +1007,22 @@ export default function AgentChat({detachedWindow,maximized,onToggleWindow,hidde
   useLayoutEffect(()=>{
     const trigger=sessionMoreRef.current;
     if(!sessionMenuOpen||!trigger)return;
-    const rect=trigger.getBoundingClientRect();
-    const panel=trigger.closest('.agent-chat')!.getBoundingClientRect();
-    const anchored=detachedWindow&&maximized;
-    const right=anchored?rect.right:panel.right-12;
-    const left=anchored?panelWindow.innerWidth/2:panel.left+12;
-    setSessionMenuStyle({width:Math.max(0,right-left),left,top:rect.bottom+5,
-      maxHeight:Math.max(120,panel.bottom-rect.bottom-13)});
-  },[sessionMenuOpen,selectedProjectId,sessionTabs.length,width,panelWindow,viewport,detachedWindow,maximized]);
+    const panel=trigger.closest('.agent-chat');
+    if(!panel)return;
+    const position=()=>{
+      const rect=trigger.getBoundingClientRect();
+      const bounds=panel.getBoundingClientRect();
+      const available=Math.max(0,bounds.width-24);
+      const menuWidth=Math.min(available,480+Math.max(0,available-480)*0.15,640);
+      const left=Math.max(bounds.left+12,Math.min(rect.right-menuWidth,bounds.right-12-menuWidth));
+      setSessionMenuStyle({width:menuWidth,left,top:rect.bottom+5,
+        maxHeight:Math.max(120,bounds.bottom-rect.bottom-13)});
+    };
+    position();
+    const observer=new panelWindow.ResizeObserver(position);
+    observer.observe(panel);observer.observe(trigger);
+    return ()=>observer.disconnect();
+  },[sessionMenuOpen,selectedProjectId,sessionTabs.length,width,panelWindow,viewport]);
   useEffect(()=>{if(!sessionMenuOpen)return;const outside=(event:PointerEvent|FocusEvent)=>{const target=event.target as Node;if(!sessionMoreRef.current?.contains(target)&&!sessionMoreMenuRef.current?.contains(target))setSessionMenuOpen(false);};
     const escape=(event:KeyboardEvent)=>{if(event.key==='Escape')setSessionMenuOpen(false);};panelDocument.addEventListener('pointerdown',outside);panelDocument.addEventListener('focusin',outside);panelDocument.addEventListener('keydown',escape);
     return()=>{panelDocument.removeEventListener('pointerdown',outside);panelDocument.removeEventListener('focusin',outside);panelDocument.removeEventListener('keydown',escape);};},[sessionMenuOpen,panelDocument]);
@@ -1101,7 +1110,8 @@ export default function AgentChat({detachedWindow,maximized,onToggleWindow,hidde
         markDone(event.sessionId);
         const chat=chatsRef.current[event.sessionId];const latest=chat?buildRuns(chat).at(-1):undefined;
         const noticeKey=`${event.sessionId}:${latest?.key??'latest'}:success`;const view=viewRef.current;
-        if((!view.open||view.selectedSessionId!==event.sessionId)&&!notifiedRuns.current.has(noticeKey)){
+        const viewing=view.open&&view.selectedSessionId===event.sessionId&&bodyRef.current?.ownerDocument.hasFocus();
+        if(!viewing&&!notifiedRuns.current.has(noticeKey)){
           notifiedRuns.current.add(noticeKey);const project=view.projects.find(item=>item.id===event.projectId);
           const session=(view.sessions[event.projectId]??[]).find(item=>item.id===event.sessionId);const answer=latest?finalAnswer(latest).replace(/\s+/g,' ').trim():'';
           onNotice({level:'success',projectId:event.projectId,sessionId:event.sessionId,runKey:latest?.key,
@@ -1533,7 +1543,7 @@ export default function AgentChat({detachedWindow,maximized,onToggleWindow,hidde
         case 'copy':{
           const last=[...current!.messages].reverse().find(message=>{const item=record(message);return item.role==='assistant'&&!(item.stopReason==='aborted'&&Array.isArray(item.content)&&!item.content.length);});
           const value=messageText(last).trim();if(!value){notify('warning','No assistant message to copy.');return;}
-          if(!await window.revu.copyText(value))throw new Error('Could not copy the message.');notify('info','Copied last assistant message.');break;
+          if(!await window.revu.copyText(value))throw new Error('Could not copy the message.');break;
         }
         case 'trust':{
           const trust=await window.revu.agent.getProjectTrust(selectedProjectId,current?.sessionId).then(unwrap);

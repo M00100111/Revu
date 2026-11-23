@@ -51,6 +51,28 @@ const savedChangesHeight=()=>{
   return Number.isFinite(value)&&value>=MIN_CHANGES_HEIGHT?value:null;
 };
 
+function fitReviewBranch(slot:HTMLSpanElement|null){
+  const label=slot?.firstElementChild;
+  if(!slot||!label)return;
+  const update=()=>slot.toggleAttribute('data-clipped',label.getBoundingClientRect().width>slot.getBoundingClientRect().width);
+  update();
+  const observer=new ResizeObserver(update);
+  observer.observe(slot);
+  observer.observe(label);
+  return ()=>observer.disconnect();
+}
+
+function alignReviewActions(list:HTMLDivElement|null){
+  if(!list)return;
+  const section=list.closest<HTMLElement>('.review-changes');
+  if(!section)return;
+  const align=()=>section.style.setProperty('--review-scrollbar-width',(list.offsetWidth-list.clientWidth)+'px');
+  align();
+  const observer=new ResizeObserver(align);
+  observer.observe(list);
+  return ()=>observer.disconnect();
+}
+
 export default function ReviewDashboard({projects,documents,snapshots,statuses,filter,selected,revealTarget,expandedRecords,onToggleReviewPreview,width,onResize,onOpen,onGoto=onOpen,onOpenSnapshot,onAction,onBulk,onFileBulk,onFilterChange,onSelectedChange,split,onSplitChange,chunkWidth,onChunkResize,fileLabels,pinsByFile,keptIds,onPinAction,onPinSource,onRevealPin,detachedWindow,onToggleWindow}:{
   projects:Project[];documents:OpenFile[];statuses:Record<string,ProjectStatus>;
   snapshots:OpenFile[];
@@ -204,9 +226,11 @@ export default function ReviewDashboard({projects,documents,snapshots,statuses,f
   const changes=<section ref={changesRef} className={'review-changes '+(split?'split':'')} aria-label="Review files"
         style={split||changesHeight===null?undefined:{flexBasis:changesHeight,maxHeight:`calc(100% - ${REVIEW_HEADER_HEIGHT+REVIEW_RESIZE_HEIGHT+MIN_DETAIL_HEIGHT}px)`}}>
         <header className="review-changes-header">
-          {projects.length===1?<strong className="review-project-name" title={projects[0].name}>{projects[0].name}</strong>:
-            <ProjectDropdown projects={projects} value={filter} onChange={onFilterChange}/>}
-          <span className="review-branch" title={branch}>{branch}</span>
+          <div className="review-project-labels">
+            {projects.length===1?<strong className="review-project-name" title={projects[0].name}>{projects[0].name}</strong>:
+              <ProjectDropdown projects={projects} value={filter} onChange={onFilterChange}/>}
+            {branch&&<span className="review-branch" ref={fitReviewBranch}><span title={branch}>{branch}</span></span>}
+          </div>
           <div className="review-bulk-actions">
             <button title="Accept all pending changes" aria-label="Accept all pending changes"
               className="action-accept" disabled={!pending} onClick={()=>bulk('accept')}>Accept</button>
@@ -216,15 +240,18 @@ export default function ReviewDashboard({projects,documents,snapshots,statuses,f
               disabled={!reviewed} onClick={()=>bulk('undo')}>Undo</button>
           </div>
         </header>
-        <ScrollbarScope><div className="review-file-list" data-panel-scroll>
+        <ScrollbarScope><div className="review-file-list" ref={alignReviewActions} data-panel-scroll>
           {grouped?scoped.map(project=>{
             const projectRows=rows.filter(row=>row.project.id===project.id);
             if(!projectRows.length)return null;
             const projectPending=projectRows.reduce((sum,row)=>sum+(row.file?.chunks.length??0),0);
             const projectReviewed=projectRows.reduce((sum,row)=>sum+(row.file?.records.length??0),0);
             return <div className="review-file-group" key={project.id}>
-              <div className="review-file-group-heading"><strong>{project.name}</strong>
-                <span>{statuses[project.id]?.branch}</span>
+              <div className="review-file-group-heading">
+                <div className="review-project-labels">
+                  <strong>{project.name}</strong>
+                  <span title={statuses[project.id]?.branch??undefined}>{statuses[project.id]?.branch}</span>
+                </div>
                 <div className="review-file-group-actions">
                   <button className="action-accept" disabled={!projectPending}
                     onClick={()=>onBulk([project.id],'accept')}>Accept</button>

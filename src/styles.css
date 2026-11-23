@@ -183,10 +183,15 @@ kbd { font: inherit; border: 1px solid var(--border); border-radius: 3px; paddin
 .review-height-handle { position: relative; height: 6px; flex: 0 0 6px; cursor: row-resize; touch-action: none; }
 .review-height-handle::after { content: ''; position: absolute; left: 0; right: 0; top: 2px; border-top: 1px solid var(--border); }
 .review-height-handle:hover::after, .review-height-handle:focus-visible::after { border-color: var(--text); opacity: .45; }
-.review-changes-header { position: relative; height: 38px; flex-shrink: 0; padding: 0 14px 0 12px; display: flex; align-items: center; border-bottom: 1px solid var(--border); }
-.review-branch { position: absolute; left: 50%; max-width: 24%; transform: translateX(-50%); overflow: hidden; color: var(--muted); font-size: 10px; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
-.review-project-name { max-width: 30%; overflow: hidden; padding-left: 8px; font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
-.review-changes-header > .project-dropdown { flex: 0 0 auto; max-width: none; }
+.review-changes-header { position: relative; height: 38px; flex-shrink: 0; padding: 0 calc(17px + var(--review-scrollbar-width, 0px)) 0 4px; display: flex; align-items: center; border-bottom: 1px solid var(--border); }
+.review-project-labels { display: flex; flex: 1; min-width: 0; align-items: baseline; gap: 8px; }
+.review-changes-header .review-project-labels { gap: 0; }
+.review-branch { min-width: 0; overflow: hidden; color: var(--muted); font-size: 10px; white-space: nowrap; }
+.review-branch > span { display: inline-block; padding-left: 8px; }
+.review-branch[data-clipped] { visibility: hidden; }
+.review-project-name { flex-shrink: 0; max-width: 100%; overflow: hidden; padding-left: 8px; font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.review-project-labels > .project-dropdown { flex: 0 0 auto; max-width: 100%; }
+.review-changes-header .project-dropdown-trigger { max-width: 100%; }
 .review-bulk-actions { z-index: 1; display: flex; align-items: center; gap: 5px; margin-left: auto; padding-left: 6px; background: var(--panel); }
 .review-bulk-actions button { height: 25px; padding: 0; border-radius: 4px; font-size: 11px; }
 .project-dropdown { position: relative; min-width: 0; }
@@ -211,8 +216,8 @@ kbd { font: inherit; border: 1px solid var(--border); border-radius: 3px; paddin
 .tree-scroll, .review-file-list, .review-detail { margin-right: 3px; }
 .review-file-group + .review-file-group { margin-top: 4px; }
 .review-file-group-heading { position: relative; display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 7px; color: var(--muted); font-size: 10px; }
-.review-file-group-heading strong { overflow: hidden; color: var(--text); font-size: 11px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
-.review-file-group-heading > span { position: absolute; left: 50%; max-width: 24%; transform: translateX(-50%); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.review-file-group-heading strong { flex-shrink: 0; max-width: 40%; overflow: hidden; color: var(--text); font-size: 11px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+.review-file-group-heading .review-project-labels > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .review-file-group-actions { display: flex; align-items: center; gap: 5px; margin-left: auto; }
 .review-file-group-actions button { padding: 0; font-size: 11px; }
 .review-file-row { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; column-gap: 7px; width: 100%; padding: 6px 7px; border-radius: 4px; text-align: left; }

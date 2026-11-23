@@ -83,7 +83,7 @@ export default function App(){
   const [settingsCategory,setSettingsCategory]=useState<SettingsCategory>('interaction');
   const [fontSize,setFontSize]=useState(savedFontSize);
   const [reviewFileLabels,setReviewFileLabels]=useState<ReviewFileLabels>(()=>
-    localStorage.getItem('revu-review-file-labels')==='name'?'name':'path');
+    localStorage.getItem('revu-review-file-labels')==='path'?'path':'name');
   const [notifications,setNotifications]=useState<AppNotification[]>([]);
   const [notificationsOpen,setNotificationsOpen]=useState(false);
   const [agentOpen,setAgentOpen]=useState(false);
@@ -150,8 +150,8 @@ export default function App(){
   },[focusWindow]);
   const cite=useCallback((request:CiteRequest)=>{setCiteRequest(request);showChat();},[showChat]);
   const notifyWarning=useCallback((message:string)=>notify('warning',message),[notify]);
-  const dismissToast=useCallback((id:string)=>setNotifications(current=>current.map(item=>
-    item.id===id?{...item,toast:false}:item)),[]);
+  const dismissToast=useCallback((id:string,markRead:boolean)=>setNotifications(current=>current.map(item=>
+    item.id===id?{...item,toast:false,read:item.read||markRead}:item)),[]);
   const deleteNotification=useCallback((id:string)=>setNotifications(current=>current.filter(item=>item.id!==id)),[]);
   const activateNotification=useCallback((id:string)=>{
     const notification=notifications.find(item=>item.id===id);
@@ -170,7 +170,7 @@ export default function App(){
       setNotifications(current=>{
         const existing=current.find(item=>item.action?.question&&item.action.projectId===notice.projectId&&item.action.sessionId===notice.sessionId);
         if(existing)return current.map(item=>item.id===existing.id?{...item,message:notice.message}:item);
-        return [{id:crypto.randomUUID(),level:'info',message:notice.message,createdAt:Date.now(),read:false,toast:true,count:1,action:{type:'open-agent-session',projectId:notice.projectId,sessionId:notice.sessionId,question:true}},...current];
+        return [{id:crypto.randomUUID(),level:'persistent-info',message:notice.message,createdAt:Date.now(),read:false,toast:true,count:1,action:{type:'open-agent-session',projectId:notice.projectId,sessionId:notice.sessionId,question:true}},...current];
       });return;
     }
     notify(notice.level,notice.message,{type:'open-agent-session',projectId:notice.projectId,sessionId:notice.sessionId,runKey:notice.runKey});
@@ -188,7 +188,6 @@ export default function App(){
   const editorRef=useRef<monaco.editor.IStandaloneCodeEditor|null>(null);
   const lastFile=useRef(new Map<string,string>());
   const lastToolDocument=useRef<string|null>(null);
-  const seenNotices=useRef(new Map<string,string>());
   const openFiles=tabs.map(id=>documents.find(file=>file.id===id)).filter((f):f is OpenFile=>!!f);
   const activeFile=openFiles.find(file=>file.id===activeId);
   const activeToolDocument=toolDocuments.find(document=>document.id===activeId);
@@ -282,17 +281,6 @@ export default function App(){
   },[fontSize]);
   useEffect(()=>localStorage.setItem('revu-review-file-labels',reviewFileLabels),[reviewFileLabels]);
   useEffect(()=>{window.revu.setDirty(documents.some(file=>file.dirty));},[documents]);
-  useEffect(()=>{
-    const live=new Set(documents.map(file=>file.id));
-    for(const id of seenNotices.current.keys())if(!live.has(id))seenNotices.current.delete(id);
-    for(const file of documents){
-      if(!file.notice){seenNotices.current.delete(file.id);continue;}
-      const marker=file.notice+'\0'+file.synced.hash;
-      if(seenNotices.current.get(file.id)===marker)continue;
-      seenNotices.current.set(file.id,marker);
-      notify('info',`${file.project.name}/${file.path}: ${file.notice}`);
-    }
-  },[documents,tick,notify]);
   useEffect(()=>{
     const valid=new Set(documents.flatMap(file=>file.records.map(record=>record.id)));
     setExpandedReviewRecords(current=>{
@@ -478,7 +466,7 @@ export default function App(){
         const model=monaco.editor.createModel(snapshot.text,undefined,monaco.Uri.from({scheme:'revu-code-snapshot',path:`/${project.id}/${hash}/${encoding}/${path}`}));
         const snapshotFile:OpenFile={
           id,project,path,name,model,synced:snapshot,draftExists:true,baseline:'',baselineExists:false,dirty:false,version:1,
-          reviewText:snapshot.text,chunks:[],records:[],computing:false,syncing:false,saving:false,diffError:'',notice:'',subscription:{dispose(){}},
+          reviewText:snapshot.text,chunks:[],records:[],computing:false,syncing:false,saving:false,diffError:'',subscription:{dispose(){}},
         };
         const label=`${name} · ${revision?.slice(0,7)??'Snapshot'}${encoding==='gb18030'?' · GB18030':''}`;
         document={id,projectId:project.id,sessionId:source.sessionId,toolCallId:'',name:label,model,snapshotFile};
@@ -678,7 +666,7 @@ export default function App(){
       </div>}
     </main>
     </>}
-    <AgentChat maximized={chatMaximized} detachedWindow={windows.chat} onToggleWindow={()=>toggleWindow('chat')}
+    <AgentChat detachedWindow={windows.chat} onToggleWindow={()=>toggleWindow('chat')}
       hiddenToolbarButtons={chatToolbar.hidden} citeRequest={citeRequest} onGoto={gotoReference} tokenizeSnapshot={tokenizeSnapshot}
       onOpenSettings={()=>{setSettingsCategory('chat');setPanel('settings');focusWindow('main');}} open={agentOpen} projects={projects} activeProjectId={projectId}
       dirtyProjectIds={new Set(documents.filter(file=>file.dirty).map(file=>file.project.id))}

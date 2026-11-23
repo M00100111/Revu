@@ -92,7 +92,7 @@ export function useWorkspace(onError: (message: string) => void,onNotice:(messag
         id, project, path, name:path.split('/').pop()!, model, synced:snapshot,draftExists:snapshot.exists,
         baseline:base.text,baselineHash:base.hash,baselineExists:base.exists, reason:base.reason, dirty:false, version:1, reviewText:snapshot.text,
         chunks:[], records:[], computing:false, syncing:false, saving:false,
-        diffError:'', notice:'', subscription:{dispose(){}},
+        diffError:'', subscription:{dispose(){}},
       };
       file.subscription = model.onDidChangeContent(() => {
         if(!internalEdits.current.has(file.id)){
@@ -120,7 +120,7 @@ export function useWorkspace(onError: (message: string) => void,onNotice:(messag
       const kind = externalSyncKind(file.synced.hash, external);
       if (kind === 'unchanged') return;
       if (kind === 'remove') {
-        onNotice(`${file.project.name}/${file.path} was deleted externally.`);
+        if(file.dirty)onNotice(`${file.project.name}/${file.path} was deleted externally while it had unsaved changes.`);
         discardExternalFile(file);
         return;
       }
@@ -131,6 +131,9 @@ export function useWorkspace(onError: (message: string) => void,onNotice:(messag
         const result=await api<DiffResult>('diff',{projectId:file.project.id,path:file.path,
           base:file.project.base,text:external.text,previous:external.text,version:file.version});
         review=rebaseExternalReview(file.records,result.chunks,external.text);
+      }
+      if(file.dirty&&file.model.getValue()!==review.text){
+        onNotice(`${file.project.name}/${file.path}: external changes replaced unsaved edits.`);
       }
       resetForExternalSnapshot(file, external, review);
       if (external.reason) file.reason = external.reason;
@@ -155,7 +158,6 @@ export function useWorkspace(onError: (message: string) => void,onNotice:(messag
         text,expected:file.synced.hash,bom:file.synced.bom,exists:file.draftExists});
       file.synced = saved;file.draftExists=saved.exists;
       file.dirty = file.model.getValue() !== saved.text;
-      file.notice = '';
     } catch(error) {
       if (error instanceof ApiError && error.status === 409) {
         file.saving = false;

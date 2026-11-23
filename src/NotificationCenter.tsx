@@ -2,32 +2,34 @@ import { useEffect } from 'react';
 import Icon from './Icon';
 import ScrollbarScope from './ScrollbarScope';
 
-export type NotificationLevel='info'|'success'|'warning'|'error';
+export type NotificationLevel='persistent-info'|'info'|'success'|'warning'|'error';
 export interface NotificationAction {type:'open-agent-session';projectId:string;sessionId:string;runKey?:string;question?:boolean}
 export interface AppNotification {
   id:string;level:NotificationLevel;message:string;createdAt:number;read:boolean;toast:boolean;count:number;
   action?:NotificationAction;
 }
 
-function Toast({notification,onClose,onActivate}:{notification:AppNotification;onClose:(id:string)=>void;onActivate:(id:string)=>void}){
+function visibleLevel(level:NotificationLevel){return level==='persistent-info'?'info':level;}
+
+function Toast({notification,onClose,onActivate}:{notification:AppNotification;onClose:(id:string,markRead:boolean)=>void;onActivate:(id:string)=>void}){
   useEffect(()=>{
     if(notification.level!=='info'&&notification.level!=='success')return;
-    const timer=setTimeout(()=>onClose(notification.id),5000);
+    const timer=setTimeout(()=>onClose(notification.id,false),5000);
     return()=>clearTimeout(timer);
   },[notification.id,notification.createdAt,notification.level,onClose]);
-  return <article className={'notification-toast '+notification.level}
+  return <article className={'notification-toast '+visibleLevel(notification.level)}
     role={notification.level==='error'?'alert':'status'}>
     <button className="notification-toast-body" onClick={()=>onActivate(notification.id)}>
-      <span><strong>{notification.level}</strong>{notification.count>1&&<i>×{notification.count}</i>}</span>
+      <span><strong>{visibleLevel(notification.level)}</strong>{notification.count>1&&<i>×{notification.count}</i>}</span>
       <p>{notification.message}</p>
     </button>
     <button className="icon-button" title="Dismiss" aria-label="Dismiss notification"
-      onClick={()=>onClose(notification.id)}><Icon name="close" size={13}/></button>
+      onClick={()=>onClose(notification.id,true)}><Icon name="close" size={13}/></button>
   </article>;
 }
 
 export default function NotificationCenter({notifications,open,onClose,onDismissToast,onDelete,onActivate,onReadAll,onClear}:{
-  notifications:AppNotification[];open:boolean;onClose:()=>void;onDismissToast:(id:string)=>void;
+  notifications:AppNotification[];open:boolean;onClose:()=>void;onDismissToast:(id:string,markRead:boolean)=>void;
   onDelete:(id:string)=>void;onActivate:(id:string)=>void;onReadAll:()=>void;onClear:()=>void;
 }){
   const toasts=notifications.filter(notification=>notification.toast);
@@ -42,9 +44,9 @@ export default function NotificationCenter({notifications,open,onClose,onDismiss
       </div></header>
       <ScrollbarScope className="notification-list">
         {!notifications.length?<p className="notification-empty">No notifications</p>:notifications.map(notification=><article
-          key={notification.id} className={'notification-item '+notification.level+(notification.read?' read':' unread')}>
+          key={notification.id} className={'notification-item '+visibleLevel(notification.level)+(notification.read?' read':' unread')}>
           <button className="notification-item-body" onClick={()=>onActivate(notification.id)}>
-            <span><strong>{notification.level}</strong>{notification.count>1&&<i>×{notification.count}</i>}
+            <span><strong>{visibleLevel(notification.level)}</strong>{notification.count>1&&<i>×{notification.count}</i>}
               <time>{new Date(notification.createdAt).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</time></span>
             <p>{notification.message}</p>
           </button>

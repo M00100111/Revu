@@ -72,5 +72,4 @@ export interface OpenFile {
   diffError: string;
   syncError?: string;
   reason?: string;
-  notice: string;
 }
