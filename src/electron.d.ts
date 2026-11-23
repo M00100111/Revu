@@ -72,6 +72,7 @@ declare global {
       filePath(file:File):string;
       saveChatImage(mimeType:string,bytes:Uint8Array):Promise<string>;
       openExternal(url:string):Promise<boolean>;
+      closeToTray(value?:boolean):Promise<boolean>;
       windowControl(action:'minimize'|'maximize'|'close'|'isMaximized'):Promise<boolean>;
       setDirty(dirty:boolean):void;
       onMaximized(listener:(maximized:boolean)=>void):()=>void;

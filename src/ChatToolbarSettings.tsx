@@ -1,3 +1,4 @@
+import BooleanSetting from './BooleanSetting';
 import {useState} from 'react';
 
 const buttons=[
@@ -25,9 +26,7 @@ export function useChatToolbarSettings(){
 export function ChatToolbarSettings({hidden,setVisible}:ReturnType<typeof useChatToolbarSettings>){
   return <section className="chat-toolbar-settings" aria-label="Input toolbar">
     <h2>Input toolbar</h2>
-    {buttons.map(({id,label,description})=><label className="setting-row" key={id}>
-      <span><strong>{label}</strong><small>{description}</small></span>
-      <input type="checkbox" aria-label={label} checked={!hidden.has(id)} onChange={event=>setVisible(id,event.target.checked)}/>
-    </label>)}
+    {buttons.map(({id,label,description})=><BooleanSetting key={id} label={label} description={description}
+      value={!hidden.has(id)} onChange={visible=>setVisible(id,visible)}/>)}
   </section>;
 }

@@ -1,10 +1,11 @@
+import BooleanSetting from './BooleanSetting';
 import ChatRuntimeSettings from './ChatRuntimeSettings';
 import {ChatToolbarSettings,type useChatToolbarSettings} from './ChatToolbarSettings';
 import { useEffect, useState } from 'react';
 import ResizeHandle from './ResizeHandle';
 import type { FileTabOverflow } from './tabLayout';
 
-export type SettingsCategory='file'|'interaction'|'editor'|'review'|'appearance'|'activity-bar'|'chat';
+export type SettingsCategory='system'|'file'|'interaction'|'editor'|'review'|'appearance'|'activity-bar'|'chat';
 export type ReviewFileLabels='name'|'path';
 
 function FontSizeSetting({fontSize,onChange}:{fontSize:number;onChange:(value:number)=>void}){
@@ -50,6 +51,7 @@ export function SettingsSidebar({width,onResize,category,onCategoryChange}:{
       <button className={category==='interaction'?'active':''} onClick={()=>onCategoryChange('interaction')}>Interaction</button>
       <button className={category==='appearance'?'active':''} onClick={()=>onCategoryChange('appearance')}>Appearance</button>
       <button className={category==='activity-bar'?'active':''} onClick={()=>onCategoryChange('activity-bar')}>Activity Bar</button>
+      <button className={category==='system'?'active':''} onClick={()=>onCategoryChange('system')}>System</button>
       <button className={category==='file'?'active':''} onClick={()=>onCategoryChange('file')}>File</button>
       <button className={category==='editor'?'active':''} onClick={()=>onCategoryChange('editor')}>Editor</button>
       <button className={category==='review'?'active':''} onClick={()=>onCategoryChange('review')}>Review</button>
@@ -59,9 +61,10 @@ export function SettingsSidebar({width,onResize,category,onCategoryChange}:{
   </aside>;
 }
 
-export default function SettingsPage({revealEditorSelection,onRevealEditorSelectionChange,category,chatToolbar,syncWidths,onChange,mixed,onModeChange,hideSingleProjectTabs,onHideSingleProjectTabsChange,fontSize,
+export default function SettingsPage({closeToTray,onCloseToTrayChange,revealEditorSelection,onRevealEditorSelectionChange,category,chatToolbar,syncWidths,onChange,mixed,onModeChange,hideSingleProjectTabs,onHideSingleProjectTabsChange,fontSize,
   onFontSizeChange,onResetEditor,previewMode,onPreviewModeChange,fileTabOverflow,onFileTabOverflowChange,reviewFileLabels,onReviewFileLabelsChange,dark,onThemeChange,
   showThemeSwitcher,onShowThemeSwitcherChange,showDockButton,onShowDockButtonChange,lightThemeColor,darkThemeColor,onLightThemeColorChange,onDarkThemeColorChange,onResetThemeColors}:{
+  closeToTray:boolean|null;onCloseToTrayChange:(value:boolean)=>void;
   revealEditorSelection:boolean;onRevealEditorSelectionChange:(value:boolean)=>void;
   category:SettingsCategory;syncWidths:boolean;onChange:(value:boolean)=>void;
   chatToolbar:ReturnType<typeof useChatToolbarSettings>;
@@ -72,7 +75,7 @@ export default function SettingsPage({revealEditorSelection,onRevealEditorSelect
   fileTabOverflow:FileTabOverflow;onFileTabOverflowChange:(value:FileTabOverflow)=>void;
   reviewFileLabels:ReviewFileLabels;onReviewFileLabelsChange:(value:ReviewFileLabels)=>void;
   dark:boolean;onThemeChange:(dark:boolean)=>void;showThemeSwitcher:boolean;onShowThemeSwitcherChange:(value:boolean)=>void;
-  showDockButton?:boolean;onShowDockButtonChange?:(value:boolean)=>void;
+  showDockButton:boolean;onShowDockButtonChange:(value:boolean)=>void;
   lightThemeColor:string;darkThemeColor:string;onLightThemeColorChange:(value:string)=>void;
   onDarkThemeColorChange:(value:string)=>void;onResetThemeColors:()=>void;
 }){
@@ -80,16 +83,16 @@ export default function SettingsPage({revealEditorSelection,onRevealEditorSelect
     <div className="settings-content">
       {category==='interaction'?<>
         <h1>Interaction</h1>
-        <label className="setting-row">
-          <span><strong>Sync sidebar widths</strong><small>Use the same width for File, Review, and Settings.</small></span>
-          <input type="checkbox" checked={syncWidths} onChange={event=>onChange(event.target.checked)}/>
-        </label>
+        <BooleanSetting label="Sync sidebar widths" description="Use the same width for File, Review, and Settings."
+          value={syncWidths} onChange={onChange}/>
+      </>:category==='system'?<>
+        <h1>System</h1>
+        <BooleanSetting label="Close to system tray" description="Keep Revu running in the system tray when you close the main window."
+          value={closeToTray===true} disabled={closeToTray===null} onChange={onCloseToTrayChange}/>
       </>:category==='file'?<>
         <h1>File</h1>
-        <label className="setting-row">
-          <span><strong>Reveal Editor Selection in File</strong><small>When File is visible, selecting an editor tab reveals its project or file. Tabs in Other reveal Open Editors.</small></span>
-          <input type="checkbox" checked={revealEditorSelection} onChange={event=>onRevealEditorSelectionChange(event.target.checked)}/>
-        </label>
+        <BooleanSetting label="Reveal Editor Selection in File" description="When File is visible, selecting an editor tab reveals its project or file. Tabs in Other reveal Open Editors."
+          value={revealEditorSelection} onChange={onRevealEditorSelectionChange}/>
       </>:category==='editor'?<>
         <div className="settings-title-row"><h1>Editor</h1><button onClick={onResetEditor}>Reset</button></div>
         <div className="setting-row">
@@ -99,13 +102,9 @@ export default function SettingsPage({revealEditorSelection,onRevealEditorSelect
             <button className={mixed?'active':''} onClick={()=>onModeChange(true)}>Mixed</button>
           </div>
         </div>
-        <label className={'setting-row '+(mixed?'disabled':'')}>
-          <span><strong>Hide project tabs for single project</strong><small>{mixed
-            ? 'Available only in Isolated mode.'
-            : 'Hide the project tab row when only one project is open.'}</small></span>
-          <input type="checkbox" checked={hideSingleProjectTabs} disabled={mixed}
-            onChange={event=>onHideSingleProjectTabsChange(event.target.checked)}/>
-        </label>
+        <BooleanSetting label="Hide project tabs for single project" disabled={mixed}
+          description={mixed?'Available only in Isolated mode.':'Hide the project tab row when only one project is open.'}
+          value={hideSingleProjectTabs} onChange={onHideSingleProjectTabsChange}/>
         <div className="setting-row">
           <span><strong>File tab overflow</strong><small>Choose how file tabs behave when they no longer fit.</small></span>
           <div className="setting-options" role="group" aria-label="File tab overflow">
@@ -158,16 +157,10 @@ export default function SettingsPage({revealEditorSelection,onRevealEditorSelect
         <ChatToolbarSettings {...chatToolbar}/>
       </>:<>
         <h1>Activity Bar</h1>
-        <label className="setting-row">
-          <span><strong>Merge all windows</strong><small>Show a shortcut when Chat or Review is in a separate window.</small></span>
-          <input type="checkbox" checked={showDockButton??true}
-            onChange={event=>onShowDockButtonChange?.(event.target.checked)}/>
-        </label>
-        <label className="setting-row">
-          <span><strong>Theme switcher</strong><small>Show the theme switcher in the Activity Bar.</small></span>
-          <input type="checkbox" checked={showThemeSwitcher}
-            onChange={event=>onShowThemeSwitcherChange(event.target.checked)}/>
-        </label>
+        <BooleanSetting label="Merge all windows" description="Show a shortcut when Chat or Review is in a separate window."
+          value={showDockButton} onChange={onShowDockButtonChange}/>
+        <BooleanSetting label="Theme switcher" description="Show the theme switcher in the Activity Bar."
+          value={showThemeSwitcher} onChange={onShowThemeSwitcherChange}/>
       </>}
     </div>
   </main>;

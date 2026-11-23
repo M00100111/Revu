@@ -9,13 +9,14 @@ export default function Sidebar({ panel, setPanel, dark, toggleTheme,showThemeSw
   showDock?:boolean;onDockAll?:()=>void;reviewDetached?:boolean;chatDetached?:boolean;onFocusReview?:()=>void;onFocusChat?:()=>void;
 }) {
   return <nav className="activity-bar" aria-label="Activity bar">
-    <div className="brand" title="Revu">r.</div>
-    <button className={'activity-button '+(panel==='files'?'selected':'')} title="File"
-      aria-label="File" aria-pressed={panel==='files'} onClick={()=>setPanel(panel==='files'?null:'files')}>
-      <Icon name="files" size={21}/></button>
-    <button className={'activity-button '+(panel==='review'?'selected':'')} title={reviewDetached?'Focus Review window':'Review Dashboard'}
-      aria-label="Review Dashboard" aria-pressed={reviewDetached?undefined:panel==='review'} onClick={reviewDetached?onFocusReview:()=>setPanel(panel==='review'?null:'review')}>
-      <Icon name="review" size={21}/></button>
+    <div className="activity-top">
+      <button className={'activity-button '+(panel==='files'?'selected':'')} title="File"
+        aria-label="File" aria-pressed={panel==='files'} onClick={()=>setPanel(panel==='files'?null:'files')}>
+        <Icon name="files" size={21}/></button>
+      <button className={'activity-button '+(panel==='review'?'selected':'')} title={reviewDetached?'Focus Review window':'Review Dashboard'}
+        aria-label="Review Dashboard" aria-pressed={reviewDetached?undefined:panel==='review'} onClick={reviewDetached?onFocusReview:()=>setPanel(panel==='review'?null:'review')}>
+        <Icon name="review" size={21}/></button>
+    </div>
     <div className="activity-footer">
       {showDock&&<button className="activity-button" title="Merge all windows" aria-label="Merge all windows" onClick={onDockAll}>
         <Icon name="dock" size={21}/></button>}

@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('revu',{
   filePath:(file:File)=>webUtils.getPathForFile(file),
   saveChatImage:(mimeType:string,bytes:Uint8Array)=>ipcRenderer.invoke('revu:save-chat-image',mimeType,bytes) as Promise<string>,
   openExternal:(url:string)=>ipcRenderer.invoke('revu:open-external',url) as Promise<boolean>,
+  closeToTray:(value?:boolean)=>ipcRenderer.invoke('revu:close-to-tray',value),
   windowControl:(action:'minimize'|'maximize'|'close'|'isMaximized')=>ipcRenderer.invoke('revu:window-control',action),
   setDirty:(dirty:boolean)=>ipcRenderer.send('revu:dirty-state',dirty),
   onMaximized:(listener:(maximized:boolean)=>void)=>{

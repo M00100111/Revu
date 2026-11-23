@@ -44,6 +44,7 @@
       "package.json"
     ],
     "extraResources": [
+      {"from": "logo/revu.ico", "to": "logo/revu.ico"},
       {"from": ".pi-runtime/node-linux-x64/node", "to": "pi/node-linux-x64/node"},
       {
         "from": ".pi-runtime/node/node.exe",
@@ -61,7 +62,8 @@
       "output": "release"
     },
     "win": {
-      "target": "portable"
+      "target": "portable",
+      "icon": "logo/revu.ico"
     },
     "artifactName": "Revu-${version}-${arch}.${ext}"
   }

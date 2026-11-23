@@ -8,11 +8,13 @@ import {isCodeEncoding} from '../shared/codeSource';
 import type { PiAgentRequest } from '../shared/piTypes';
 import type { ChatFilePickerOptions } from '../shared/types';
 import { PiManager } from './piManager';
+import {attachSystemTray} from './systemTray';
 import {attachPanelWindows,chatWindow} from './panelWindows';
 
 let mainWindow:BrowserWindow|null=null;
 let hasDirtyDrafts=false;
 let closeApproved=false;
+let quitRequested=false;
 let confirmingClose=false;
 let shutdownStarted=false;
 const workspace=new Workspace(projectId=>mainWindow?.webContents.send('revu:project-changed',projectId));
@@ -291,29 +293,34 @@ ipcMain.on('revu:dirty-state',(event,dirty:boolean)=>{
 
 function createWindow(){
   hasDirtyDrafts=false;closeApproved=false;confirmingClose=false;
+  const icon=join(app.isPackaged?process.resourcesPath:app.getAppPath(),'logo','revu.ico');
   mainWindow=new BrowserWindow({
+    icon,
     width:1280,height:800,minWidth:720,minHeight:500,show:false,backgroundColor:'#ffffff',
     frame:false,
     webPreferences:{preload:join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false},
   });
-  const closePanelWindows=attachPanelWindows(mainWindow);
+  const systemTray=attachSystemTray(mainWindow,icon);
+  const closePanelWindows=attachPanelWindows(mainWindow,icon,systemTray.deferFocus);
   mainWindow.webContents.on('before-input-event',(event,input)=>{
     if(input.type==='keyDown'&&input.key==='F12'){event.preventDefault();mainWindow?.webContents.toggleDevTools();}
   });
   const maximized=()=>mainWindow?.webContents.send('revu:maximized',mainWindow.isMaximized());
   mainWindow.on('maximize',maximized);mainWindow.on('unmaximize',maximized);
   mainWindow.on('close',event=>{
+    if(!quitRequested&&!closeApproved&&systemTray.hide()){event.preventDefault();return;}
     if(closeApproved||!hasDirtyDrafts){closePanelWindows();return;}
     event.preventDefault();
     if(confirmingClose||!mainWindow)return;
     confirmingClose=true;
+    systemTray.restoreIfHidden();
     void dialog.showMessageBox(mainWindow,{
       type:'warning',title:'Unsaved Changes',message:'There are unsaved files.',
       detail:'Discard the unsaved changes and close Revu?',
       buttons:['Cancel','Discard and Close'],defaultId:0,cancelId:0,noLink:true,
     }).then(result=>{
       confirmingClose=false;
-      if(result.response!==1||!mainWindow)return;
+      if(result.response!==1||!mainWindow){quitRequested=false;return;}
       closeApproved=true;mainWindow.close();
     });
   });
@@ -350,7 +357,7 @@ app.whenReady().then(async()=>{
 app.on('window-all-closed',()=>app.quit());
 app.on('before-quit',event=>{
   if(shutdownStarted)return;
-  if(mainWindow){event.preventDefault();mainWindow.close();return;}
+  if(mainWindow){event.preventDefault();quitRequested=true;mainWindow.close();return;}
   event.preventDefault();shutdownStarted=true;
   piManager?.enableStandby(false);piManager?.abandonNew();
   const stopping=piManager?.dispose()??Promise.resolve();

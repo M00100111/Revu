@@ -114,7 +114,17 @@ export default function App(){
       return [{id:crypto.randomUUID(),level,message,createdAt,read:false,toast:true,count:1,action},...current];
     });
   },[]);
+  const [closeToTray,setCloseToTray]=useState<boolean|null>(null);
   const notifyError=useCallback((message:string)=>notify('error',message),[notify]);
+  useEffect(()=>{
+    let live=true;
+    void window.revu.closeToTray().then(value=>{if(live)setCloseToTray(value);}).catch(error=>notifyError(errorMessage(error)));
+    return ()=>{live=false;};
+  },[notifyError]);
+  async function changeCloseToTray(value:boolean){
+    try{setCloseToTray(await window.revu.closeToTray(value));}
+    catch(error){notifyError(errorMessage(error));}
+  }
   const onDetach=useCallback((name:PanelWindow)=>{
     if(name==='review')setPanel(current=>current==='review'?null:current);
     else setAgentOpen(true);
@@ -603,7 +613,7 @@ export default function App(){
       chunkWidth={reviewChunkWidth} onChunkResize={setReviewChunkWidth} fileLabels={reviewFileLabels}/>}
     {panel==='settings'&&<SettingsSidebar width={sidebarWidth} onResize={resizeSidebar}
       category={settingsCategory} onCategoryChange={setSettingsCategory}/>}
-    {panel==='settings'?<SettingsPage revealEditorSelection={revealEditorSelection} onRevealEditorSelectionChange={setRevealEditorSelection} chatToolbar={chatToolbar} category={settingsCategory} syncWidths={syncWidths} onChange={changeWidthSync}
+    {panel==='settings'?<SettingsPage closeToTray={closeToTray} onCloseToTrayChange={changeCloseToTray} revealEditorSelection={revealEditorSelection} onRevealEditorSelectionChange={setRevealEditorSelection} chatToolbar={chatToolbar} category={settingsCategory} syncWidths={syncWidths} onChange={changeWidthSync}
       mixed={mixed} onModeChange={setMixed} hideSingleProjectTabs={hideSingleProjectTabs}
       onHideSingleProjectTabsChange={setHideSingleProjectTabs} fontSize={fontSize}
       previewMode={previewMode} onPreviewModeChange={setPreviewMode}

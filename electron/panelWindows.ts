@@ -87,12 +87,12 @@ export function chatWindow(){
   return windows.get('chat')?.window;
 }
 
-export function attachPanelWindows(main:BrowserWindow){
+export function attachPanelWindows(main:BrowserWindow,icon:string,deferFocus:(win:BrowserWindow)=>boolean){
   readPlacements();
   main.webContents.setWindowOpenHandler(({url,frameName})=>{
     const panel=panelFromFrame(frameName);
     if(url!=='about:blank'||!panel||windows.has(panel))return {action:'deny'};
-    return {action:'allow',overrideBrowserWindowOptions:windowOptions(panel,main)};
+    return {action:'allow',overrideBrowserWindowOptions:{...windowOptions(panel,main),icon}};
   });
   main.webContents.on('did-create-window',(win,{frameName})=>{
     const panel=panelFromFrame(frameName);
@@ -137,7 +137,7 @@ export function attachPanelWindows(main:BrowserWindow){
   ipcMain.handle('revu:panel-focus',(event,target:PanelWindow|'main')=>{
     if(!fromMain(event))return;
     const win=target==='main'?main:windows.get(target)?.window;
-    if(win)bringForward(win);
+    if(win&&!deferFocus(win))bringForward(win);
   });
   ipcMain.handle('revu:panel-close',(event,panel:PanelWindow)=>{
     if(fromMain(event))closePanel(panel);
