@@ -111,7 +111,7 @@ export default function FileSidebar({width,projects,projectsLoaded,tabs,activeId
     <summary className="workspace-name" ref={target?.projectId===null?revealRoot:undefined} draggable onDragStart={event=>beginDrag(event,OPEN_EDITORS_KEY)}
       onDragOver={event=>dragOver(event,OPEN_EDITORS_KEY)} onDrop={event=>finishDrop(event,OPEN_EDITORS_KEY)}
       onDragEnd={()=>{setDragged(null);setDrop(null);}}>
-      <Icon name="down" size={12}/><Icon name="file" size={15}/><span>Open Editors</span>
+      <Icon name="down" size={12}/><Icon name="openEditors" size={15}/><span>Open Editors</span>
     </summary>{openEditorsContent()}
   </details>;
   const projectEntry=(project:Project)=><details className={dragClass(project.root)+' project-tree'} key={project.root}

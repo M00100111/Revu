@@ -67,6 +67,7 @@ const assets={
   projectFolder:new URL('../assets/icons/editor/folder.svg',import.meta.url).href,
   file:new URL('../assets/icons/file/files.svg',import.meta.url).href,
   folder:new URL('../assets/icons/file/folder.svg',import.meta.url).href,
+  openEditors:new URL('../assets/icons/file/openEditors.svg',import.meta.url).href,
   openFolder:new URL('../assets/icons/file/openFolder.svg',import.meta.url).href,
   history:new URL('../assets/icons/file/history.svg',import.meta.url).href,
   merge:new URL('../assets/icons/review/mergeReviewPanes.svg',import.meta.url).href,
