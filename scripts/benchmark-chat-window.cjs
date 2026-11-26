@@ -41,7 +41,7 @@ async function run(web){
   await wait("document.querySelector('.project-tab')",'restored project');
   if(scenario==='ready')await withDeadline(recent);
   const open=performance.now();
-  await web.executeJavaScript("document.querySelector('[aria-label=\"Pi Agent\"]').click()");
+  await web.executeJavaScript("document.querySelector('[aria-label=\"Chat\"]').click()");
   await wait("document.querySelector('.agent-chat-body')?.textContent.includes('window history marker')",'recent chat');
   const readable=performance.now();
   await web.executeJavaScript("document.querySelector('.agent-new-chat').click()");
@@ -54,9 +54,12 @@ async function run(web){
   assert.equal(sent,1);assert.ok(first>=submitted);
   if(scenario==='ready'){
     // Open a project with no history, then leave its prepared draft for a known session.
-    await web.executeJavaScript("document.querySelector('[aria-label=\"Pi Agent\"]').click();document.querySelector('[aria-label=\"Open folder\"]').click()");
+    await web.executeJavaScript("document.querySelector('[aria-label=\"Chat\"]').click();document.querySelector('[aria-label=\"Open folder\"]').click()");
     await wait("document.querySelector('.project-tab.active')?.textContent.includes('empty-project')",'empty project');
-    await web.executeJavaScript("document.querySelector('[aria-label=\"Pi Agent\"]').click()");
+    await web.executeJavaScript("document.querySelector('[aria-label=\"Chat\"]').click()");
+    await web.executeJavaScript("document.querySelector('.agent-project-trigger').click()");
+    await wait("Array.from(document.querySelectorAll('.session-project-tabs button')).some(b=>b.textContent==='empty-project')",'project chooser');
+    await web.executeJavaScript("Array.from(document.querySelectorAll('.session-project-tabs button')).find(b=>b.textContent==='empty-project').click();document.querySelector('.session-dialog [aria-label=\\\"Close\\\"]').click()");
     await wait("document.querySelector('.agent-project-trigger')?.textContent.includes('empty-project')&&document.querySelector('.agent-session-tab.new')",'empty chat');
     await web.executeJavaScript("document.querySelector('.agent-session-more').click()");
     await wait("document.querySelectorAll('.agent-session-more-menu [role=option]').length===2",'two existing sessions');
@@ -89,9 +92,8 @@ PiManager.prototype.module=async function(){
 };
 if(scenario==='cold')PiStandby.prototype.enable=()=>{};
 const latest=PiManager.prototype.latestSession;
-PiManager.prototype.latestSession=async function(project,prepare){
-  if(prepare&&scenario==='cold')return null;
-  const id=await latest.call(this,project,prepare);
-  if(prepare)recentReady();
-  return id;
+PiManager.prototype.latestSession=async function(project){
+  const result=await latest.call(this,project,scenario!=='cold');
+  recentReady();
+  return result;
 };

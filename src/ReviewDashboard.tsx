@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeFile, Chunk, ProjectStatus, ReviewBulkAction } from '../shared/types';
 import DiffPreview from './DiffPreview';
 import {api,errorMessage} from './files';
@@ -9,8 +9,7 @@ import ResizeHandle from './ResizeHandle';
 import ScrollbarScope from './ScrollbarScope';
 import ProjectDropdown from './ProjectDropdown';
 import Icon from './Icon';
-import type { ReviewFileLabels } from './SettingsPage';
-import { PanelPortal } from './PanelPortal';
+import { PanelPortal, usePanelWindow } from './PanelPortal';
 
 interface ReviewFileRow {id:string;project:Project;status?:ChangeFile;file?:OpenFile;path:string;snapshot?:boolean}
 const MIN_DETAIL_HEIGHT=120;
@@ -31,7 +30,26 @@ const MIN_CHANGES_HEIGHT=160;
 const REVIEW_HEADER_HEIGHT=54;
 const REVIEW_RESIZE_HEIGHT=6;
 const firstPreviewLine=(text:string)=>text.split(/\r?\n/).find(line=>line.trim().length>0)??'';
-const displayPath=(path:string,labels:ReviewFileLabels)=>labels==='name'?path.split(/[\\/]/).pop()??path:path;
+const fileName=(path:string)=>path.split(/[\\/]/).pop()??path;
+function ReviewFileName({path,snapshot,className,onOpen}:{path:string;snapshot:boolean;className:string;onOpen:()=>void}){
+  const button=useRef<HTMLButtonElement>(null);
+  const measure=useRef<HTMLSpanElement>(null);
+  const [fits,setFits]=useState(true);
+  const panelWindow=usePanelWindow();
+  const suffix=snapshot?' · Snapshot':'';
+  useLayoutEffect(()=>{
+    const label=button.current,full=measure.current;
+    if(!label||!full)return;
+    const update=()=>setFits(full.getBoundingClientRect().width<=label.getBoundingClientRect().width);
+    const observer=new panelWindow.ResizeObserver(update);
+    observer.observe(label);observer.observe(full);update();
+    return()=>observer.disconnect();
+  },[panelWindow,path,snapshot]);
+  return <button ref={button} className={'review-file-name '+className} title={path} onClick={onOpen}>
+    <span aria-hidden="true" ref={measure} className="review-path-measure">{path}{suffix}</span>
+    {fits?path:fileName(path)}{suffix}
+  </button>;
+}
 export function dashboardChunks(file:Pick<OpenFile,'chunks'|'records'>,pins:readonly PinPlacement[]){
   const notes=new Map<string,Set<string>>();
   const standalone:PinPlacement[]=[];
@@ -73,7 +91,7 @@ function alignReviewActions(list:HTMLDivElement|null){
   return ()=>observer.disconnect();
 }
 
-export default function ReviewDashboard({projects,documents,snapshots,statuses,filter,selected,revealTarget,expandedRecords,onToggleReviewPreview,width,onResize,onOpen,onGoto=onOpen,onOpenSnapshot,onAction,onBulk,onFileBulk,onFilterChange,onSelectedChange,split,onSplitChange,chunkWidth,onChunkResize,fileLabels,pinsByFile,keptIds,onPinAction,onPinSource,onRevealPin,detachedWindow,onToggleWindow}:{
+export default function ReviewDashboard({projects,documents,snapshots,statuses,filter,selected,revealTarget,expandedRecords,onToggleReviewPreview,width,onResize,onOpen,onGoto=onOpen,onOpenSnapshot,onAction,onBulk,onFileBulk,onFilterChange,onSelectedChange,split,onSplitChange,chunkWidth,onChunkResize,pinsByFile,keptIds,onPinAction,onPinSource,onRevealPin,detachedWindow,onToggleWindow}:{
   projects:Project[];documents:OpenFile[];statuses:Record<string,ProjectStatus>;
   snapshots:OpenFile[];
   filter:string;selected:string;
@@ -86,7 +104,6 @@ export default function ReviewDashboard({projects,documents,snapshots,statuses,f
   onFileBulk:(file:OpenFile,action:ReviewBulkAction)=>void;
   onFilterChange:(filter:string)=>void;onSelectedChange:(selected:string)=>void;
   split:boolean;onSplitChange:(split:boolean)=>void;chunkWidth:number;onChunkResize:(width:number)=>void;
-  fileLabels:ReviewFileLabels;
   pinsByFile:ReadonlyMap<string,PinPlacement[]>;keptIds:ReadonlySet<string>;
   onPinAction:PinActionHandler;onPinSource:(pin:PinPlacement)=>void;onRevealPin:(file:OpenFile,pin:PinPlacement)=>void;
 }){
@@ -150,7 +167,7 @@ export default function ReviewDashboard({projects,documents,snapshots,statuses,f
       else if(!(row.status?.reason&&!file))onOpen(row.project,row.path);
     };
     return <div key={key} data-panel-anchor={key} className={'review-file-row '+(selected===key?'active':'')}>
-      <button className={'review-file-name '+nameClass} title={row.path} onClick={open}>{displayPath(row.path,fileLabels)}{row.snapshot?' · Snapshot':''}</button>
+      <ReviewFileName path={row.path} snapshot={!!row.snapshot} className={nameClass} onOpen={open}/>
       <div className="review-file-actions">
         <button className="action-accept" disabled={unavailable||!file?.chunks.length}
           onClick={()=>file&&onFileBulk(file,'accept')}>Accept</button>
@@ -167,7 +184,7 @@ export default function ReviewDashboard({projects,documents,snapshots,statuses,f
   };
   const detail=<ScrollbarScope><section className="review-detail" data-panel-scroll>
         {!current?<p className="sidebar-empty">Select a file to view chunks</p>:<>
-          <div className="review-detail-heading"><strong title={current.path}>{displayPath(current.path,fileLabels)}</strong>
+          <div className="review-detail-heading"><strong title={current.path}>{fileName(current.path)}</strong>
             <span>{current.status?.previewKey?'Read-only':`${currentItems.length} chunk${currentItems.length===1?'':'s'}`}</span></div>
           {(current.status?.reason||current.file?.reason)&&
             <p className="review-warning">{current.status?.reason||current.file?.reason}</p>}

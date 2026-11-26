@@ -38,6 +38,8 @@ button svg, button .app-icon { flex-shrink: 0; }
 .window-controls, .window-controls * { pointer-events: auto; -webkit-app-region: no-drag !important; }
 .window-controls button { position: relative; display: grid; place-items: center; width: 22px; height: 22px; border: 1px solid var(--border); border-radius: 50%; background: var(--panel); color: var(--text); box-shadow: 0 1px 4px #0002; }
 .window-controls button .app-icon { transform: translateX(-1px); }
+.window-controls .window-save { padding: 0; }
+.window-controls .window-save .app-icon { transform: none; }
 .window-controls button:hover:enabled { background: var(--active); }
 .window-controls .window-close:hover:enabled { background: #cf3f4b; color: var(--button-text); border-color: #cf3f4b; }
 .explorer-header { -webkit-app-region: drag; }
@@ -45,7 +47,7 @@ button, input, label, .tab-bar, .project-bar, .tab, .project-tab, .project-dropd
 .activity-bar { width: 52px; flex-shrink: 0; display: flex; flex-direction: column; align-items: center; background: var(--rail); border-right: 1px solid var(--border); }
 .activity-top { display: flex; flex-direction: column; margin-top: 11px; }
 .activity-button { display: grid; place-items: center; width: 52px; height: 48px; color: var(--muted); position: relative; }
-.activity-button:hover, .activity-button.selected { color: var(--text); }
+.activity-button:hover, .activity-chat[aria-pressed="true"], .activity-button.selected { color: var(--text); }
 .project-bar, .project-tabs, .tab-bar.under-window-controls, .tab-bar.under-window-controls .tabs { -webkit-app-region: drag; }
 :root[data-theme="light"] .activity-button.selected::before,
 :root[data-theme="light"] .tab.active::before { background: #9A9A9A; }
@@ -125,6 +127,7 @@ kbd { font: inherit; border: 1px solid var(--border); border-radius: 3px; paddin
 .tab-project { color: var(--muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-tree { margin-bottom: 4px; }
 .project-tree > summary { display: flex; align-items: center; gap: 6px; padding: 6px 7px; cursor: pointer; list-style: none; }
+.sidebar-top-entry > summary:hover { background: var(--hover); border-radius: 4px; }
 .project-tree > summary::-webkit-details-marker { display: none; }
 .project-tree > summary > .app-icon:first-child { transform: rotate(-90deg); }
 .project-tree[open] > summary > .app-icon:first-child { transform: none; }
@@ -140,8 +143,8 @@ kbd { font: inherit; border: 1px solid var(--border); border-radius: 3px; paddin
 .sidebar-top-entry.drop-before::before, .sidebar-top-entry.drop-after::after { content: ''; position: absolute; z-index: 2; left: 4px; right: 4px; border-top: 2px solid var(--text); pointer-events: none; }
 .sidebar-top-entry.drop-before::before { top: -2px; }
 .sidebar-top-entry.drop-after::after { bottom: -2px; }
-.sidebar-top-entry > summary[draggable="true"] { cursor: grab; user-select: none; }
-.sidebar-top-entry > summary[draggable="true"]:active { cursor: grabbing; }
+.sidebar-top-entry > summary[draggable="true"] { cursor: pointer; user-select: none; }
+.sidebar-top-entry.dragging > summary[draggable="true"] { cursor: grabbing; }
 .open-editor-groups { display: grid; gap: 5px; padding-bottom: 5px; }
 .open-editor-project { padding: 5px 8px 3px 25px; color: var(--muted); font-size: 10px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .open-editor-list { display: grid; gap: 1px; }
@@ -223,7 +226,8 @@ kbd { font: inherit; border: 1px solid var(--border); border-radius: 3px; paddin
 .review-file-row { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; column-gap: 7px; width: 100%; padding: 6px 7px; border-radius: 4px; text-align: left; }
 .review-file-row:hover, .review-file-row.active { background: var(--active); }
 .review-file-name, .review-file-summary { min-width: 0; overflow: hidden; padding: 0; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
-.review-file-name { font-size: 11px; font-weight: 500; }
+.review-path-measure { position: absolute; visibility: hidden; width: max-content; pointer-events: none; }
+.review-file-name { position: relative; font-size: 11px; font-weight: 500; }
 .review-file-summary { color: var(--muted); font-size: 9px; }
 .review-file-actions { display: flex; align-items: center; justify-self: end; gap: 5px; }
 .review-file-actions button { padding: 0; font-size: 11px; }

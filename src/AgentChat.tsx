@@ -675,12 +675,20 @@ function ModelDialog({projectId,sessionId,onClose,onChanged,notify}:{projectId:s
   </div>;
 }
 
-export default function AgentChat({detachedWindow,onToggleWindow,hiddenToolbarButtons,onOpenSettings,open,projects,activeProjectId,dirtyProjectIds,width,onResize,onResizeEnd,notify,navigationRequest,onNotice,onProjectAdded,onOpenToolDetail,onUpdateToolDetail,onPinSession,onShowPins,onOpenCode,visiblePinSource,citeRequest,onGoto,tokenizeSnapshot}:{
+const recentChatProjectsKey='revu-recent-chat-projects';
+function recentChatProjects():string[]{
+  try{
+    const roots:unknown=JSON.parse(localStorage.getItem(recentChatProjectsKey)??'[]');
+    return Array.isArray(roots)?roots.filter((root):root is string=>typeof root==='string'):[];
+  }catch{return [];}
+}
+
+export default function AgentChat({detachedWindow,onToggleWindow,hiddenToolbarButtons,onOpenSettings,open,projects,projectsLoaded,activeProjectId,dirtyProjectIds,width,onResize,onResizeEnd,notify,navigationRequest,onNotice,onProjectAdded,onOpenToolDetail,onUpdateToolDetail,onPinSession,onShowPins,onOpenCode,visiblePinSource,citeRequest,onGoto,tokenizeSnapshot}:{
   detachedWindow?:Window|null;onToggleWindow?:()=>void;
   hiddenToolbarButtons:ReadonlySet<ChatToolbarButton>;
   tokenizeSnapshot?:SnapshotTokenizer;
   citeRequest?:CiteRequest;onGoto:(projectId:string,target:CiteTarget)=>void;
-  onOpenSettings:()=>void;open:boolean;projects:Project[];activeProjectId:string|null;dirtyProjectIds:ReadonlySet<string>;width:number;
+  onOpenSettings:()=>void;open:boolean;projects:Project[];projectsLoaded:boolean;activeProjectId:string|null;dirtyProjectIds:ReadonlySet<string>;width:number;
   onResize:(width:number)=>void;onResizeEnd:(width:number)=>void;notify:Notify;
   navigationRequest:AgentNavigationRequest|null;onNotice:(notice:AgentNotice)=>void;
   onProjectAdded:(project:Project)=>Project;
@@ -773,21 +781,17 @@ export default function AgentChat({detachedWindow,onToggleWindow,hiddenToolbarBu
   const archivedSourceRef=useRef<HTMLElement|null>(null);
   const chatsRef=useRef(chats);const viewRef=useRef({open,selectedSessionId,projects,sessions,openSessionIds});const erroredRuns=useRef(new Set<string>());const notifiedRuns=useRef(new Set<string>());
   const doneTimers=useRef(new Map<string,ReturnType<typeof setTimeout>>());const copiedTimer=useRef<ReturnType<typeof setTimeout>|undefined>(undefined);const abortTimer=useRef<ReturnType<typeof setTimeout>|undefined>(undefined);const bashHintTimer=useRef<ReturnType<typeof setTimeout>|undefined>(undefined);
-  const wasOpen=useRef(false);const handledNavigationToken=useRef<number|undefined>(undefined);
+  const startupRestored=useRef(false);
   const chatNavigation=useRef(0);
-  const [draftProject,setDraftProject]=useState('');
+  const [deferredSession,setDeferredSession]=useState<{projectId:string;id:string;request:number}|null>(null);
+  const draftProject=open&&projectsLoaded&&!loading&&!deferredSession&&!selectedSessionId?selectedProjectId:'';
   const sending=useRef(false);
-  function prepareDraft(projectId:string){
-    const navigation=chatNavigation.current;
-    void window.revu.agent.prepareNew(projectId).then(unwrap).catch(error=>{if(navigation===chatNavigation.current)notify('warning',errorMessage(error));});
-    setDraftProject(projectId);
-  }
   useEffect(()=>{
     if(!draftProject)return;
-    if(!open||selectedProjectId!==draftProject||selectedSessionId)setDraftProject('');
-    return ()=>{void window.revu.agent.abandonNew(draftProject);};
-  },[draftProject,open,selectedProjectId,selectedSessionId]);
-  const hasPendingNavigation=!!navigationRequest&&handledNavigationToken.current!==navigationRequest.token;
+    let active=true;
+    void window.revu.agent.prepareNew(draftProject).then(unwrap).catch(error=>{if(active)notify('warning',errorMessage(error));});
+    return ()=>{active=false;void window.revu.agent.abandonNew(draftProject);};
+  },[draftProject,notify]);
   chatsRef.current=chats;viewRef.current={open,selectedSessionId,projects,sessions,openSessionIds};
   const clearDone=useCallback((sessionId:string)=>{
     const timer=doneTimers.current.get(sessionId);if(timer)clearTimeout(timer);doneTimers.current.delete(sessionId);
@@ -956,9 +960,11 @@ export default function AgentChat({detachedWindow,onToggleWindow,hiddenToolbarBu
     }catch{if(request===draftConfigRequest.current){setNewChatModel(undefined);setNewChatThinking('medium');}}
   };
   useEffect(()=>{
-    if(!selectedProjectId&&(activeProjectId||projects.length))setSelectedProjectId(activeProjectId??projects[0].id);
-    if(selectedProjectId&&!projects.some(project=>project.id===selectedProjectId)){
-      setSelectedProjectId(activeProjectId??projects[0]?.id??'');setSelectedSessionId(null);
+    if(!startupRestored.current||projects.some(project=>project.id===selectedProjectId))return;
+    if(selectedProjectId||projects.length){
+      chatNavigation.current++;
+      setDeferredSession(null);setLoading(false);
+      setSelectedProjectId((projects.find(project=>project.id===activeProjectId)??projects[0])?.id??'');setSelectedSessionId(null);
     }
   },[activeProjectId,projects,selectedProjectId]);
   const hasSelectedSession=!!selectedSessionId;
@@ -976,19 +982,40 @@ export default function AgentChat({detachedWindow,onToggleWindow,hiddenToolbarBu
   useEffect(()=>{setSessionInfoOpen(false);setSessionInfo(undefined);setSessionInfoError('');},[selectedSessionId]);
   useEffect(()=>{if(!sessionInfoOpen)return;const keydown=(event:KeyboardEvent)=>{if(event.key==='Escape')setSessionInfoOpen(false);};panelWindow.addEventListener('keydown',keydown);return()=>panelWindow.removeEventListener('keydown',keydown);},[sessionInfoOpen,panelWindow]);
   useEffect(()=>{
-    const available=open&&projects.length>0;
-    const opening=available&&!wasOpen.current;wasOpen.current=available;
-    if(!opening||hasPendingNavigation||(citeRequest&&consumedCite.current!==citeRequest))return;
-    const projectId=activeProjectId??projects[0]?.id??'';if(!projectId)return;
+    if(!projectsLoaded||startupRestored.current)return;
+    startupRestored.current=true;
+    const byRoot=new Map(projects.map(project=>[piSessionProjectKey(project.root),project]));
+    const project=recentChatProjects().map(root=>byRoot.get(root)).find(Boolean)
+      ??projects.find(item=>item.id===activeProjectId)??projects[0];
+    if(!project)return;
+    if(navigationRequest)return;
+    setSelectedProjectId(project.id);
+    if(citeRequest&&consumedCite.current!==citeRequest)return;
     const request=++chatNavigation.current;
-    setSelectedProjectId(projectId);setSelectedSessionId(null);setNewChatModel(undefined);setSessionDialog(false);
-    void window.revu.agent.latestSession(projectId).then(unwrap).then(latest=>{
+    setLoading(true);
+    void window.revu.agent.latestSession(project.id).then(unwrap).then(latest=>{
       if(request!==chatNavigation.current)return;
-      if(latest)void openSessionById(projectId,latest);else prepareDraft(projectId);
-    }).catch(error=>{if(request===chatNavigation.current){notify('warning',errorMessage(error));prepareDraft(projectId);}});
-    return()=>{chatNavigation.current++;};
-  },[open,projects.length>0]);
-  useEffect(()=>{if(!navigationRequest)return;handledNavigationToken.current=navigationRequest.token;
+      if(latest?.ready){void openSessionById(project.id,latest.id);return;}
+      if(latest)setDeferredSession({projectId:project.id,id:latest.id,request});
+      setLoading(false);
+    }).catch(error=>{
+      if(request===chatNavigation.current){setLoading(false);notify('warning',errorMessage(error));}
+    });
+  },[projectsLoaded,projects,activeProjectId]);
+  useEffect(()=>{
+    if(!deferredSession)return;
+    if(deferredSession.request!==chatNavigation.current){setDeferredSession(null);return;}
+    if(open){
+      setDeferredSession(null);
+      void openSessionById(deferredSession.projectId,deferredSession.id);
+    }
+  },[open,deferredSession,selectedProjectId,selectedSessionId,loading]);
+  useEffect(()=>{
+    if(!open||!selectedProject||!selectedSessionId)return;
+    const root=piSessionProjectKey(selectedProject.root),previous=recentChatProjects();
+    if(previous[0]!==root)localStorage.setItem(recentChatProjectsKey,JSON.stringify([root,...previous.filter(item=>item!==root)]));
+  },[open,selectedProject,selectedSessionId]);
+  useEffect(()=>{if(!navigationRequest)return;
     setArchivedSource(null);
     const target=navigationRequest.messageId&&selectedSessionId===navigationRequest.sessionId?pinMessageRefs.current.get(navigationRequest.messageId):undefined;
     if(target){target.scrollIntoView({block:'start'});target.focus({preventScroll:true});return;}
@@ -1176,7 +1203,7 @@ export default function AgentChat({detachedWindow,onToggleWindow,hiddenToolbarBu
     archivedSourceRef.current?.scrollIntoView({block:'start'});archivedSourceRef.current?.focus({preventScroll:true});
   },[archivedSource,selectedSessionId]);
   useEffect(()=>{if(skipAutoScroll.current){skipAutoScroll.current=false;return;}bodyRef.current?.scrollTo({top:bodyRef.current.scrollHeight});},[current?.messages,current?.streamText,current?.streamThinking,current?.tools,current?.summaryOperations]);
-  const startNewChat=()=>{if(!selectedProjectId)return;chatNavigation.current++;setLoading(false);prepareDraft(selectedProjectId);
+  const startNewChat=()=>{if(!selectedProjectId)return;chatNavigation.current++;setLoading(false);setDeferredSession(null);
     savedDrafts.current.delete(JSON.stringify([selectedProjectId,null]));if(!selectedSessionId)setDraft('');setSelectedSessionId(null);setSessionDialog(false);
     composerExpansionSource.current=null;composerManuallyCollapsed.current=false;setComposerExpanded(false);};
   const closeSessionTab=(sessionId:string,projectId=selectedProjectId)=>{
@@ -1201,7 +1228,7 @@ export default function AgentChat({detachedWindow,onToggleWindow,hiddenToolbarBu
     if(!open||!citeRequest||consumedCite.current===citeRequest||!selectedProject)return;
     const source=projects.find(project=>project.id===citeRequest.projectId);if(!source)return;
     consumedCite.current=citeRequest;
-    if(!selectedSessionId&&draftProject!==selectedProjectId)prepareDraft(selectedProjectId);
+    if(!selectedSessionId){chatNavigation.current++;setLoading(false);setDeferredSession(null);}
     const before=draftData.current.text;const prefix=before+(/\S$/.test(before)?' ':'');const path=citePath(source.root,selectedProject.root,citeRequest);
     const next=prefix+referenceText(path,citeRequest.selection);setDraft(next,citeRequest.selection?[...draftData.current.items,{...citeRequest.selection,path,offset:prefix.length}]:draftData.current.items,next.length,true);inlineEdit.current=null;setMention(null);
     const saved=selectedSessionId&&questionDrafts.current.get(selectedSessionId);if(saved){saved.text=next;saved.items=draftData.current.items;saved.caret=next.length;}
@@ -1885,7 +1912,7 @@ export default function AgentChat({detachedWindow,onToggleWindow,hiddenToolbarBu
     </div>,panelDocument.body)}
     {sessionDialog&&selectedProjectId&&<SessionDialog projects={projects} projectId={selectedProjectId} selectedSessionId={selectedSessionId}
       sessions={sessions[selectedProjectId]??[]} doneSessionIds={doneSessionIds} notify={notify}
-      onProject={id=>{chatNavigation.current++;setLoading(false);setSelectedProjectId(id);setSelectedSessionId(null);setNewChatModel(undefined);prepareDraft(id);}} onOpen={session=>void openCatalogSession(session)} onNew={startNewChat}
+      onProject={id=>{chatNavigation.current++;setLoading(false);setSelectedProjectId(id);setSelectedSessionId(null);setNewChatModel(undefined);setDeferredSession(null);}} onOpen={session=>void openCatalogSession(session)} onNew={startNewChat}
       onRename={(session,name)=>void renameSession(session.projectId,session.id,name,session.scope).catch(error=>notify('error',errorMessage(error)))}
       onDelete={deleteSession} onClone={cloneSession} onExport={exportSession}
       onFolderChanged={()=>void reloadSessions(selectedProjectId)} onClose={()=>setSessionDialog(false)}/>}

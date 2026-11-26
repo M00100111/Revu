@@ -14,7 +14,7 @@ export default function WindowControls({onSave,saveDisabled,saving}:{
   return createPortal(<div className="window-controls" aria-label="Window controls">
     <button className="window-save" title={saving?'Saving file':'Save file · Ctrl+S'}
       aria-label={saving?'Saving file':'Save file'} disabled={saveDisabled} onClick={onSave}>
-      <Icon name="save" size={13}/>
+      <Icon name="save" size={11}/>
     </button>
     <button className="window-minimize" title="Minimize" aria-label="Minimize" onClick={()=>control('minimize')}><Icon name="minimize" size={11}/></button>
     <button className="window-maximize" title={maximized?'Restore':'Maximize'} aria-label={maximized?'Restore':'Maximize'}

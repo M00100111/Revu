@@ -5,8 +5,7 @@ import { useEffect, useState } from 'react';
 import ResizeHandle from './ResizeHandle';
 import type { FileTabOverflow } from './tabLayout';
 
-export type SettingsCategory='system'|'file'|'interaction'|'editor'|'review'|'appearance'|'activity-bar'|'chat';
-export type ReviewFileLabels='name'|'path';
+export type SettingsCategory='system'|'interaction'|'editor'|'appearance'|'activity-bar'|'chat';
 
 function FontSizeSetting({fontSize,onChange}:{fontSize:number;onChange:(value:number)=>void}){
   const [draft,setDraft]=useState(String(fontSize));
@@ -52,20 +51,18 @@ export function SettingsSidebar({width,onResize,category,onCategoryChange}:{
       <button className={category==='appearance'?'active':''} onClick={()=>onCategoryChange('appearance')}>Appearance</button>
       <button className={category==='activity-bar'?'active':''} onClick={()=>onCategoryChange('activity-bar')}>Activity Bar</button>
       <button className={category==='system'?'active':''} onClick={()=>onCategoryChange('system')}>System</button>
-      <button className={category==='file'?'active':''} onClick={()=>onCategoryChange('file')}>File</button>
       <button className={category==='editor'?'active':''} onClick={()=>onCategoryChange('editor')}>Editor</button>
-      <button className={category==='review'?'active':''} onClick={()=>onCategoryChange('review')}>Review</button>
       <button className={category==='chat'?'active':''} onClick={()=>onCategoryChange('chat')}>Chat</button>
     </nav>
     <ResizeHandle width={width} onResize={onResize}/>
   </aside>;
 }
 
-export default function SettingsPage({closeToTray,onCloseToTrayChange,revealEditorSelection,onRevealEditorSelectionChange,category,chatToolbar,syncWidths,onChange,mixed,onModeChange,hideSingleProjectTabs,onHideSingleProjectTabsChange,fontSize,
-  onFontSizeChange,onResetEditor,previewMode,onPreviewModeChange,fileTabOverflow,onFileTabOverflowChange,reviewFileLabels,onReviewFileLabelsChange,dark,onThemeChange,
+export default function SettingsPage({closeToTray,onCloseToTrayChange,chatAtTop,onChatAtTopChange,category,chatToolbar,syncWidths,onChange,mixed,onModeChange,hideSingleProjectTabs,onHideSingleProjectTabsChange,fontSize,
+  onFontSizeChange,onResetEditor,previewMode,onPreviewModeChange,fileTabOverflow,onFileTabOverflowChange,dark,onThemeChange,
   showThemeSwitcher,onShowThemeSwitcherChange,showDockButton,onShowDockButtonChange,lightThemeColor,darkThemeColor,onLightThemeColorChange,onDarkThemeColorChange,onResetThemeColors}:{
   closeToTray:boolean|null;onCloseToTrayChange:(value:boolean)=>void;
-  revealEditorSelection:boolean;onRevealEditorSelectionChange:(value:boolean)=>void;
+  chatAtTop:boolean;onChatAtTopChange:(value:boolean)=>void;
   category:SettingsCategory;syncWidths:boolean;onChange:(value:boolean)=>void;
   chatToolbar:ReturnType<typeof useChatToolbarSettings>;
   mixed:boolean;onModeChange:(mixed:boolean)=>void;hideSingleProjectTabs:boolean;
@@ -73,7 +70,6 @@ export default function SettingsPage({closeToTray,onCloseToTrayChange,revealEdit
   onFontSizeChange:(value:number)=>void;onResetEditor:()=>void;
   previewMode:boolean;onPreviewModeChange:(value:boolean)=>void;
   fileTabOverflow:FileTabOverflow;onFileTabOverflowChange:(value:FileTabOverflow)=>void;
-  reviewFileLabels:ReviewFileLabels;onReviewFileLabelsChange:(value:ReviewFileLabels)=>void;
   dark:boolean;onThemeChange:(dark:boolean)=>void;showThemeSwitcher:boolean;onShowThemeSwitcherChange:(value:boolean)=>void;
   showDockButton:boolean;onShowDockButtonChange:(value:boolean)=>void;
   lightThemeColor:string;darkThemeColor:string;onLightThemeColorChange:(value:string)=>void;
@@ -89,10 +85,6 @@ export default function SettingsPage({closeToTray,onCloseToTrayChange,revealEdit
         <h1>System</h1>
         <BooleanSetting label="Close to system tray" description="Keep Revu running in the system tray when you close the main window."
           value={closeToTray===true} disabled={closeToTray===null} onChange={onCloseToTrayChange}/>
-      </>:category==='file'?<>
-        <h1>File</h1>
-        <BooleanSetting label="Reveal Editor Selection in File" description="When File is visible, selecting an editor tab reveals its project or file. Tabs in Other reveal Open Editors."
-          value={revealEditorSelection} onChange={onRevealEditorSelectionChange}/>
       </>:category==='editor'?<>
         <div className="settings-title-row"><h1>Editor</h1><button onClick={onResetEditor}>Reset</button></div>
         <div className="setting-row">
@@ -124,17 +116,6 @@ export default function SettingsPage({closeToTray,onCloseToTrayChange,revealEdit
           <FontSizeSetting fontSize={fontSize} onChange={onFontSizeChange}/>
         </label>
         <div className="font-preview" style={{fontSize}}>const preview = 'Revu';</div>
-      </>:category==='review'?<>
-        <h1>Review</h1>
-        <div className="setting-row">
-          <span><strong>Changed file labels</strong><small>Choose how changed files are labeled in Review.</small></span>
-          <div className="setting-options" role="group" aria-label="Changed file labels">
-            <button className={reviewFileLabels==='name'?'active':''}
-              onClick={()=>onReviewFileLabelsChange('name')}>File name only</button>
-            <button className={reviewFileLabels==='path'?'active':''}
-              onClick={()=>onReviewFileLabelsChange('path')}>Relative path</button>
-          </div>
-        </div>
       </>:category==='appearance'?<>
         <div className="settings-title-row"><h1>Appearance</h1><button onClick={onResetThemeColors}>Reset</button></div>
         <div className="setting-row">
@@ -157,6 +138,13 @@ export default function SettingsPage({closeToTray,onCloseToTrayChange,revealEdit
         <ChatToolbarSettings {...chatToolbar}/>
       </>:<>
         <h1>Activity Bar</h1>
+        <div className="setting-row">
+          <span><strong>Chat placement</strong><small>Place Chat above File (Top) or above Notifications (Default).</small></span>
+          <div className="setting-options" role="group" aria-label="Chat placement">
+            <button aria-pressed={chatAtTop} className={chatAtTop?'active':''} onClick={()=>onChatAtTopChange(true)}>Top</button>
+            <button aria-pressed={!chatAtTop} className={!chatAtTop?'active':''} onClick={()=>onChatAtTopChange(false)}>Default</button>
+          </div>
+        </div>
         <BooleanSetting label="Merge all windows" description="Show a shortcut when Chat or Review is in a separate window."
           value={showDockButton} onChange={onShowDockButtonChange}/>
         <BooleanSetting label="Theme switcher" description="Show the theme switcher in the Activity Bar."

@@ -94,7 +94,7 @@ app.whenReady().then(async()=>{
       },
       chooseChatFiles:async(...args)=>{calls.push(['choose',...args]);return window.picked??[];},
       agent:new Proxy({onEvent:()=>()=>{}},{get:(target,method)=>target[method]??(async(projectId,sessionId)=>{
-        calls.push([method,projectId,sessionId]);const value=method==='latestSession'?'first':['openSession','getSessionSnapshot'].includes(method)?{projectId,sessionId,name:sessionId,messages:[],status:'idle',availableThinkingLevels:[],thinkingLevel:'medium'}:method==='getEntries'?{entries:[],leafId:null}:method==='listSessions'?{sessions:[]}:[];return {ok:true,value};})})};void 0;`);
+        calls.push([method,projectId,sessionId]);const value=method==='latestSession'?{id:'first',ready:true}:['openSession','getSessionSnapshot'].includes(method)?{projectId,sessionId,name:sessionId,messages:[],status:'idle',availableThinkingLevels:[],thinkingLevel:'medium'}:method==='getEntries'?{entries:[],leafId:null}:method==='listSessions'?{sessions:[]}:[];return {ok:true,value};})})};void 0;`);
       await web.executeJavaScript(chatBundle.outputFiles[0].text);
     };
     await loadChat(true);

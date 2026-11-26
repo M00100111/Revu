@@ -4,11 +4,11 @@ import { api } from './files';
 import { countTabRows, defaultTabExpansion, nextTabExpansion, type FileTabExpansion, type FileTabOverflow } from './tabLayout';
 export type TabContextAction='close'|'closeOthers'|'closeAll';
 export interface EditorTabItem {id:string;name:string;title:string;projectName:string;groupId:string|null;dirty:boolean;preview?:boolean}
-export default function TabBar({ tabs, activeId, onSelect, onClose, onKeep, onContextAction, mixed,
+export default function TabBar({ tabs, activeId, onSelect, onClose, onDoubleClick, onContextAction, mixed,
   overflowMode,expansion,onExpansionChange,underWindowControls }: {
   tabs: EditorTabItem[]; activeId: string | null; onSelect: (tab: EditorTabItem) => void;
   onClose: (tab: EditorTabItem) => void;onContextAction:(tab:EditorTabItem,action:TabContextAction)=>void;
-  onKeep:(id:string)=>void;mixed: boolean;overflowMode:FileTabOverflow;expansion:FileTabExpansion;
+  onDoubleClick:(tab:EditorTabItem)=>void;mixed: boolean;overflowMode:FileTabOverflow;expansion:FileTabExpansion;
   onExpansionChange:(expansion:FileTabExpansion)=>void;underWindowControls:boolean;
 }) {
   const barRef=useRef<HTMLDivElement|null>(null);
@@ -49,7 +49,7 @@ export default function TabBar({ tabs, activeId, onSelect, onClose, onKeep, onCo
         ref={tab.id===activeId?activeRef:undefined}
         onContextMenu={async event=>{event.preventDefault();const action=await api<TabContextAction|null>('tabMenu',{scope:'file'});if(action)onContextAction(tab,action);}}>
         <button className="tab-select" title={tab.title}
-          aria-pressed={tab.id === activeId} onClick={() => onSelect(tab)} onDoubleClick={()=>onKeep(tab.id)}>
+          aria-pressed={tab.id === activeId} onClick={() => onSelect(tab)} onDoubleClick={()=>onDoubleClick(tab)}>
           <Icon name="editorDocument" size={14} /><span className={tab.preview?'preview-name':undefined}>{tab.name}</span>
           {mixed && <small className="tab-project">{tab.projectName}</small>}
         </button>

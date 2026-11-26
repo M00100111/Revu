@@ -12,7 +12,7 @@ import Sidebar, { type Panel } from './Sidebar';
 import TabBar, { type EditorTabItem, type TabContextAction } from './TabBar';
 import ReviewDashboard from './ReviewDashboard';
 import ReadonlyEditor from './ReadonlyEditor';
-import SettingsPage, { SettingsSidebar, type ReviewFileLabels, type SettingsCategory } from './SettingsPage';
+import SettingsPage, { SettingsSidebar, type SettingsCategory } from './SettingsPage';
 import WindowControls from './WindowControls';
 import PanelWindowControls, {usePanelMaximized} from './PanelWindowControls';
 import {usePanelWindows} from './usePanelWindows';
@@ -82,8 +82,7 @@ export default function App(){
   const [hideSingleProjectTabs,setHideSingleProjectTabs]=useState(()=>localStorage.getItem('revu-hide-single-project-tabs')==='true');
   const [settingsCategory,setSettingsCategory]=useState<SettingsCategory>('interaction');
   const [fontSize,setFontSize]=useState(savedFontSize);
-  const [reviewFileLabels,setReviewFileLabels]=useState<ReviewFileLabels>(()=>
-    localStorage.getItem('revu-review-file-labels')==='path'?'path':'name');
+  const [chatAtTop,setChatAtTop]=useState(()=>localStorage.getItem('revu-chat-placement')==='top');
   const [notifications,setNotifications]=useState<AppNotification[]>([]);
   const [notificationsOpen,setNotificationsOpen]=useState(false);
   const [agentOpen,setAgentOpen]=useState(false);
@@ -92,8 +91,7 @@ export default function App(){
   const [picking,setPicking]=useState(false);
   const [reveal,setReveal]=useState<{id:string;line:number;lastLine?:number;href?:string;pinId?:string}|null>(null);
   const [citeRequest,setCiteRequest]=useState<CiteRequest>();
-  const [revealEditorSelection,setRevealEditorSelection]=useState(()=>localStorage.getItem('revu-reveal-editor-selection')==='true');
-  useEffect(()=>localStorage.setItem('revu-reveal-editor-selection',String(revealEditorSelection)),[revealEditorSelection]);
+  const lastRevealedTab=useRef<string|null>(null);
   const [treeTarget,setTreeTarget]=useState<{projectId:string|null;path:string;token:number;fromEditor?:boolean}>();
   const [reviewFilter,setReviewFilter]=useState('all');
   const [reviewSelected,setReviewSelected]=useState('');
@@ -279,7 +277,7 @@ export default function App(){
     document.documentElement.style.setProperty('--editor-font-size',size+'px');
     document.documentElement.style.setProperty('--editor-line-height',lineHeight+'px');
   },[fontSize]);
-  useEffect(()=>localStorage.setItem('revu-review-file-labels',reviewFileLabels),[reviewFileLabels]);
+  useEffect(()=>localStorage.setItem('revu-chat-placement',chatAtTop?'top':'default'),[chatAtTop]);
   useEffect(()=>{window.revu.setDirty(documents.some(file=>file.dirty));},[documents]);
   useEffect(()=>{
     const valid=new Set(documents.flatMap(file=>file.records.map(record=>record.id)));
@@ -313,10 +311,9 @@ export default function App(){
     const document=toolDocuments.find(item=>item.id===lastToolDocument.current)??toolDocuments[0];
     if(document)selectToolDocument(document);
   }
-  function selectEditorTab(tab:EditorTabItem,fromEditor=false){
+  function selectEditorTab(tab:EditorTabItem){
     const item=editorTabs.find(candidate=>candidate.id===tab.id);if(!item)return;
     if(item.kind==='file')selectFile(item.file);else selectToolDocument(item.toolDocument);
-    if(fromEditor)revealEditorTarget(item.kind==='file'?item.file.project:undefined,item.kind==='file'?item.file.path:'');
   }
   function toggleDirectory(key:string){
     setExpandedDirectories(current=>{
@@ -407,8 +404,14 @@ export default function App(){
     }
     setReveal({id:file.id,line:pin.line,pinId:pin.id});
   }
-  function revealEditorTarget(project?:Project,path=''){
-    if(!revealEditorSelection||panel!=='files')return;
+  function toggleEditorTarget(key:string,project?:Project,path=''){
+    if(lastRevealedTab.current===key&&panel==='files'){
+      lastRevealedTab.current=null;
+      setPanel(null);
+      return;
+    }
+    lastRevealedTab.current=key;
+    setPanel('files');
     if(project&&path)expandTreePath(project,path);
     setTreeTarget({projectId:project?.id??null,path,token:performance.now(),fromEditor:true});
   }
@@ -564,7 +567,7 @@ export default function App(){
       saving={!!activeFile?.saving}/>
     {windows.review&&<PanelWindowControls panel="review" maximized={reviewMaximized} targetWindow={windows.review}/>}
     {windows.chat&&<PanelWindowControls panel="chat" maximized={chatMaximized} targetWindow={windows.chat}/>}
-    <Sidebar panel={panel} setPanel={setPanel} dark={dark} toggleTheme={()=>setDark(!dark)}
+    <Sidebar chatAtTop={chatAtTop} panel={panel} setPanel={setPanel} dark={dark} toggleTheme={()=>setDark(!dark)}
       showThemeSwitcher={showThemeSwitcher}
       showDock={showDockButton&&!!(windows.review||windows.chat)} onDockAll={dockAll}
       reviewDetached={!!windows.review} chatDetached={!!windows.chat}
@@ -598,10 +601,10 @@ export default function App(){
       onBulk={workspace.bulk} onFileBulk={workspace.bulkFile}
       pinsByFile={pins.byFile} keptIds={pins.keptIds} onPinAction={pins.updatePiece} onPinSource={openPinSource} onRevealPin={revealListedPin}
       split={reviewSplit} onSplitChange={setReviewSplit}
-      chunkWidth={reviewChunkWidth} onChunkResize={setReviewChunkWidth} fileLabels={reviewFileLabels}/>}
+      chunkWidth={reviewChunkWidth} onChunkResize={setReviewChunkWidth}/>}
     {panel==='settings'&&<SettingsSidebar width={sidebarWidth} onResize={resizeSidebar}
       category={settingsCategory} onCategoryChange={setSettingsCategory}/>}
-    {panel==='settings'?<SettingsPage closeToTray={closeToTray} onCloseToTrayChange={changeCloseToTray} revealEditorSelection={revealEditorSelection} onRevealEditorSelectionChange={setRevealEditorSelection} chatToolbar={chatToolbar} category={settingsCategory} syncWidths={syncWidths} onChange={changeWidthSync}
+    {panel==='settings'?<SettingsPage closeToTray={closeToTray} onCloseToTrayChange={changeCloseToTray} chatAtTop={chatAtTop} onChatAtTopChange={setChatAtTop} chatToolbar={chatToolbar} category={settingsCategory} syncWidths={syncWidths} onChange={changeWidthSync}
       mixed={mixed} onModeChange={setMixed} hideSingleProjectTabs={hideSingleProjectTabs}
       onHideSingleProjectTabsChange={setHideSingleProjectTabs} fontSize={fontSize}
       previewMode={previewMode} onPreviewModeChange={setPreviewMode}
@@ -609,7 +612,6 @@ export default function App(){
         setMixed(false);setHideSingleProjectTabs(false);setFileTabOverflow('scroll');setPreviewMode(false);setFontSize(14);
       }}
       fileTabOverflow={fileTabOverflow} onFileTabOverflowChange={setFileTabOverflow}
-      reviewFileLabels={reviewFileLabels} onReviewFileLabelsChange={setReviewFileLabels}
       dark={dark} onThemeChange={setDark} showThemeSwitcher={showThemeSwitcher}
       showDockButton={showDockButton} onShowDockButtonChange={setShowDockButton}
       lightThemeColor={lightThemeColor} darkThemeColor={darkThemeColor}
@@ -620,16 +622,21 @@ export default function App(){
       {(projects.length>0||toolDocuments.length>0)&&<>
         {showProjectBar&&<div className="project-bar"><div className="project-tabs" aria-label="Project tabs">
           {projects.map(project=><button key={project.id} className={'project-tab '+(!otherSelected&&project.id===projectId?'active':'')}
-            aria-pressed={!otherSelected&&project.id===projectId} onClick={()=>{selectProject(project.id);revealEditorTarget(project);}} onContextMenu={event=>void projectMenu(event,project)}>
+            aria-pressed={!otherSelected&&project.id===projectId} onClick={()=>selectProject(project.id)} onDoubleClick={()=>toggleEditorTarget('project:'+project.id,project)} onContextMenu={event=>void projectMenu(event,project)}>
             <Icon name="projectFolder" size={14}/><span>{project.name}</span>
             {documents.some(file=>file.project.id===project.id&&file.dirty)&&<span className="dirty-dot"/>}
           </button>)}
-          {!!toolDocuments.length&&<button className={'project-tab '+(otherSelected?'active':'')} aria-pressed={otherSelected} onClick={()=>{selectOther();revealEditorTarget();}} onContextMenu={event=>void projectMenu(event)}>
+          {!!toolDocuments.length&&<button className={'project-tab '+(otherSelected?'active':'')} aria-pressed={otherSelected} onClick={selectOther} onDoubleClick={()=>toggleEditorTarget('group:other')} onContextMenu={event=>void projectMenu(event)}>
             <Icon name="projectFolder" size={14}/><span>Other</span>
           </button>}
         </div></div>}
-        <TabBar tabs={visibleEditorTabs} activeId={activeId} onSelect={tab=>selectEditorTab(tab,true)} onClose={closeEditorTab}
-          onContextAction={tabContext} onKeep={keepTab}
+        <TabBar tabs={visibleEditorTabs} activeId={activeId} onSelect={selectEditorTab} onClose={closeEditorTab}
+          onContextAction={tabContext} onDoubleClick={tab=>{
+            if(tab.preview){lastRevealedTab.current=null;keepTab(tab.id);return;}
+            const item=visibleEditorTabs.find(entry=>entry.id===tab.id);
+            if(item?.kind==='file')toggleEditorTarget(tab.id,item.file.project,item.file.path);
+            else toggleEditorTarget(tab.id);
+          }}
           mixed={mixed} overflowMode={fileTabOverflow} expansion={fileTabExpansion}
           onExpansionChange={setFileTabExpansion}
           underWindowControls={!showProjectBar}/>
@@ -668,7 +675,7 @@ export default function App(){
     </>}
     <AgentChat detachedWindow={windows.chat} onToggleWindow={()=>toggleWindow('chat')}
       hiddenToolbarButtons={chatToolbar.hidden} citeRequest={citeRequest} onGoto={gotoReference} tokenizeSnapshot={tokenizeSnapshot}
-      onOpenSettings={()=>{setSettingsCategory('chat');setPanel('settings');focusWindow('main');}} open={agentOpen} projects={projects} activeProjectId={projectId}
+      onOpenSettings={()=>{setSettingsCategory('chat');setPanel('settings');focusWindow('main');}} open={agentOpen} projectsLoaded={projectsLoaded} projects={projects} activeProjectId={projectId}
       dirtyProjectIds={new Set(documents.filter(file=>file.dirty).map(file=>file.project.id))}
       width={agentWidth} onResize={setAgentWidth}
       onResizeEnd={value=>localStorage.setItem('revu-agent-width',String(value))} notify={notify}

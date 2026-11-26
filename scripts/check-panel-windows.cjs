@@ -7,12 +7,19 @@ const {tmpdir}=require('node:os');
 const {join,resolve}=require('node:path');
 const {setTimeout:delay}=require('node:timers/promises');
 
+const checkStartup=process.argv.includes('--startup');
 const profile=mkdtempSync(join(tmpdir(),'revu-panels-'));
 const project=join(profile,'project');
 mkdirSync(project);
 execFileSync('git',['init','-q'],{cwd:project,windowsHide:true});
 writeFileSync(join(project,'sample.txt'),'First line\nSecond line\n');
-writeFileSync(join(profile,'open-folders.json'),JSON.stringify([project]));
+const otherProject=join(profile,'project-c'),closedProject=join(profile,'project-a');
+if(checkStartup){
+  mkdirSync(otherProject);mkdirSync(closedProject);
+  mkdirSync(join(project,'folder'));
+  writeFileSync(join(project,'folder','nested.txt'),'Review width fixture');
+}
+writeFileSync(join(profile,'open-folders.json'),JSON.stringify(checkStartup?[otherProject,project]:[project]));
 app.setPath('userData',profile);
 app.setAppPath(resolve(__dirname,'..'));
 let sessionOpens=0;
@@ -32,7 +39,7 @@ ipcMain.handle=(channel,handler)=>registerHandler(channel,(event,...args)=>{
   const request=args[0];
   let value=[];
   switch(request.action){
-    case 'latestSession': value='panel-session'; break;
+    case 'latestSession': value={id:'panel-session',ready:true}; break;
     case 'openSession':
     case 'getSessionSnapshot':{
       if(request.action==='openSession')sessionOpens++;
@@ -215,9 +222,66 @@ async function checkSessionSidebar(chat){
   assert.equal(await has(chat,row('Earlier discussion')),true);
 }
 
-async function run(main){
+async function checkStartupInteractions(main){
   await until(()=>has(main,'.project-tab'),'test project');
-  await click(main,label('Pi Agent'));
+  await until(()=>sessionOpens===1,'background restore before opening Chat');
+  const chatRoots=[closedProject,project].map(root=>process.platform==='win32'?root.split(require('node:path').sep).join('/').toLowerCase():root);
+  await evaluate(main,"localStorage.setItem('revu-recent-chat-projects',"+JSON.stringify(JSON.stringify(chatRoots))+");localStorage.setItem('revu-file-open-mode','preview');");
+  main.webContents.reload();
+  await until(()=>sessionOpens===2,'background restore after reload');
+  const restoredProject=projectId;
+  dialog.showOpenDialog=async()=>({canceled:false,filePaths:[closedProject]});
+  await click(main,label('Open folder'));
+  await until(()=>textOf(main,'.project-tab.active').then(text=>text?.includes('project-a')),'reopen A before showing Chat');
+  const ids=await evaluate(main,"return window.revu.invoke({action:'projects'}).then(r=>r.value);");
+  assert.equal(restoredProject,ids.find(item=>item.root===project).id);
+  assert.equal(sessionOpens,2);
+
+  await click(main,byTitle('Settings'));
+  await evaluate(main,"Array.from(document.querySelectorAll('.settings-categories button')).find(b=>b.textContent==='Activity Bar').click();");
+  const placement=label('Chat placement');
+  assert.equal(await has(main,placement+' button:last-child[aria-pressed="true"]'),true);
+  await click(main,placement+' button:first-child');
+  assert.equal(await has(main,'.activity-top > [title="Chat"]:first-child'),true);
+  await click(main,placement+' button:last-child');
+  assert.equal(await has(main,'.activity-footer > [title="Chat"]'),true);
+  const saveIcon=await evaluate(main,`
+    const button=document.querySelector('.window-save').getBoundingClientRect();
+    const icon=document.querySelector('.window-save .app-icon').getBoundingClientRect();
+    return [icon.width,icon.height,icon.left+icon.width/2-button.left-button.width/2,icon.top+icon.height/2-button.top-button.height/2];
+  `);
+  assert.deepEqual(saveIcon,[11,11,0,0]);
+  await click(main,label('File'));
+  await until(()=>has(main,'.tree-row[title="sample.txt"]'),'preview file');
+  await click(main,'.tree-row[title="sample.txt"]');
+  await until(()=>has(main,'.tab-select .preview-name'),'temporary tab');
+  await click(main,label('File'));
+  const doubleClick=()=>evaluate(main,"document.querySelector('.tab-select').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}));");
+  await doubleClick();
+  assert.equal(await has(main,'.tab-select .preview-name'),false);
+  assert.equal(await has(main,'.tree-scroll'),false);
+  await doubleClick();
+  assert.equal(await has(main,'.tree-scroll'),true);
+  await doubleClick();
+  assert.equal(await has(main,'.tree-scroll'),false);
+  await click(main,label('Chat'));
+  await until(()=>textOf(main,'.agent-session-tab.active').then(text=>text?.includes('Window test')),'session');
+  assert.equal(sessionOpens,2);
+  await click(main,label('Review'));
+  const name='.review-file-name[title="folder/nested.txt"]';
+  await until(()=>has(main,name),'nested review path');
+  const shown=()=>evaluate(main,"return document.querySelector("+JSON.stringify(name)+").innerText;");
+  const width=value=>evaluate(main,"document.querySelector("+JSON.stringify(name)+").style.width="+JSON.stringify(value)+";");
+  await width('44px');
+  await until(()=>shown().then(text=>text==='nested.txt'),'filename at narrow width');
+  await width('240px');
+  await until(()=>shown().then(text=>text==='folder/nested.txt'),'relative path at full width');
+  assert.equal((await textOf(main,'.agent-project-trigger')).trim(),'project');
+}
+async function run(main){
+  if(checkStartup){await checkStartupInteractions(main);return;}
+  await until(()=>has(main,'.project-tab'),'test project');
+  await click(main,label('Chat'));
   await until(()=>textOf(main,'.agent-session-tab.active').then(text=>text?.includes('Window test')),'session');
   assert.equal(await scrollbarThumb(main,'.agent-chat-body'),'rgb(214, 214, 214)');
   const originalOpens=sessionOpens;
@@ -253,7 +317,7 @@ async function run(main){
   assert.equal(await has(chat,byTitle('Separate Chat window')),false);
   assert.equal(await has(main,dockAll),true);
   assert.equal(await scrollbarThumb(chat,'.agent-chat-body'),'rgb(214, 214, 214)');
-  await click(main,label('Review Dashboard'));
+  await click(main,label('Review'));
   await until(()=>has(main,'.review-detail'),'docked Review lists');
   await checkPaneScrollbars(main,reviewLists,'rgb(235, 235, 235)');
   await click(main,byTitle('Use dark theme'));
@@ -298,7 +362,7 @@ async function run(main){
   assert.ok(draft.startsWith('unfinished draft'));
   chat.minimize();
   await until(()=>chat.isMinimized(),'minimized Chat');
-  await click(main,label('Pi Agent'));
+  await click(main,label('Chat'));
   await until(()=>!chat.isMinimized()&&chat.isFocused(),'restored Chat');
   assert.equal(BrowserWindow.getAllWindows().length,3);
 
@@ -356,7 +420,7 @@ app.on('web-contents-created',(_event,web)=>{
 app.once('browser-window-created',(_event,main)=>{
   main.once('show',()=>run(main).then(()=>{
     console.log('Panel window integration checks passed.');
-    main.close();
+    if(checkStartup)app.exit(0);else main.close();
   }).catch(error=>{console.error(error);app.exit(1);}));
 });
 require('../dist-electron/main.cjs');

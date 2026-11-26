@@ -498,7 +498,7 @@ export class PiManager {
     try{return await task;}finally{this.sessionStarts.delete(key);}
   }
 
-  async latestSession(projectId:string,prepare:boolean){
+  async latestSession(projectId:string,prepare=true){
     let lookup=this.latestLookups.get(projectId);
     if(!lookup){
       lookup=this.listedSessions(projectId,'current').then(items=>items.reduce<typeof items[number]|undefined>(
@@ -512,7 +512,7 @@ export class PiManager {
         try{await this.ensureRuntime(projectId,latest.id,latest.path,true);}
         catch(error){if(!(error instanceof PreparationNeedsInput))throw error;}
       }
-      return latest.id;
+      return {id:latest.id,ready:this.runtimes.has(latest.id)};
     }finally{if(this.latestLookups.get(projectId)===lookup)this.latestLookups.delete(projectId);}
   }
 

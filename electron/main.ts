@@ -27,11 +27,9 @@ let historyWrite=Promise.resolve();
 let windowShown=false;
 let standbyEnabled=false;
 function syncPiStandby(){
-  const project=workspace.projects.values().next().value;
-  const enabled=windowShown&&!shutdownStarted&&!!project;
+  const enabled=windowShown&&!shutdownStarted&&workspace.projects.size>0;
   if(enabled===standbyEnabled)return;
   standbyEnabled=enabled;piManager?.enableStandby(enabled);
-  if(enabled&&project)void piManager?.latestSession(project.id,true).catch(error=>console.warn('Recent chat preparation failed',error));
 }
 async function rememberFolder(root:string){
   recentFolders=[root,...recentFolders.filter(path=>path.toLowerCase()!==root.toLowerCase())].slice(0,10);
@@ -172,7 +170,7 @@ async function invokeAgent(body:PiAgentRequest,sourceWindow?:BrowserWindow|null)
       return {project,snapshot:await piManager.openSessionFile(project.id,session.id,session.path)};
     }
     case 'newSession':return piManager.newSession(body.projectId);
-    case 'latestSession':return piManager.latestSession(body.projectId,false);
+    case 'latestSession':return piManager.latestSession(body.projectId);
     case 'prepareNew':await piManager.prepareNew(body.projectId);return;
     case 'abandonNew':return piManager.abandonNew(body.projectId);
     case 'getSessionInfo':return piManager.getSessionInfo(body.projectId,body.sessionId);
